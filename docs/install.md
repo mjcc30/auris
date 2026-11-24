@@ -36,6 +36,32 @@ cargo build --release
 ./target/release/auris serve
 ```
 
+### Dépendances de build natif Linux (ex. WSL / Ubuntu / Debian)
+
+Le build depuis les sources a besoin des en-têtes système d'OpenSSL et d'ALSA
+(crates `openssl-sys` et `alsa-sys` via `cpal`) :
+
+```bash
+sudo apt update && sudo apt install -y build-essential pkg-config libssl-dev libasound2-dev
+```
+
+Sous WSL, utilisez un répertoire cible séparé pour ne pas mélanger les
+artefacts Windows et Linux dans `target/` :
+
+```bash
+cd /mnt/c/Users/mjcc/Documents/GitHub/volumio-bin
+CARGO_TARGET_DIR=/tmp/auris-wsl-target cargo run -- serve --port 3000
+```
+
+Alternative sans build Linux : lancer le binaire Windows via l'interop WSL
+(aucune dépendance ALSA nécessaire côté Windows) :
+
+```bash
+cd /mnt/c/Users/mjcc/Documents/GitHub/volumio-bin/target/debug
+./auris.exe serve --port 3000 --data-dir /tmp/auris-wsl
+# puis ouvrir http://localhost:3000 dans le navigateur Windows
+```
+
 ## Configuration
 
 Fichier `<data_dir>/config.toml` (créé au premier lancement) :
