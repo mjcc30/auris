@@ -94,6 +94,15 @@ impl SourcesManager {
         Ok(())
     }
 
+    /// Remplace une source existante (meme id) par sa nouvelle definition.
+    pub fn update(&self, source: Source) -> Result<()> {
+        if self.get(&source.id).is_none() {
+            return Err(AurisError::SourceNotFound(source.id.clone()));
+        }
+        self.remove(&source.id)?;
+        self.add(source)
+    }
+
     pub fn remove(&self, id: &str) -> Result<()> {
         self.backends.write().unwrap().remove(id);
         let mut s = self.sources.write().unwrap();

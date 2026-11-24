@@ -62,6 +62,7 @@ Base : `http://<hôte>:3000`. Toutes les réponses sont en JSON. Les erreurs :
 | POST | `/api/sources` | ajoute une source (id unique requis, sinon 400) |
 | DELETE | `/api/sources/{id}` | supprime |
 | PATCH | `/api/sources/{id}` | `{enabled}` active/désactive (persisté) |
+| PUT | `/api/sources/{id}` | remplace la source (corps = source complète, `id` identique requis, sinon 400 ; persisté) |
 | GET | `/api/browse?uri=...` | contenu d'un dossier (`src://id/...`, `upnp://...`, URL m3u) |
 | GET | `/api/browse/tree?uri=...` | parcours **récursif** (fichiers audio ; un fichier = lui-même) |
 | GET | `/api/usb/devices` | disques amovibles détectés par l'OS (`[{label, path}]`) |

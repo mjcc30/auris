@@ -565,3 +565,52 @@ async fn playlist_sauvegardee_depuis_file_hors_scan() {
         "les pistes hors scan doivent etre indexees a la sauvegarde: {detail}"
     );
 }
+
+#[tokio::test]
+async fn put_source_modifie_une_source_existante() {
+    let f = spawn_server().await;
+    let http = reqwest::Client::new();
+
+    // la source "nas" existe (fixture) -> on la remplace par une version renommee
+    let mut body = serde_json::json!({"id": "nas", "name": "NAS renomme", "enabled": true,
+        "kind": "local", "path": f.root.join("nas").to_str().unwrap()});
+    let r = http
+        .put(format!("{}/api/sources/nas", f.base))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success(), "PUT nas: {:?}", r.status());
+
+    let srcs: serde_json::Value = http
+        .get(format!("{}/api/sources", f.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let arr = srcs.as_array().unwrap();
+    assert_eq!(arr.len(), 3, "pas de doublon apres update");
+    let nas = arr.iter().find(|s| s["id"] == "nas").unwrap();
+    assert_eq!(nas["name"], "NAS renomme");
+
+    // id incoherent corps/URL -> 400
+    body["id"] = serde_json::json!("autre");
+    let r = http
+        .put(format!("{}/api/sources/nas", f.base))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_client_error());
+
+    // source inconnue -> 400
+    let r = http
+        .put(format!("{}/api/sources/inconnu", f.base))
+        .json(&serde_json::json!({"id": "inconnu", "name": "x", "enabled": true, "kind": "radio", "url": "http://x"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_client_error());
+}

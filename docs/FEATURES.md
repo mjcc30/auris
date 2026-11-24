@@ -24,7 +24,8 @@ kanban avec critères d'acceptation (voir [USER_STORIES.md](USER_STORIES.md)).
 - [x] Webradios (m3u/m3u8) et URLs HTTP directes
 - [x] Scan des sources, index sled, métadonnées + pochettes
 - [x] Recherche plein texte, pages albums/artistes
-- [x] Gestion des sources depuis l'UI (ajout/suppression/activation, persistées dans `config.toml`)
+- [x] Gestion des sources depuis l'UI façon Nova (cartes avec interrupteur, modale d'édition 2 colonnes, ajout par onglets local/USB/NAS/radio/HTTP) — ajout/édition (PUT)/suppression/activation, persistées dans `config.toml`
+- [x] UI conforme à la charte graphique (thème sombre `#121212`, accent `#1ED760`, icônes SVG, recherche globale en barre supérieure)
 - [x] **Explorateur d'arborescence** dans chaque source (grille ou liste, fil d'Ariane, lecture d'un dossier entier)
 - [x] **Import/export**: copier fichiers/albums/dossiers d'une source à une autre (ex. NAS → clé USB), exporter en ZIP (fichier, dossier ou album)
 

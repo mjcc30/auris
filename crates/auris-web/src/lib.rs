@@ -236,7 +236,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sources", get(get_sources).post(post_source))
         .route(
             "/api/sources/{id}",
-            delete(delete_source).patch(patch_source),
+            delete(delete_source).patch(patch_source).put(put_source),
         )
         .route("/api/browse", get(get_browse))
         .route("/api/browse/tree", get(get_browse_tree))
@@ -513,6 +513,21 @@ async fn delete_source(
     s.sources.remove(&id)?;
     s.persist_sources();
     Ok(Json(serde_json::json!({ "removed": id })))
+}
+async fn put_source(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(mut src): Json<Source>,
+) -> ApiResult<Json<Source>> {
+    if src.id != id {
+        return Err(
+            AurisError::other("l'id du corps doit correspondre a l'URL".to_string()).into(),
+        );
+    }
+    src.id = id;
+    s.sources.update(src.clone())?;
+    s.persist_sources();
+    Ok(Json(src))
 }
 async fn patch_source(
     State(s): State<AppState>,
