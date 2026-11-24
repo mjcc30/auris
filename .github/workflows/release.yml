@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  ui:
+    name: Build UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci --prefix ui && npm run build --prefix ui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: ui
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            asset: auris-x86_64-unknown-linux-gnu.tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            asset: auris-aarch64-unknown-linux-gnu.tar.gz
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-14
+            asset: auris-x86_64-apple-darwin.tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-15
+            asset: auris-aarch64-apple-darwin.tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            asset: auris-x86_64-pc-windows-msvc.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: deps ALSA (aarch64 cross)
+        if: matrix.cross
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev:arm64 gcc-aarch64-linux-gnu pkg-config
+      - name: build release
+        env:
+          PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --target ${{ matrix.target }} -p auris
+      - name: package
+        run: |
+          if [[ "${{ matrix.asset }}" == *.zip ]]; then
+            cd target/${{ matrix.target }}/release
+            7z a ../../../../${{ matrix.asset }} auris.exe
+          else
+            tar -czf ${{ matrix.asset }} -C target/${{ matrix.target }}/release auris
+          fi
+      - name: checksum
+        run: sha256sum ${{ matrix.asset }} >> checksums.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checksums-${{ matrix.target }}
+          path: checksums.txt
+
+  release:
+    name: Publie la release GitHub
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: auris-*
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          path: checksums
+          pattern: checksums-*
+          merge-multiple: true
+      - name: concat checksums
+        run: cat checksums/* > artifacts/checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

@@ -1,0 +1,357 @@
+//! Decodeurs: PCM via symphonia (FLAC, WAV, AIFF, ALAC, MP3, AAC, MP4, OGG...)
+//! et DSD via le module dsd (DSF/DFF -> DoP). Le moteur consomme des `Chunk`.
+
+use std::io::{Read, Seek, SeekFrom};
+
+use auris_core::{AudioFormat, AurisError, Result};
+use auris_sources::SeekRead;
+use symphonia::core::codecs::audio::{AudioDecoder as SymDecoder, AudioDecoderOptions};
+use symphonia::core::errors::Error as SymError;
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
+use symphonia::core::io::{MediaSource, MediaSourceStream};
+use symphonia::core::meta::{MetadataOptions, StandardTag};
+use symphonia::core::units::Time;
+
+use crate::dsd::DsdDecoder;
+
+/// Donnees d'un bloc audio decode.
+#[derive(Debug)]
+pub enum ChunkData {
+    /// PCM interleaved f32 (len = frames * channels).
+    F32(Vec<f32>),
+    /// DoP 24 bits interleaved (i32, 24 bits bas significatifs; len = frames * channels).
+    I24Dop(Vec<i32>),
+}
+
+impl ChunkData {
+    pub fn frames(&self, channels: usize) -> usize {
+        let n = match self {
+            ChunkData::F32(v) => v.len(),
+            ChunkData::I24Dop(v) => v.len(),
+        };
+        n / channels.max(1)
+    }
+}
+
+/// Un bloc pousse dans l'anneau de sortie (avec generation pour les seeks).
+#[derive(Debug)]
+pub struct Chunk {
+    pub gen: u64,
+    pub data: ChunkData,
+}
+
+/// Spec de sortie requis pour un flux.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputSpec {
+    pub rate: u32,
+    pub channels: u8,
+    /// true = trames DoP 24 bits (DSD), false = PCM f32.
+    pub is_dsd_dop: bool,
+}
+
+/// Metadonnees extraites d'un fichier.
+#[derive(Debug, Clone, Default)]
+pub struct TrackMeta {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub track_number: Option<u32>,
+    pub disc_number: Option<u32>,
+    pub year: Option<u32>,
+    pub genre: Option<String>,
+    pub duration_secs: Option<f64>,
+    pub format: Option<AudioFormat>,
+    pub has_cover: bool,
+    pub cover: Option<Vec<u8>>,
+}
+
+/// Decodeur de flux.
+pub trait Decoder: Send {
+    fn spec(&self) -> OutputSpec;
+    fn duration_secs(&self) -> Option<f64>;
+    fn meta(&self) -> &TrackMeta;
+    /// Prochain bloc; None = fin de piste.
+    fn next_chunk(&mut self, max_frames: usize) -> Result<Option<ChunkData>>;
+    fn seek(&mut self, secs: f64) -> Result<()>;
+}
+
+/// Adaptateur SeekRead -> symphonia MediaSource.
+struct MsWrapper<R: SeekRead>(R);
+
+impl<R: SeekRead> Read for MsWrapper<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+impl<R: SeekRead> Seek for MsWrapper<R> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.0.seek(pos)
+    }
+}
+impl<R: SeekRead> MediaSource for MsWrapper<R> {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+    fn byte_len(&self) -> Option<u64> {
+        // SeekRead n'expose pas la taille; on tente via seek end (le reader la supporte).
+        None
+    }
+}
+
+/// Decodeur PCM symphonia.
+pub struct PcmDecoder {
+    format: Box<dyn FormatReader>,
+    decoder: Box<dyn SymDecoder>,
+    track_id: u32,
+    spec: OutputSpec,
+    duration: Option<f64>,
+    meta: TrackMeta,
+}
+
+impl PcmDecoder {
+    pub fn new(reader: Box<dyn SeekRead>, ext: &str) -> Result<Self> {
+        let mss = MediaSourceStream::new(Box::new(MsWrapper(reader)), Default::default());
+        let mut hint = Hint::new();
+        if !ext.is_empty() {
+            hint.with_extension(ext);
+        }
+        let fmt_opts: FormatOptions = Default::default();
+        let meta_opts: MetadataOptions = Default::default();
+        let mut format = symphonia::default::get_probe()
+            .probe(&hint, mss, fmt_opts, meta_opts)
+            .map_err(|e| AurisError::UnsupportedFormat(format!("{e}")))?;
+        let track = format
+            .default_track(TrackType::Audio)
+            .ok_or_else(|| AurisError::UnsupportedFormat("pas de piste audio".into()))?;
+        let dec_opts: AudioDecoderOptions = Default::default();
+        let codec_params = track
+            .codec_params
+            .as_ref()
+            .and_then(|c| c.audio())
+            .ok_or_else(|| AurisError::UnsupportedFormat("codec sans parametres audio".into()))?;
+        let decoder = symphonia::default::get_codecs()
+            .make_audio_decoder(codec_params, &dec_opts)
+            .map_err(|e| AurisError::UnsupportedFormat(format!("codec non supporte: {e}")))?;
+        let track_id = track.id;
+        let rate = codec_params.sample_rate.unwrap_or(44100);
+        let channels = codec_params
+            .channels
+            .as_ref()
+            .map(|c| c.count() as u8)
+            .unwrap_or(2);
+        let duration = track
+            .duration
+            .and_then(|d| track.time_base.and_then(|tb| tb.calc_duration(d)))
+            .map(|t| t.as_nanos() as f64 / 1e9);
+        let bits = codec_params.bits_per_sample.unwrap_or(16) as u8;
+        let format_info = AudioFormat::Pcm {
+            sample_rate: rate,
+            bits,
+            channels,
+        };
+        let mut meta = read_metadata(format.as_mut());
+        meta.duration_secs = meta.duration_secs.or(duration);
+        meta.format = Some(format_info);
+        Ok(PcmDecoder {
+            format,
+            decoder,
+            track_id,
+            spec: OutputSpec {
+                rate,
+                channels,
+                is_dsd_dop: false,
+            },
+            duration,
+            meta,
+        })
+    }
+}
+
+impl Decoder for PcmDecoder {
+    fn spec(&self) -> OutputSpec {
+        self.spec
+    }
+    fn duration_secs(&self) -> Option<f64> {
+        self.duration
+    }
+    fn meta(&self) -> &TrackMeta {
+        &self.meta
+    }
+
+    fn next_chunk(&mut self, max_frames: usize) -> Result<Option<ChunkData>> {
+        let channels = self.spec.channels as usize;
+        loop {
+            match self.format.next_packet() {
+                Ok(Some(packet)) => {
+                    if packet.track_id != self.track_id {
+                        continue;
+                    }
+                    match self.decoder.decode(&packet) {
+                        Ok(buf) => {
+                            let n = buf.samples_interleaved();
+                            if n == 0 {
+                                continue;
+                            }
+                            let mut v = vec![0f32; n];
+                            buf.copy_to_slice_interleaved(&mut v);
+                            // Limite la taille du chunk
+                            let max_samples = max_frames.max(1) * channels;
+                            if v.len() > max_samples {
+                                v.truncate(max_samples);
+                            }
+                            // met a jour la spec si le decodeur change de rate/canaux
+                            let spec = buf.spec();
+                            if spec.rate() != self.spec.rate
+                                || spec.channels().count() as u8 != self.spec.channels
+                            {
+                                self.spec.rate = spec.rate();
+                                self.spec.channels = spec.channels().count() as u8;
+                            }
+                            return Ok(Some(ChunkData::F32(v)));
+                        }
+                        Err(SymError::DecodeError(m)) => {
+                            tracing::debug!("pcm: decode error: {m}");
+                            continue;
+                        }
+                        Err(SymError::ResetRequired) => {
+                            self.decoder.reset();
+                            continue;
+                        }
+                        Err(e) => return Err(AurisError::Decode(e.to_string())),
+                    }
+                }
+                Ok(None) => {
+                    tracing::debug!("pcm: next_packet -> None (fin de conteneur)");
+                    return Ok(None);
+                }
+                Err(SymError::ResetRequired) => {
+                    self.decoder.reset();
+                    continue;
+                }
+                Err(e) => {
+                    tracing::debug!("pcm: next_packet erreur: {e}");
+                    return Ok(None);
+                }
+            }
+        }
+    }
+
+    fn seek(&mut self, secs: f64) -> Result<()> {
+        let time = Time::try_from_secs_f64(secs)
+            .ok_or_else(|| AurisError::Decode("seek hors limites".into()))?;
+        self.format
+            .seek(
+                SeekMode::Coarse,
+                SeekTo::Time {
+                    time,
+                    track_id: Some(self.track_id),
+                },
+            )
+            .map_err(|e| AurisError::Decode(format!("seek: {e}")))?;
+        self.decoder.reset();
+        Ok(())
+    }
+}
+
+/// Extrait les metadonnees courantes d'un format reader.
+pub fn read_metadata(format: &mut dyn FormatReader) -> TrackMeta {
+    let mut meta = TrackMeta::default();
+    let mut md = format.metadata();
+    while !md.is_latest() {
+        md.pop();
+    }
+    if let Some(rev) = md.current() {
+        for tag in &rev.media.tags {
+            let value = tag.raw.value.to_string();
+            match &tag.std {
+                Some(StandardTag::TrackTitle(v)) => meta.title = Some(v.to_string()),
+                Some(StandardTag::Artist(v)) => meta.artist = Some(v.to_string()),
+                Some(StandardTag::Album(v)) => meta.album = Some(v.to_string()),
+                Some(StandardTag::AlbumArtist(v)) => meta.album_artist = Some(v.to_string()),
+                Some(StandardTag::TrackNumber(n)) => meta.track_number = Some(*n as u32),
+                Some(StandardTag::DiscNumber(n)) => meta.disc_number = Some(*n as u32),
+                Some(StandardTag::ReleaseYear(y)) => meta.year = Some(*y as u32),
+                Some(StandardTag::Genre(v)) => meta.genre = Some(v.to_string()),
+                _ => {
+                    // repli sur les cles brutes
+                    let key = tag.raw.key.to_ascii_uppercase();
+                    match key.as_str() {
+                        "TITLE" | "TIT2" => {
+                            meta.title.get_or_insert(value);
+                        }
+                        "ARTIST" | " TPE1" => {
+                            meta.artist.get_or_insert(value);
+                        }
+                        "ALBUM" | "TALB" => {
+                            meta.album.get_or_insert(value);
+                        }
+                        "ALBUMARTIST" | "TPE2" | "ALBUM ARTIST" => {
+                            meta.album_artist.get_or_insert(value);
+                        }
+                        "TRACKNUMBER" | "TRCK" | "TRACK" => {
+                            meta.track_number =
+                                value.split('/').next().and_then(|s| s.trim().parse().ok())
+                        }
+                        "DISCNUMBER" | "TPOS" | "DISC" => {
+                            meta.disc_number =
+                                value.split('/').next().and_then(|s| s.trim().parse().ok())
+                        }
+                        "DATE" | "YEAR" | "TDRC" => {
+                            meta.year = value.chars().take(4).collect::<String>().parse().ok()
+                        }
+                        "GENRE" | "TCON" => {
+                            meta.genre.get_or_insert(value);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if let Some(visual) = rev.media.visuals.first() {
+            meta.has_cover = true;
+            meta.cover = Some(visual.data.to_vec());
+        }
+    }
+    meta
+}
+
+/// Ouvre un decodeur adapte au format (DSD si .dsf/.dff, PCM sinon).
+pub fn open_decoder(
+    reader: Box<dyn SeekRead>,
+    ext: &str,
+    meta: TrackMeta,
+) -> Result<Box<dyn Decoder>> {
+    let ext = ext.to_ascii_lowercase();
+    if ext == "dsf" || ext == "dff" {
+        Ok(Box::new(DsdDecoder::new(reader, meta)?))
+    } else {
+        Ok(Box::new(PcmDecoder::new(reader, &ext)?))
+    }
+}
+
+/// Sonde un fichier: metadonnees + spec, sans lire tout le flux.
+pub fn probe_meta(
+    reader: Box<dyn SeekRead>,
+    ext: &str,
+) -> Result<(TrackMeta, OutputSpec, Option<f64>)> {
+    let ext_l = ext.to_ascii_lowercase();
+    if ext_l == "dsf" || ext_l == "dff" {
+        let d = DsdDecoder::new(reader, TrackMeta::default())?;
+        let meta = d.meta().clone();
+        let spec = d.spec();
+        let dur = d.duration_secs();
+        let mut meta = meta;
+        meta.format = Some(AudioFormat::Dsd {
+            sample_rate: d.info().rate,
+            channels: d.info().channels,
+        });
+        return Ok((meta, spec, dur));
+    }
+    let pcm = PcmDecoder::new(reader, &ext_l)?;
+    let meta = pcm.meta().clone();
+    let spec = pcm.spec();
+    let dur = pcm.duration_secs();
+    Ok((meta, spec, dur))
+}

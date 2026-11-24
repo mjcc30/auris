@@ -1,0 +1,46 @@
+site_name: Auris
+site_description: Lecteur audiophile cross-plateforme en un seul binaire Rust — NAS, DAC jusqu'au DSD256, interface web style Spotify, mise à jour automatique.
+site_author: contributeurs Auris
+repo_url: https://github.com/mjcc30/auris
+repo_name: mjcc30/auris
+copyright: AGPL v3 — © 2026 contributeurs Auris
+
+theme:
+  name: material
+  language: fr
+  palette:
+    - scheme: slate
+      primary: green
+      accent: green
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - content.code.copy
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+
+nav:
+  - Accueil: index.md
+  - Installer: install.md
+  - Guide:
+      - Spécifications: SPECIFICATIONS.md
+      - Fonctionnalités: FEATURES.md
+      - User stories: USER_STORIES.md
+      - Roadmap: ROADMAP.md
+  - Développeurs:
+      - API REST + WebSocket: API.md
+      - Charte graphique: CHARTE_GRAPHIQUE.md
+      - Plugins communautaires: PLUGIN_SYSTEM.md
+      - Kanban: BOARD.md
+      - ADR: adr/0001-monorepo-workspace.md
+  - Projet:
+      - Manifeste: https://github.com/mjcc30/auris/blob/main/MANIFESTO.md
+      - Contribuer: https://github.com/mjcc30/auris/blob/main/CONTRIBUTING.md
+      - Code de conduite: https://github.com/mjcc30/auris/blob/main/CODE_OF_CONDUCT.md
+      - Sécurité: https://github.com/mjcc30/auris/blob/main/SECURITY.md
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true

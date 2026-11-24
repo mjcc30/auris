@@ -1,0 +1,19 @@
+# build
+/target/
+**/*.rs.bk
+
+# UI
+ui/node_modules/
+ui/dist/assets/  # rebuild par la CI ; seul l'index placeholder est commité
+
+# secrets / local
+token.txt
+*.log
+
+# data runtime
+/data/
+/var/lib/auris/
+
+# OS
+.DS_Store
+Thumbs.db

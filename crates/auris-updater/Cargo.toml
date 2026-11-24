@@ -1,0 +1,24 @@
+[package]
+name = "auris-updater"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Mise a jour automatique depuis les releases GitHub (binaire autonome)"
+
+[dependencies]
+auris-core.workspace = true
+self_update = { version = "1", default-features = false, features = [
+  "github",
+  "native-tls",
+  "reqwest",
+  "archive-tar",
+  "compression-tar-gz",
+  "checksums",
+] }
+tracing.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+semver = "1"

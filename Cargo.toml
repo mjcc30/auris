@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[workspace.dependencies]
+# crates internes
+auris-core = { path = "crates/auris-core" }
+auris-player = { path = "crates/auris-player" }
+auris-sources = { path = "crates/auris-sources" }
+auris-library = { path = "crates/auris-library" }
+auris-web = { path = "crates/auris-web" }
+auris-updater = { path = "crates/auris-updater" }
+
+# runtime / web
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["ws", "macros"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "2"
+dirs = "6"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+rust-embed = "8"
+
+# audio
+symphonia = { version = "0.6", default-features = false, features = [
+  "all-codecs", "all-formats", "all-meta", "opt-simd",
+] }
+cpal = "0.18"
+ringbuf = "0.4"
+bytemuck = "1"
+
+# stockage / sources
+sled = "0.34"
+smb2 = "0.43"
+reqwest = { version = "0.12", default-features = false, features = ["stream", "native-tls"] }
+
+# mise a jour
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[profile.release.package.auris]
+opt-level = 3

@@ -1,0 +1,20 @@
+[package]
+name = "auris-library"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Bibliotheque musicale: scan des sources, metadonnees, index sled, recherche"
+
+[dependencies]
+auris-core.workspace = true
+auris-sources.workspace = true
+auris-player.workspace = true
+sled.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+symphonia.workspace = true
+chrono.workspace = true
+uuid.workspace = true

@@ -1,0 +1,17 @@
+# cocogitto — vérification des commits conventionnels en CI (`cog check`)
+from_latest_tag: true
+ignore_merge_commits: true
+branch_whitelist:
+  - main
+commit_types:
+  feat: { changelog_title: "Fonctionnalités" }
+  fix: { changelog_title: "Corrections" }
+  docs: { changelog_title: "Documentation" }
+  style: { changelog_title: "Style" }
+  refactor: { changelog_title: "Refactoring" }
+  perf: { changelog_title: "Performance" }
+  test: { changelog_title: "Tests" }
+  build: { changelog_title: "Build" }
+  ci: { changelog_title: "CI" }
+  chore: { changelog_title: "Divers" }
+  revert: { changelog_title: "Annulations" }

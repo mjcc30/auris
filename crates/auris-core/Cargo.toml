@@ -1,0 +1,13 @@
+[package]
+name = "auris-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Types partages: pistes, bibliothèque, etat du lecteur, evenements"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true

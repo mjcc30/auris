@@ -1,0 +1,28 @@
+[package]
+name = "auris"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Auris: lecteur audiophile cross-plateforme en Rust (style Volumio), pilotable via interface web"
+
+[[bin]]
+name = "auris"
+path = "src/main.rs"
+
+[dependencies]
+auris-core.workspace = true
+auris-player.workspace = true
+auris-sources.workspace = true
+auris-library.workspace = true
+auris-web.workspace = true
+auris-updater.workspace = true
+tokio.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
+chrono.workspace = true

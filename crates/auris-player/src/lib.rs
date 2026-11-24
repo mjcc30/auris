@@ -1,0 +1,11 @@
+//! Moteur de lecture Auris: decodage PCM (symphonia) + DSD (DSF/DFF -> DoP),
+//! sortie cross-plateforme via cpal (ALSA / CoreAudio / WASAPI).
+
+pub mod decoder;
+pub mod dsd;
+pub mod engine;
+pub mod output;
+
+pub use decoder::{open_decoder, probe_meta, Chunk, ChunkData, Decoder, OutputSpec, TrackMeta};
+pub use engine::{Command, PlayerEngine, WorkerMsg};
+pub use output::AudioOutput;

@@ -1,0 +1,27 @@
+[package]
+name = "auris-web"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Serveur web: API REST, WebSocket temps reel, UI embarquee (style Spotify)"
+
+[dependencies]
+auris-core.workspace = true
+auris-player.workspace = true
+auris-library.workspace = true
+auris-sources.workspace = true
+auris-updater.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+futures-util.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+rust-embed.workspace = true
+mime_guess = "2"
+
+[dev-dependencies]
+reqwest = { workspace = true, features = ["json"] }

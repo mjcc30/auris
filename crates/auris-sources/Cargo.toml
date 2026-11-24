@@ -1,0 +1,20 @@
+[package]
+name = "auris-sources"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Sources audio: fichiers locaux (NAS monte), SMB direct, HTTP, UPnP/DLNA"
+
+[dependencies]
+auris-core.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+async-trait = "0.1"
+smb2.workspace = true
+reqwest.workspace = true
+futures-util.workspace = true
+bytes = "1"
+url = "2"
