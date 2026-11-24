@@ -98,16 +98,26 @@ export default function App() {
   useEffect(() => {
     refresh();
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
-    ws.onmessage = () => refresh();
-    const iv = setInterval(refresh, 2000);
+    // Les événements « state » (horloge de position toutes les 500 ms) mettent à jour
+    // l'état directement sans requêtes HTTP ; seuls les autres événements rechargent tout.
+    ws.onmessage = (e) => {
+      try {
+        const ev = JSON.parse(String(e.data));
+        if (ev?.type === "state" && ev.payload) setState(ev.payload as PlayerState);
+        else if (ev?.type) refresh();
+        else setState(ev as PlayerState);
+      } catch { refresh(); }
+    };
+    const iv = setInterval(refresh, 10000);
     return () => { ws.close(); clearInterval(iv); };
   }, [refresh]);
 
   // Applique l'apparence (thème, accent, fond) au document à chaque changement.
+  const appearance = settings?.appearance;
   useEffect(() => {
-    if (!settings) return;
-    applyAppearance(settings.appearance);
-  }, [settings]);
+    if (appearance) applyAppearance(appearance);
+    // Dépendances sur les champs primitifs : évite de réécrire les styles du document à chaque message WS.
+  }, [appearance?.theme, appearance?.accent, appearance?.background]);
 
   // « Jouer ici » : démarre/arrête le lecteur WebAudio selon la sortie active.
   useEffect(() => {
@@ -390,7 +400,7 @@ function Browse({ sources, src, playUri, act, say }: { sources: Source[]; src: s
     setLoading(true);
     api.browse(uri).then(setEntries).catch((e) => say(e instanceof Error ? e.message : String(e))).finally(() => setLoading(false));
     setMenu(null);
-  }, [id, path, sources, say]);
+  }, [id, path, say]);
 
   if (!id) return <div className="empty">Aucune source configurée — ajoutez-en une dans « Sources &amp; réglages ».</div>;
   const source = sources.find((s) => s.id === id);
@@ -794,7 +804,7 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
 
   useEffect(() => {
     api.systemStorage().then(setStorage).catch(() => {});
-  }, [settings]);
+  }, []);
 
   if (!settings) return <div className="empty">Chargement des réglages…</div>;
 

@@ -1123,7 +1123,7 @@ async fn handle_ws(socket: axum::extract::ws::WebSocket, s: AppState) {
     let initial = WsEvent::state(&s.engine.state());
     let _ = tx
         .send(axum::extract::ws::Message::Text(
-            initial.payload.to_string().into(),
+            serde_json::to_string(&initial).unwrap_or_default().into(),
         ))
         .await;
     let send_task = tokio::spawn(async move {
