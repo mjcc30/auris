@@ -103,6 +103,24 @@ percent (`%20`) ou les espaces bruts dans le chemin.)
 | GET | `/api/system/info` | version, OS, uptime, counts |
 | GET | `/api/system/update` | dernière vérification de mise à jour |
 | POST | `/api/system/update` | applique la mise à jour (redémarrage requis) |
+| GET | `/api/system/storage` | usage disque du data-dir (`used/total/free_bytes`) |
+| GET | `/api/system/logs` | 400 dernières lignes du journal (texte brut, ANSI retiré) |
+| POST | `/api/system/reset` | reset usine : body `{"confirm":"RESET"}` (sinon 400) |
+| POST | `/api/system/reboot` | redémarre la machine (403 si `power_control = false`) |
+| POST | `/api/system/shutdown` | éteint la machine (403 si `power_control = false`) |
+
+## Réglages (menu « Réglages » façon Volumio Nova)
+
+| Méthode | Route | Description |
+|---|---|---|
+| GET | `/api/settings` | réglages courants (persistés dans `config.toml`, section `[settings]`) |
+| PUT | `/api/settings` | remplace les réglages (validés, 400 si invalide), appliqués à chaud au moteur |
+
+Sections : `playback` (courbe de volume, `max_volume`, `volume_mode` software/disabled,
+gapless, resampling, `dsd_mode`), `appearance` (thème dark/light/system, `accent`
+`#RRGGBB`, `background`), `system` (`device_name`, `timezone`), `network` (`hostname`),
+`sources` (`metadata_discovery`). `PlayerState` expose aussi `max_volume` et
+`volume_mode` pour que l'UI masque le volume en mode bit-perfect.
 
 ## WebSocket `/ws`
 

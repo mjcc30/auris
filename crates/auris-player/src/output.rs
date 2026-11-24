@@ -172,6 +172,7 @@ impl AudioOutput {
     }
 
     /// Construit (et remplace) le flux de sortie pour un spec donne.
+    #[allow(clippy::too_many_arguments)]
     pub fn build_stream(
         &mut self,
         spec: &OutputSpec,
@@ -180,6 +181,9 @@ impl AudioOutput {
         muted: Arc<AtomicBool>,
         frames_out: Arc<AtomicU64>,
         gen: Arc<AtomicU64>,
+        max_volume: Arc<AtomicU8>,
+        curve: Arc<AtomicU8>,
+        vol_mode: Arc<AtomicU8>,
     ) -> Result<()> {
         self.stream = None; // stoppe l'ancien flux
         let configs: Vec<SupportedStreamConfigRange> = self
@@ -246,6 +250,9 @@ impl AudioOutput {
                 let muted = muted.clone();
                 let frames_out = frames_out.clone();
                 let gen = gen.clone();
+                let max_volume = max_volume.clone();
+                let curve = curve.clone();
+                let vol_mode = vol_mode.clone();
                 // stash persistant entre les appels du callback: un chunk plus gros
                 // que le buffer cpal est consomme sur plusieurs appels.
                 let mut stash: Option<Stash> = None;
@@ -254,14 +261,13 @@ impl AudioOutput {
                     .build_output_stream::<$t, _, _>(
                         stream_config.clone(),
                         move |data: &mut [$t], _info| {
-                            let gain = {
-                                let v = volume.load(Ordering::Relaxed);
-                                if muted.load(Ordering::Relaxed) {
-                                    0.0
-                                } else {
-                                    v as f32 / 100.0
-                                }
-                            };
+                            let gain = compute_gain(
+                                volume.load(Ordering::Relaxed),
+                                max_volume.load(Ordering::Relaxed),
+                                curve.load(Ordering::Relaxed),
+                                vol_mode.load(Ordering::Relaxed),
+                                muted.load(Ordering::Relaxed),
+                            );
                             let cur_gen = gen.load(Ordering::Relaxed);
                             let mut i = 0usize;
                             let mut frames_written = 0u64;
@@ -372,5 +378,62 @@ impl AudioOutput {
     }
     pub fn stop(&mut self) {
         self.stream = None;
+    }
+}
+
+/// Gain appliqué dans le callback audio, selon les réglages playback.
+///
+/// - `vol_mode == 1` (bit-perfect / disabled) : gain fixe de 1.0, aucun traitement.
+/// - `muted` : 0.0 (uniquement en mode logiciel).
+/// - sinon `volume` est borné par `max_volume`, puis la courbe est appliquée :
+///   `curve == 1` → linéaire (v/100), sinon logarithmique ((v/100)^2).
+pub fn compute_gain(volume: u8, max_volume: u8, curve: u8, vol_mode: u8, muted: bool) -> f32 {
+    if vol_mode == 1 {
+        return 1.0;
+    }
+    if muted {
+        return 0.0;
+    }
+    let max = max_volume.max(1) as f32;
+    let v = (volume as f32 / 100.0).min(max / 100.0);
+    if curve == 1 {
+        v
+    } else {
+        v * v
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_gain;
+
+    #[test]
+    fn logiciel_log_par_defaut() {
+        // courbe log (0) : 50% -> 0.25
+        assert!((compute_gain(50, 100, 0, 0, false) - 0.25).abs() < 1e-6);
+        assert!((compute_gain(100, 100, 0, 0, false) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn logiciel_lineaire() {
+        assert!((compute_gain(50, 100, 1, 0, false) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn max_volume_borne_le_gain() {
+        // volume 80 mais max 50 -> gain calculé sur 50
+        assert!((compute_gain(80, 50, 1, 0, false) - 0.5).abs() < 1e-6);
+        assert!((compute_gain(80, 50, 0, 0, false) - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bitperfect_ignore_volume_et_mute() {
+        assert_eq!(compute_gain(0, 100, 0, 1, false), 1.0);
+        assert_eq!(compute_gain(37, 40, 1, 1, true), 1.0);
+    }
+
+    #[test]
+    fn mute_coupe_en_logiciel() {
+        assert_eq!(compute_gain(80, 100, 0, 0, true), 0.0);
     }
 }

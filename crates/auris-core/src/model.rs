@@ -299,6 +299,20 @@ pub struct PlayerState {
     pub queue_index: Option<usize>,
     pub audio_device: Option<String>,
     pub current_format: Option<AudioFormat>,
+    /// Volume max autorisé (réglage playback.max_volume).
+    #[serde(default = "default_max_volume")]
+    pub max_volume: u8,
+    /// Mode de volume : "software" ou "disabled" (bit-perfect).
+    #[serde(default = "default_volume_mode")]
+    pub volume_mode: String,
+}
+
+fn default_max_volume() -> u8 {
+    100
+}
+
+fn default_volume_mode() -> String {
+    "software".into()
 }
 
 impl Default for PlayerState {
@@ -316,6 +330,8 @@ impl Default for PlayerState {
             queue_index: None,
             audio_device: None,
             current_format: None,
+            max_volume: 100,
+            volume_mode: "software".into(),
         }
     }
 }

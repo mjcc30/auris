@@ -4,7 +4,8 @@
 //! autonome et clé en main, aucune installation фронт separee n'est requise.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
 use axum::{
     extract::{Path, Query, State, WebSocketUpgrade},
@@ -19,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 
 use auris_core::{
-    AurisError, BrowseEntry, Playlist, RepeatMode, Source, Track, WsEvent, ZipWriter,
+    AurisError, BrowseEntry, Playlist, RepeatMode, Settings, Source, Track, WsEvent, ZipWriter,
 };
 use auris_library::Library;
 use auris_player::{AudioOutput, PlayerEngine};
@@ -29,6 +30,9 @@ use auris_updater::Updater;
 #[derive(RustEmbed)]
 #[folder = "../../ui/dist/"]
 struct UiAssets;
+
+/// Sink de persistance des réglages (config.toml).
+pub type SettingsSink = Arc<dyn Fn(&Settings) + Send + Sync>;
 
 /// Etat partagé de l'application web.
 #[derive(Clone)]
@@ -41,12 +45,61 @@ pub struct AppState {
     /// Appele apres chaque modification des sources (ajout/suppression/toggle)
     /// pour persister la config. `None` = pas de persistance (tests).
     pub sources_sink: Option<Arc<dyn Fn(Vec<Source>) + Send + Sync>>,
+    /// Réglages courants (menu Réglages, façon Volumio Nova).
+    pub settings: Arc<RwLock<Settings>>,
+    /// Persiste les réglages dans config.toml. `None` = pas de persistance (tests).
+    pub settings_sink: Option<SettingsSink>,
+    /// Répertoire de données (stockage, logs, reset usine).
+    pub data_dir: PathBuf,
+    /// Autorise redémarrer/éteindre depuis l'UI (config `power_control`).
+    pub power_control: bool,
+    /// Exécute une action d'alimentation. `None` = commande système réelle.
+    pub power_ops: Option<Arc<dyn Fn(PowerAction) + Send + Sync>>,
+    /// Fichier de logs si la journalisation fichier est active.
+    pub log_path: Option<PathBuf>,
+}
+
+/// Action d'alimentation (redémarrer / éteindre la machine hôte).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PowerAction {
+    Reboot,
+    Shutdown,
 }
 
 impl AppState {
+    /// Construit un état avec des réglages par défaut et aucune persistance.
+    pub fn new(
+        engine: Arc<PlayerEngine>,
+        library: Arc<Library>,
+        sources: Arc<SourcesManager>,
+        updater: Arc<Updater>,
+        data_dir: PathBuf,
+    ) -> Self {
+        AppState {
+            engine,
+            library,
+            sources,
+            updater,
+            started_at: chrono::Utc::now().timestamp(),
+            sources_sink: None,
+            settings: Arc::new(RwLock::new(Settings::default())),
+            settings_sink: None,
+            data_dir,
+            power_control: false,
+            power_ops: None,
+            log_path: None,
+        }
+    }
+
     fn persist_sources(&self) {
         if let Some(sink) = &self.sources_sink {
             sink(self.sources.list());
+        }
+    }
+
+    fn persist_settings(&self) {
+        if let Some(sink) = &self.settings_sink {
+            sink(&self.settings.read().unwrap());
         }
     }
 }
@@ -259,6 +312,13 @@ pub fn router(state: AppState) -> Router {
         // systeme
         .route("/api/system/info", get(get_system_info))
         .route("/api/system/update", get(get_update).post(post_update))
+        .route("/api/system/logs", get(get_logs))
+        .route("/api/system/storage", get(get_storage))
+        .route("/api/system/reset", post(post_reset))
+        .route("/api/system/reboot", post(post_reboot))
+        .route("/api/system/shutdown", post(post_shutdown))
+        // réglages (menu Réglages façon Volumio Nova)
+        .route("/api/settings", get(get_settings).put(put_settings))
         // websocket
         .route("/ws", get(ws_handler));
 
@@ -793,6 +853,184 @@ async fn post_update(State(s): State<AppState>) -> Json<serde_json::Value> {
         }
         Ok(Err(e)) => Json(serde_json::json!({ "updated": false, "error": e.to_string() })),
         Err(e) => Json(serde_json::json!({ "updated": false, "error": e.to_string() })),
+    }
+}
+
+// ---------- Réglages (menu Réglages façon Nova) ----------
+
+async fn get_settings(State(s): State<AppState>) -> Json<Settings> {
+    Json(s.settings.read().unwrap().clone())
+}
+
+async fn put_settings(
+    State(s): State<AppState>,
+    Json(mut new): Json<Settings>,
+) -> ApiResult<Json<Settings>> {
+    if let Err(e) = new.validate() {
+        return Err(ApiError(AurisError::other(format!(
+            "réglages invalides: {e}"
+        ))));
+    }
+    new.system.device_name = new.system.device_name.trim().to_string();
+    {
+        let mut w = s.settings.write().unwrap();
+        *w = new.clone();
+    }
+    // applique à chaud au moteur (volume max, courbe, mode bit-perfect)
+    s.engine.apply_playback(&new.playback);
+    s.persist_settings();
+    Ok(Json(new))
+}
+
+// ---------- Système avancé ----------
+
+#[derive(Serialize)]
+struct StorageInfo {
+    data_dir: String,
+    used_bytes: u64,
+    total_bytes: u64,
+    free_bytes: u64,
+}
+
+async fn get_storage(State(s): State<AppState>) -> Json<StorageInfo> {
+    let used: u64 = walkdir::WalkDir::new(&s.data_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
+        .sum();
+    Json(StorageInfo {
+        data_dir: s.data_dir.display().to_string(),
+        used_bytes: used,
+        total_bytes: fs2::total_space(&s.data_dir).unwrap_or(0),
+        free_bytes: fs2::available_space(&s.data_dir).unwrap_or(0),
+    })
+}
+
+/// Retire les séquences d'échappement ANSI (`ESC [ ... m`) d'un texte de log.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // saute jusqu'à la lettre finale de la séquence CSI
+            for c2 in chars.by_ref() {
+                if c2.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+async fn get_logs(State(s): State<AppState>) -> Response {
+    match &s.log_path {
+        Some(p) if p.exists() => {
+            let content = std::fs::read_to_string(p).unwrap_or_default();
+            // retire les séquences ANSI (couleurs) pour un affichage propre dans l'UI
+            let clean = strip_ansi(&content);
+            let tail: Vec<&str> = clean.lines().rev().take(400).collect();
+            let body = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+            ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], body).into_response()
+        }
+        _ => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "journalisation fichier inactive" })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct ResetBody {
+    confirm: String,
+}
+
+/// Réinitialisation usine : supprime la bibliothèque (pistes + playlists sled),
+/// remet les sources et les réglages à zéro. La config réseau (port/host) est
+/// conservée. Un redémarrage est conseillé ensuite.
+async fn post_reset(
+    State(s): State<AppState>,
+    Json(b): Json<ResetBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    if b.confirm != "RESET" {
+        return Err(ApiError(AurisError::other(
+            "confirmation requise: envoyer {\"confirm\": \"RESET\"}",
+        )));
+    }
+    let lib = s.data_dir.join("library");
+    if lib.exists() {
+        std::fs::remove_dir_all(&lib)
+            .map_err(|e| ApiError(AurisError::other(format!("reset: {e}"))))?;
+    }
+    // sources vidées + réglages par défaut, persistés via les sinks
+    if let Some(sink) = &s.sources_sink {
+        sink(Vec::new());
+    }
+    {
+        let mut w = s.settings.write().unwrap();
+        *w = Settings::default();
+    }
+    s.persist_settings();
+    s.engine.apply_playback(&Settings::default().playback);
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "restart_recommended": true,
+        "note": "bibliothèque, playlists, sources et réglages remis à zéro"
+    })))
+}
+
+type PowerResult = Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)>;
+
+async fn post_reboot(State(s): State<AppState>) -> PowerResult {
+    power(s, PowerAction::Reboot).await
+}
+
+async fn post_shutdown(State(s): State<AppState>) -> PowerResult {
+    power(s, PowerAction::Shutdown).await
+}
+
+async fn power(s: AppState, action: PowerAction) -> PowerResult {
+    if !s.power_control {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "redémarrer/éteindre est désactivé : passer `power_control = true` dans config.toml"
+            })),
+        ));
+    }
+    if let Some(ops) = &s.power_ops {
+        ops(action);
+    } else {
+        real_power(action);
+    }
+    let name = match action {
+        PowerAction::Reboot => "reboot",
+        PowerAction::Shutdown => "shutdown",
+    };
+    Ok(Json(serde_json::json!({ "ok": true, "action": name })))
+}
+
+/// Lance la commande d'alimentation réelle de l'OS (détaché).
+fn real_power(action: PowerAction) {
+    #[cfg(unix)]
+    {
+        let (prog, args): (&str, &[&str]) = match action {
+            PowerAction::Reboot => ("reboot", &[]),
+            PowerAction::Shutdown => ("shutdown", &["-h", "now"]),
+        };
+        let _ = std::process::Command::new(prog).args(args).spawn();
+    }
+    #[cfg(windows)]
+    {
+        let args: &[&str] = match action {
+            PowerAction::Reboot => &["/r", "/t", "0"],
+            PowerAction::Shutdown => &["/s", "/t", "0"],
+        };
+        let _ = std::process::Command::new("shutdown").args(args).spawn();
     }
 }
 

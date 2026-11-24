@@ -1,7 +1,7 @@
 //! Wiring de l'application: config -> sources -> bibliothèque -> moteur -> web.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
 
@@ -58,6 +58,7 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
     tracing::info!("bibliothèque: {} pistes indexées", library.track_count());
 
     let engine = PlayerEngine::start(sources.clone(), config.audio_device.clone(), config.volume);
+    engine.apply_playback(&config.settings.playback);
 
     let updater = Arc::new(Updater::new(UpdaterConfig {
         repo_owner: config.repo_owner.clone(),
@@ -78,6 +79,16 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         }
     });
 
+    // persistance des réglages dans config.toml a chaque modification via l'API
+    let sink_data_dir2 = data_dir.clone();
+    let settings_sink = Arc::new(move |st: &auris_core::Settings| {
+        let mut cfg = AppConfig::load(Some(sink_data_dir2.clone()));
+        cfg.settings = st.clone();
+        if let Err(e) = cfg.save() {
+            tracing::warn!("persistance des réglages: {e}");
+        }
+    });
+
     let state = AppState {
         engine,
         library,
@@ -85,6 +96,12 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         updater,
         started_at: chrono::Utc::now().timestamp(),
         sources_sink: Some(sources_sink),
+        settings: Arc::new(RwLock::new(config.settings.clone())),
+        settings_sink: Some(settings_sink),
+        data_dir: data_dir.clone(),
+        power_control: config.power_control,
+        power_ops: None,
+        log_path: Some(data_dir.join("logs").join("auris.log")),
     };
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)

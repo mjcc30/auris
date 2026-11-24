@@ -21,6 +21,8 @@ serde_json.workspace = true
 chrono.workspace = true
 tracing.workspace = true
 rust-embed.workspace = true
+fs2.workspace = true
+walkdir.workspace = true
 mime_guess = "2"
 
 [dev-dependencies]

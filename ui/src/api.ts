@@ -49,6 +49,8 @@ export interface PlayerState {
   queue_index: number | null;
   audio_device: string | null;
   current_format: AudioFormat | null;
+  max_volume: number;
+  volume_mode: string;
 }
 
 export interface Source {
@@ -130,6 +132,51 @@ export interface UpdateInfo {
   checked_at: number;
 }
 
+// ---------- Réglages (équivalent menu « Réglages » de Volumio Nova) ----------
+
+export interface PlaybackSettings {
+  volume_curve: "logarithmic" | "linear";
+  max_volume: number;
+  volume_mode: "software" | "disabled";
+  gapless: boolean;
+  resampling: boolean;
+  dsd_mode: "dop" | "pcm";
+}
+
+export interface AppearanceSettings {
+  theme: "dark" | "light" | "system";
+  accent: string;
+  background: string | null;
+}
+
+export interface SystemSettings {
+  device_name: string;
+  timezone: string | null;
+}
+
+export interface NetworkSettings {
+  hostname: string | null;
+}
+
+export interface SourcesSettings {
+  metadata_discovery: boolean;
+}
+
+export interface Settings {
+  playback: PlaybackSettings;
+  appearance: AppearanceSettings;
+  system: SystemSettings;
+  network: NetworkSettings;
+  sources: SourcesSettings;
+}
+
+export interface StorageInfo {
+  data_dir: string;
+  used_bytes: number;
+  total_bytes: number;
+  free_bytes: number;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, init);
   if (!r.ok) {
@@ -201,6 +248,26 @@ export const api = {
   selectDevice: (name: string | null) => req<PlayerState>("/api/audio/device", post({ name })),
   system: () => req<SystemInfo>("/api/system/info"),
   updateCheck: () => req<UpdateInfo>("/api/system/update"),
+  settings: () => req<Settings>("/api/settings"),
+  updateSettings: (s: Settings) =>
+    req<Settings>("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(s),
+    }),
+  systemStorage: () => req<StorageInfo>("/api/system/storage"),
+  systemLogs: async () => {
+    const r = await fetch("/api/system/logs");
+    if (!r.ok) {
+      let msg = `HTTP ${r.status}`;
+      try { const j = await r.json(); if (j.error) msg = j.error; } catch { /* garde le status */ }
+      throw new Error(msg);
+    }
+    return r.text();
+  },
+  systemReset: () => req<unknown>("/api/system/reset", post({ confirm: "RESET" })),
+  reboot: () => req<unknown>("/api/system/reboot", post({})),
+  shutdown: () => req<unknown>("/api/system/shutdown", post({})),
   coverUrl: (trackId: string) => `/api/library/cover/${encodeURIComponent(trackId)}`,
 };
 

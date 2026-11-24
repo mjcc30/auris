@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, fmtBytes, fmtTime, makeSource, type Album, type AudioDevice, type BrowseEntry, type CopyReport, type MountInfo, type PlaylistDetail, type PlayerState, type Source, type SystemInfo, type Track } from "./api";
+import { api, fmtBytes, fmtTime, makeSource, type Album, type AppearanceSettings, type AudioDevice, type BrowseEntry, type CopyReport, type MountInfo, type PlaylistDetail, type PlayerState, type Settings, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 
-type View = "home" | "library" | "browse" | "queue" | "playlists" | "sources";
+type View = "home" | "library" | "browse" | "queue" | "playlists" | "sources" | "settings";
 type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http";
 
 function kindIconName(kind: string): string {
@@ -37,12 +37,43 @@ function slugify(s: string): string {
     .replace(/^-+|-+$/g, "") || "source";
 }
 
+/// Assombrit/éclaircit une couleur `#RRGGBB` (amt en [-255, 255]).
+function shade(hex: string, amt: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const f = (x: number) => Math.max(0, Math.min(255, x + amt));
+  const r = f((n >> 16) & 255), g = f((n >> 8) & 255), b = f(n & 255);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
+}
+
+/// Applique thème / accent / fond au document (persisté côté backend).
+function applyAppearance(a: AppearanceSettings) {
+  const root = document.documentElement;
+  const theme = a.theme === "system"
+    ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
+    : a.theme;
+  root.dataset.theme = theme;
+  root.style.setProperty("--accent", a.accent);
+  root.style.setProperty("--accent-dark", shade(a.accent, -20));
+  if (a.background) {
+    document.body.style.backgroundImage = `linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.8)), url("${a.background}")`;
+    document.body.style.backgroundSize = "cover";
+    document.body.style.backgroundAttachment = "fixed";
+  } else {
+    document.body.style.backgroundImage = "";
+    document.body.style.backgroundSize = "";
+    document.body.style.backgroundAttachment = "";
+  }
+}
+
 export default function App() {
   const [view, setView] = useState<View>("home");
   const [state, setState] = useState<PlayerState | null>(null);
   const [sources, setSources] = useState<Source[]>([]);
   const [devices, setDevices] = useState<AudioDevice[]>([]);
   const [system, setSystem] = useState<SystemInfo | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
   const [browseSrc, setBrowseSrc] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [searchNonce, setSearchNonce] = useState(0);
@@ -57,8 +88,8 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, srcs, devs, sys] = await Promise.all([api.state(), api.sources(), api.devices(), api.system()]);
-      setState(s); setSources(srcs); setDevices(devs); setSystem(sys);
+      const [s, srcs, devs, sys, st] = await Promise.all([api.state(), api.sources(), api.devices(), api.system(), api.settings()]);
+      setState(s); setSources(srcs); setDevices(devs); setSystem(sys); setSettings(st);
     } catch { /* backend indisponible pour l'instant */ }
   }, []);
 
@@ -70,10 +101,26 @@ export default function App() {
     return () => { ws.close(); clearInterval(iv); };
   }, [refresh]);
 
+  // Applique l'apparence (thème, accent, fond) au document à chaque changement.
+  useEffect(() => {
+    if (!settings) return;
+    applyAppearance(settings.appearance);
+  }, [settings]);
+
   const act = useCallback(async (fn: () => Promise<unknown>, okMsg?: string) => {
     try { await fn(); if (okMsg) say(okMsg); await refresh(); }
     catch (e) { say(e instanceof Error ? e.message : String(e)); }
   }, [refresh, say]);
+
+  const updateSettings = async (patch: (s: Settings) => Settings, okMsg?: string) => {
+    if (!settings) return;
+    const next = patch(settings);
+    try {
+      const back = await api.updateSettings(next);
+      setSettings(back);
+      if (okMsg) say(okMsg);
+    } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+  };
 
   const playTrack = (t: Track) => act(() => api.playTrack(t.id));
   const playAll = (tracks: Track[]) => act(() => api.playQueue(tracks, 0));
@@ -87,7 +134,7 @@ export default function App() {
         <Sidebar view={view} setView={setView} sources={sources} browseSrc={browseSrc} openSource={openSource} system={system} />
         <main className="content">
           <div className="topbar">
-            <div className="topbar-title">{view === "home" ? "Accueil" : view === "library" ? "Bibliothèque" : view === "browse" ? "Parcourir" : view === "queue" ? "File d'attente" : view === "playlists" ? "Listes de lecture" : "Sources & réglages"}</div>
+            <div className="topbar-title">{view === "home" ? "Accueil" : view === "library" ? "Bibliothèque" : view === "browse" ? "Parcourir" : view === "queue" ? "File d'attente" : view === "playlists" ? "Listes de lecture" : view === "sources" ? "Sources" : "Réglages"}</div>
             <div className="topbar-search">
               <Icon name="search" size={18} />
               <input type="text" placeholder="Rechercher un titre, un artiste…" value={searchQ}
@@ -100,6 +147,7 @@ export default function App() {
           {view === "queue" && <Queue state={state} act={act} say={say} playAll={playAll} />}
           {view === "playlists" && <Playlists act={act} say={say} playAll={playAll} playTrack={playTrack} />}
           {view === "sources" && <Sources sources={sources} refresh={refresh} say={say} />}
+          {view === "settings" && <SettingsView settings={settings} updateSettings={updateSettings} say={say} refresh={refresh} />}
         </main>
       </div>
       <PlayerBar state={state} devices={devices} act={act} />
@@ -118,7 +166,8 @@ function Sidebar({ view, setView, sources, browseSrc, openSource, system }: {
     ["browse", "Parcourir", "folder"],
     ["queue", "File d'attente", "queue"],
     ["playlists", "Listes de lecture", "playlist"],
-    ["sources", "Sources & réglages", "gear"],
+    ["sources", "Sources", "server"],
+    ["settings", "Réglages", "gear"],
   ];
   return (
     <nav className="sidebar">
@@ -710,6 +759,246 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
   );
 }
 
+// ---------- Réglages (menu façon Volumio Nova) ----------
+
+function SetRow({ label, desc, children }: { label: string; desc?: string; children: React.ReactNode }) {
+  return (
+    <div className="set-row">
+      <div className="set-main">
+        <div className="set-label">{label}</div>
+        {desc && <div className="set-desc">{desc}</div>}
+      </div>
+      <div className="set-ctrl">{children}</div>
+    </div>
+  );
+}
+
+function SettingsView({ settings, updateSettings, say, refresh }: {
+  settings: Settings | null;
+  updateSettings: (patch: (s: Settings) => Settings, ok?: string) => Promise<void>;
+  say: (m: string) => void;
+  refresh: () => Promise<void>;
+}) {
+  const [q, setQ] = useState("");
+  const [storage, setStorage] = useState<StorageInfo | null>(null);
+  const [logs, setLogs] = useState<string | null>(null);
+  const [busy, setBusy] = useState("");
+
+  useEffect(() => {
+    api.systemStorage().then(setStorage).catch(() => {});
+  }, [settings]);
+
+  if (!settings) return <div className="empty">Chargement des réglages…</div>;
+
+  const qn = q.trim().toLowerCase();
+  const show = (label: string, desc?: string) =>
+    !qn || label.toLowerCase().includes(qn) || (desc ?? "").toLowerCase().includes(qn);
+
+  const setPlayback = <K extends keyof Settings["playback"]>(k: K, v: Settings["playback"][K]) =>
+    updateSettings((s) => ({ ...s, playback: { ...s.playback, [k]: v } }));
+  const setAppearance = <K extends keyof Settings["appearance"]>(k: K, v: Settings["appearance"][K]) =>
+    updateSettings((s) => ({ ...s, appearance: { ...s.appearance, [k]: v } }));
+  const setSystem = <K extends keyof Settings["system"]>(k: K, v: Settings["system"][K]) =>
+    updateSettings((s) => ({ ...s, system: { ...s.system, [k]: v } }));
+  const setNetwork = <K extends keyof Settings["network"]>(k: K, v: Settings["network"][K]) =>
+    updateSettings((s) => ({ ...s, network: { ...s.network, [k]: v } }));
+  const setSources = <K extends keyof Settings["sources"]>(k: K, v: Settings["sources"][K]) =>
+    updateSettings((s) => ({ ...s, sources: { ...s.sources, [k]: v } }));
+
+  const power = async (fn: () => Promise<unknown>, label: string) => {
+    setBusy(label);
+    try { await fn(); say(`${label} demandé`); }
+    catch (e) { say(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(""); }
+  };
+
+  const reset = async () => {
+    if (!window.confirm("Reset usine : bibliothèque, playlists, sources et réglages seront remis à zéro. Continuer ?")) return;
+    setBusy("reset");
+    try {
+      await api.systemReset();
+      say("Reset effectué — redémarrage recommandé");
+      await refresh();
+    } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(""); }
+  };
+
+  const p = settings.playback, ap = settings.appearance, sy = settings.system, nw = settings.network, so = settings.sources;
+
+  const sections: { title: string; rows: React.ReactNode[] }[] = [
+    {
+      title: "Lecture",
+      rows: [
+        show("Courbe de volume", "Logarithmique (naturelle) ou linéaire") && (
+          <SetRow key="curve" label="Courbe de volume" desc="Logarithmique (naturelle) ou linéaire">
+            <select value={p.volume_curve} onChange={(e) => setPlayback("volume_curve", e.target.value as Settings["playback"]["volume_curve"])}>
+              <option value="logarithmic">Logarithmique (naturelle)</option>
+              <option value="linear">Linéaire</option>
+            </select>
+          </SetRow>
+        ),
+        show("Volume maximal", "Le volume courant ne dépassera jamais cette valeur") && (
+          <SetRow key="maxvol" label="Volume maximal" desc={`Actuellement ${p.max_volume} / 100`}>
+            <div className="range-ctrl">
+              <input type="range" min={1} max={100} value={p.max_volume} aria-label="Volume maximal"
+                onChange={(e) => setPlayback("max_volume", Number(e.target.value))} />
+              <span className="vol">{p.max_volume}</span>
+            </div>
+          </SetRow>
+        ),
+        show("Mode de volume", "Logiciel (dans Auris) ou désactivé = bit-perfect, volume sur le DAC/ampli") && (
+          <SetRow key="volmode" label="Mode de volume" desc="Désactivé = bit-perfect : aucun traitement, gain 1.0, volume réglé sur le DAC/ampli">
+            <select value={p.volume_mode} onChange={(e) => setPlayback("volume_mode", e.target.value as Settings["playback"]["volume_mode"])}>
+              <option value="software">Logiciel (dans Auris)</option>
+              <option value="disabled">Désactivé (bit-perfect)</option>
+            </select>
+          </SetRow>
+        ),
+        show("Lecture gapless", "Enchaînement sans trou entre pistes de même format") && (
+          <SetRow key="gapless" label="Lecture gapless" desc="Enchaînement sans trou entre pistes de même format">
+            <Switch checked={p.gapless} label="gapless" onChange={(v) => setPlayback("gapless", v)} />
+          </SetRow>
+        ),
+        show("Rééchantillonnage", "Autoriser la conversion de fréquence d'échantillonnage") && (
+          <SetRow key="resampling" label="Rééchantillonnage" desc="Désactivé = bit-perfect, aucun resample (recommandé)">
+            <Switch checked={p.resampling} label="rééchantillonnage" onChange={(v) => setPlayback("resampling", v)} />
+          </SetRow>
+        ),
+        show("Lecture DSD", "DoP vers un DAC compatible, ou conversion en PCM") && (
+          <SetRow key="dsd" label="Lecture DSD (DSF/DFF)" desc="DoP vers un DAC compatible, ou conversion en PCM haute fréquence">
+            <select value={p.dsd_mode} onChange={(e) => setPlayback("dsd_mode", e.target.value as Settings["playback"]["dsd_mode"])}>
+              <option value="dop">DSD over PCM (DoP)</option>
+              <option value="pcm">Converti en PCM</option>
+            </select>
+          </SetRow>
+        ),
+      ].filter(Boolean) as React.ReactNode[],
+    },
+    {
+      title: "Apparence",
+      rows: [
+        show("Thème", "Sombre, clair, ou suivre le système") && (
+          <SetRow key="theme" label="Thème" desc="Sombre, clair, ou suivre les préférences du système">
+            <select value={ap.theme} onChange={(e) => setAppearance("theme", e.target.value as Settings["appearance"]["theme"])}>
+              <option value="dark">Sombre</option>
+              <option value="light">Clair</option>
+              <option value="system">Système</option>
+            </select>
+          </SetRow>
+        ),
+        show("Couleur d'accent", "Couleur principale de l'interface (#RRGGBB)") && (
+          <SetRow key="accent" label="Couleur d'accent" desc="Couleur principale de l'interface">
+            <div className="range-ctrl">
+              <input type="color" value={ap.accent} aria-label="Couleur d'accent"
+                onChange={(e) => setAppearance("accent", e.target.value)} style={{ width: 44, height: 32, padding: 2, border: "1px solid var(--border)", borderRadius: 6, background: "none" }} />
+              <input type="text" value={ap.accent} style={{ width: 90 }}
+                onChange={(e) => setAppearance("accent", e.target.value)} onBlur={() => setAppearance("accent", ap.accent)} />
+            </div>
+          </SetRow>
+        ),
+        show("Image de fond", "URL d'une image affichée derrière l'interface (optionnel)") && (
+          <SetRow key="bg" label="Image de fond" desc="URL d'une image en arrière-plan (vide = aucun)">
+            <input type="text" value={ap.background ?? ""} placeholder="https://…/fond.jpg"
+              onChange={(e) => setAppearance("background", e.target.value.trim() || null)} />
+          </SetRow>
+        ),
+      ].filter(Boolean) as React.ReactNode[],
+    },
+    {
+      title: "Système",
+      rows: [
+        show("Nom de l'appareil", "Nom affiché sur le réseau et dans l'interface") && (
+          <SetRow key="devname" label="Nom de l'appareil" desc="Nom affiché sur le réseau (découverte LAN)">
+            <input type="text" value={sy.device_name} style={{ width: 220 }}
+              onChange={(e) => setSystem("device_name", e.target.value)} />
+          </SetRow>
+        ),
+        show("Fuseau horaire", "Fuseau horaire IANA, ex. Europe/Paris") && (
+          <SetRow key="tz" label="Fuseau horaire" desc="Format IANA, ex. Europe/Paris (cosmétique)">
+            <input type="text" value={sy.timezone ?? ""} placeholder="Europe/Paris" style={{ width: 220 }}
+              onChange={(e) => setSystem("timezone", e.target.value.trim() || null)} />
+          </SetRow>
+        ),
+        show("Stockage", "Espace utilisé par les données Auris") && (
+          <SetRow key="storage" label="Stockage" desc={storage ? `${fmtBytes(storage.used_bytes)} utilisés sur ${fmtBytes(storage.total_bytes)} (libre ${fmtBytes(storage.free_bytes)}) — ${storage.data_dir}` : "chargement…"}>
+            <button className="btn ghost sm" onClick={() => api.systemStorage().then(setStorage).catch((e) => say(String(e)))}><Icon name="refresh" size={16} /> Actualiser</button>
+          </SetRow>
+        ),
+        show("Journaux", "Dernières lignes du journal Auris") && (
+          <SetRow key="logs" label="Journaux" desc="400 dernières lignes du fichier de logs">
+            <button className="btn ghost sm" onClick={async () => { try { setLogs(await api.systemLogs()); } catch (e) { say(e instanceof Error ? e.message : String(e)); } }}><Icon name="list" size={16} /> Voir les logs</button>
+          </SetRow>
+        ),
+        show("Reset usine", "Supprime bibliothèque, playlists, sources et réglages") && (
+          <SetRow key="reset" label="Reset usine" desc="Bibliothèque, playlists, sources et réglages remis à zéro (redémarrage recommandé)">
+            <button className="btn danger sm" disabled={busy === "reset"} onClick={reset}>{busy === "reset" ? "…" : "Reset usine"}</button>
+          </SetRow>
+        ),
+        show("Redémarrer", "Redémarre la machine hôte (nécessite power_control = true)") && (
+          <SetRow key="reboot" label="Redémarrer" desc="Nécessite `power_control = true` dans config.toml">
+            <button className="btn ghost sm" disabled={busy === "Redémarrer"} onClick={() => power(api.reboot, "Redémarrer")}>Redémarrer</button>
+          </SetRow>
+        ),
+        show("Éteindre", "Éteint la machine hôte (nécessite power_control = true)") && (
+          <SetRow key="shutdown" label="Éteindre" desc="Nécessite `power_control = true` dans config.toml">
+            <button className="btn ghost sm" disabled={busy === "Éteindre"} onClick={() => power(api.shutdown, "Éteindre")}>Éteindre</button>
+          </SetRow>
+        ),
+      ].filter(Boolean) as React.ReactNode[],
+    },
+    {
+      title: "Réseau",
+      rows: [
+        show("Nom d'hôte", "Nom d'hôte souhaité pour la machine (Linux uniquement)") && (
+          <SetRow key="hostname" label="Nom d'hôte" desc="Appliqué au mieux selon l'OS (Linux uniquement)">
+            <input type="text" value={nw.hostname ?? ""} placeholder="auris.local" style={{ width: 220 }}
+              onChange={(e) => setNetwork("hostname", e.target.value.trim() || null)} />
+          </SetRow>
+        ),
+      ].filter(Boolean) as React.ReactNode[],
+    },
+    {
+      title: "Sources",
+      rows: [
+        show("Découverte de métadonnées musicales", "Tags et pochettes extraits à l'indexation") && (
+          <SetRow key="metadata" label="Découverte de métadonnées musicales" desc="Extraction des tags et pochettes lors du scan">
+            <Switch checked={so.metadata_discovery} label="métadonnées" onChange={(v) => setSources("metadata_discovery", v)} />
+          </SetRow>
+        ),
+      ].filter(Boolean) as React.ReactNode[],
+    },
+  ].map((sec) => ({ ...sec, rows: sec.rows.filter(Boolean) }));
+
+  const visible = sections.filter((s) => s.rows.length > 0);
+
+  return (
+    <div className="settings">
+      <div className="settings-search">
+        <Icon name="search" size={18} />
+        <input type="text" placeholder="Rechercher dans les réglages…" value={q} onChange={(e) => setQ(e.target.value)} />
+      </div>
+      {visible.length === 0 && <div className="empty">Aucun réglage ne correspond à « {q} ».</div>}
+      {visible.map((sec) => (
+        <section key={sec.title} className="set-card">
+          <h2>{sec.title}</h2>
+          {sec.rows}
+        </section>
+      ))}
+      {logs !== null && (
+        <div className="modal-bg" onClick={() => setLogs(null)}>
+          <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h2>Journaux Auris</h2>
+              <button className="icon-btn" onClick={() => setLogs(null)}><Icon name="close" size={20} /></button>
+            </div>
+            <pre className="logs">{logs}</pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------- Barre de lecture ----------
 
 function PlayerBar({ state, devices, act }: { state: PlayerState | null; devices: AudioDevice[]; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void> }) {
@@ -745,9 +1034,13 @@ function PlayerBar({ state, devices, act }: { state: PlayerState | null; devices
           <option value="">DAC par défaut</option>
           {devices.map((d) => <option key={d.name} value={d.name}>{d.name}{d.supports_i24 ? " (DoP)" : ""}</option>)}
         </select>
-        <input type="range" min={0} max={100} value={state?.muted ? 0 : state?.volume ?? 100} aria-label="Volume"
-          onChange={(e) => act(() => api.volume(Number(e.target.value)))} />
-        <span className="vol">{state?.muted ? 0 : state?.volume ?? 100}</span>
+        {state?.volume_mode === "disabled"
+          ? <span className="badge" title="Volume géré par le DAC/ampli (bit-perfect)">bit-perfect · vol. sur l'ampli</span>
+          : (<>
+            <input type="range" min={0} max={state?.max_volume ?? 100} value={state?.muted ? 0 : state?.volume ?? 100} aria-label="Volume"
+              onChange={(e) => act(() => api.volume(Number(e.target.value)))} />
+            <span className="vol">{state?.muted ? 0 : state?.volume ?? 100}</span>
+          </>)}
       </div>
     </footer>
   );

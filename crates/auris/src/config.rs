@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use auris_core::Source;
+use auris_core::{Settings, Source};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +24,10 @@ pub struct AppConfig {
     pub repo_name: String,
     /// Sources musicales configurees (local, SMB, ...).
     pub sources: Vec<Source>,
+    /// Réglages de l'application (menu Réglages, façon Volumio Nova).
+    pub settings: Settings,
+    /// Autorise redémarrer/éteindre la machine depuis l'UI (POST /api/system/reboot|shutdown).
+    pub power_control: bool,
 }
 
 impl Default for AppConfig {
@@ -38,8 +42,17 @@ impl Default for AppConfig {
             repo_owner: "mjcc30".into(),
             repo_name: "auris".into(),
             sources: Vec::new(),
+            settings: Settings::default(),
+            power_control: false,
         }
     }
+}
+
+/// Data-dir par défaut (`~/.local/share/auris`), partagé avec main pour les logs.
+pub fn default_data_dir() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("auris")
 }
 
 impl AppConfig {
@@ -51,9 +64,7 @@ impl AppConfig {
         if let Ok(d) = std::env::var("AURIS_DATA_DIR") {
             return PathBuf::from(d);
         }
-        dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("auris")
+        default_data_dir()
     }
 
     pub fn config_path(&self) -> PathBuf {

@@ -186,6 +186,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "toml",
  "uuid",
 ]
 
@@ -273,6 +274,7 @@ dependencies = [
  "auris-updater",
  "axum",
  "chrono",
+ "fs2",
  "futures-util",
  "mime_guess",
  "reqwest 0.12.28",
@@ -282,6 +284,7 @@ dependencies = [
  "tokio",
  "tower-http",
  "tracing",
+ "walkdir",
 ]
 
 [[package]]

@@ -1,7 +1,8 @@
 # Charte graphique — Auris
 
 UI web sombre, inspirée des lecteurs de streaming modernes (Spotify-like),
-adaptée à l'audiophile. Un seul thème (sombre) en v1.
+adaptée à l'audiophile. Thème sombre par défaut ; thème clair et couleur
+d'accent personnalisable depuis les Réglages (v0.5).
 
 ## Identité
 
@@ -21,13 +22,22 @@ adaptée à l'audiophile. Un seul thème (sombre) en v1.
 | Bordure | `border` | `#2a2a2a` | séparateurs |
 | Texte principal | `text` | `#FFFFFF` | titres, lecture en cours |
 | Texte secondaire | `text-dim` | `#B3B3B3` | métadonnées, labels |
-| Accent principal | `accent` | `#1ED760` | boutons primaires, lecture en cours, slider |
+| Accent principal | `accent` | `#1ED760` (défaut, modifiable dans les Réglages) | boutons primaires, lecture en cours, slider |
 | Accent DSD | `dsd` | `#E91429` | badge DSD, indicateur natif |
 | Badge hi-res | `hires` | `#D4AF37` | badge PCM 24/96+, DSD |
 | Erreur | `error` | `#E22134` | messages d'erreur |
 
 Contrastes : `text`/`bg` = 19,4:1, `text-dim`/`bg` = 8,6:1, `accent`/`bg` = 8,9:1
 (tous > 7:1, conforme WCAG AAA sur le fond).
+
+## Thèmes (v0.5)
+
+- **Sombre** (défaut) : variables `--bg #121212`, `--surface #181818`, sidebar noire.
+- **Clair** : `[data-theme="light"]` — `--bg #f5f5f5`, `--surface #ffffff`,
+  `--text #121212`, sidebar `#ececec`.
+- **Système** : suit `prefers-color-scheme` du navigateur.
+- L'accent est une variable CSS `--accent` (défaut `#1ED760`), choisie dans les
+  Réglages au format `#RRGGBB` ; `--accent-dark` en est dérivé (assombri de 20).
 
 ## Typographie
 

@@ -6,7 +6,9 @@ use std::sync::{mpsc, Arc, RwLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use auris_core::{PlayStatus, PlayerState, RepeatMode, Track, WsEvent};
+use auris_core::{
+    PlayStatus, PlaybackSettings, PlayerState, RepeatMode, Track, VolumeCurve, VolumeMode, WsEvent,
+};
 use auris_sources::SourcesManager;
 use ringbuf::traits::{Observer, Producer};
 use tokio::sync::broadcast;
@@ -36,6 +38,7 @@ pub enum Command {
     ClearQueue,
     RemoveQueueItem(usize),
     SelectDevice(Option<String>),
+    ApplyPlayback(Box<PlaybackSettings>),
 }
 
 enum WorkerCmd {
@@ -245,6 +248,11 @@ struct Engine {
     state: Arc<RwLock<PlayerState>>,
     events: broadcast::Sender<WsEvent>,
     volume: Arc<AtomicU8>,
+    max_volume: Arc<AtomicU8>,
+    /// 0 = logarithmique, 1 = linéaire.
+    curve: Arc<AtomicU8>,
+    /// 0 = logiciel, 1 = bit-perfect (désactivé).
+    vol_mode: Arc<AtomicU8>,
     muted: Arc<AtomicBool>,
     frames_out: Arc<AtomicU64>,
     gen: Arc<AtomicU64>,
@@ -436,8 +444,41 @@ impl Engine {
                 self.publish();
             }
             Command::SetVolume(v) => {
-                self.volume.store(v.min(100), Ordering::SeqCst);
-                self.state.write().unwrap().volume = v.min(100);
+                let max = self.max_volume.load(Ordering::SeqCst).max(1);
+                let v = v.min(max);
+                self.volume.store(v, Ordering::SeqCst);
+                self.state.write().unwrap().volume = v;
+                self.publish();
+            }
+            Command::ApplyPlayback(p) => {
+                self.max_volume.store(p.max_volume.max(1), Ordering::SeqCst);
+                self.curve.store(
+                    if p.volume_curve == VolumeCurve::Linear {
+                        1
+                    } else {
+                        0
+                    },
+                    Ordering::SeqCst,
+                );
+                self.vol_mode.store(
+                    if p.volume_mode == VolumeMode::Disabled {
+                        1
+                    } else {
+                        0
+                    },
+                    Ordering::SeqCst,
+                );
+                let mut st = self.state.write().unwrap();
+                st.max_volume = p.max_volume;
+                st.volume_mode = match p.volume_mode {
+                    VolumeMode::Disabled => "disabled".into(),
+                    VolumeMode::Software => "software".into(),
+                };
+                // re-borne le volume courant par le nouveau max
+                let v = st.volume.min(p.max_volume.max(1));
+                st.volume = v;
+                drop(st);
+                self.volume.store(v, Ordering::SeqCst);
                 self.publish();
             }
             Command::SetMuted(m) => {
@@ -537,6 +578,9 @@ impl Engine {
                     self.muted.clone(),
                     self.frames_out.clone(),
                     self.gen.clone(),
+                    self.max_volume.clone(),
+                    self.curve.clone(),
+                    self.vol_mode.clone(),
                 ) {
                     self.publish_msg("error", &format!("flux audio: {e}"));
                     return;
@@ -645,6 +689,9 @@ impl PlayerEngine {
         let state = Arc::new(RwLock::new(PlayerState::default()));
         state.write().unwrap().volume = initial_volume.min(100);
         let volume = Arc::new(AtomicU8::new(initial_volume.min(100)));
+        let max_volume = Arc::new(AtomicU8::new(100));
+        let curve = Arc::new(AtomicU8::new(0)); // logarithmique par défaut
+        let vol_mode = Arc::new(AtomicU8::new(0)); // logiciel par défaut
         let muted = Arc::new(AtomicBool::new(false));
         let frames_out = Arc::new(AtomicU64::new(0));
         let gen = Arc::new(AtomicU64::new(0));
@@ -681,6 +728,9 @@ impl PlayerEngine {
             state: state.clone(),
             events: events.clone(),
             volume,
+            max_volume,
+            curve,
+            vol_mode,
             muted,
             frames_out,
             gen,
@@ -742,6 +792,13 @@ impl PlayerEngine {
     pub fn seek(&self, secs: f64) {
         self.send(Command::Seek(secs));
     }
+    /// Applique les réglages playback (volume max, courbe, mode bit-perfect) à chaud.
+    pub fn apply_playback(&self, p: &PlaybackSettings) {
+        let _ = self
+            .cmd_tx
+            .send(Command::ApplyPlayback(Box::new(p.clone())));
+    }
+
     pub fn set_volume(&self, v: u8) {
         // maj synchrone de l'etat: le POST /api/player/volume renvoie l'etat a jour
         self.state.write().unwrap().volume = v.min(100);

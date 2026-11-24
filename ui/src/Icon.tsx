@@ -34,6 +34,7 @@ export function Icon({ name, size = 24, filled = false, className = "" }: { name
     back: (<><path d="M19 12H5" /><path d="m11 18-6-6 6-6" /></>),
     chevron: <path d="m6 9 6 6 6-6" />,
     eject: (<><path d="M12 15V4" /><path d="m7 9 5-5 5 5" /><path d="M4 19h16" /></>),
+    refresh: (<><path d="M20 12a8 8 0 1 1-2.34-5.66" /><path d="M20 4v5h-5" /></>),
   };
   return (
     <svg

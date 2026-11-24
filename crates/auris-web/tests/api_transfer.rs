@@ -79,14 +79,7 @@ async fn spawn_server() -> Fixture {
         current_version: "0.1.0".into(),
         auto_check: false,
     }));
-    let state = AppState {
-        engine,
-        library,
-        sources,
-        updater,
-        started_at: chrono::Utc::now().timestamp(),
-        sources_sink: None,
-    };
+    let state = AppState::new(engine, library, sources, updater, root.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {

@@ -32,6 +32,41 @@ site vitrine + doc sur GitHub Pages (domaine auris.audio), token d'accès option
 i18n fr/en, accessibilité AA auditée.
 *Sortie : 1.0 publique, annonces, paquets officiels.*
 
+## v0.5.0 — Réglages façon Nova (30/06/2027)
+
+Parité avec le menu **Réglages** de Volumio Nova, implémentée en propre :
+
+- **Playback** : courbe de volume (logarithmique/naturelle), volume max, mode de
+  volume (logiciel / matériel / bit-perfect désactivé), resampling (off par défaut,
+  option soxr), mode DSD (DoP / PCM), gapless on/off, contrôle de mixer ALSA.
+- **Apparence** : thème sombre / clair / système, couleur d'accent, fond d'écran,
+  langue fr/en, « display mode » HDMI (pochette + heure lisibles de loin).
+- **Réseau** : nom d'hôte, IP fixe (Linux), mode hotspot WiFi (Linux), proxy.
+- **Système** : nom de l'appareil, mise à jour (déjà fait), redémarrer / éteindre,
+  logs téléchargeables, réinitialisation usine, usage stockage, fuseau horaire.
+- **Sources** : les toggles de la page Sources de Nova (métadonnées, CD rip,
+  entrées numériques, Connect) — les sources elles-mêmes sont déjà là.
+- Page Réglages avec **recherche de réglage** (comme Nova : taper « volume » →
+  le réglage direct).
+
+*Sortie : menu Réglages complet, persisté, cherchable.*
+
+## v0.6.0 — Équivalents ouverts des fonctions Premium (31/08/2027)
+
+Contrainte AGPL : pas de DRM ni d'API sous licence — uniquement des protocoles
+ouverts ou des intégrations communautaires avec compte utilisateur :
+
+- Plugins « 1st party » : Last.fm (scrobble + « j'aime »), Spotify Connect
+  (librespot, MIT), AirPlay, Roon Ready (RAAT), Chromecast, Tidal/Qobuz via leurs
+  API publiques communautaires (abonnement requis côté utilisateur).
+- Multiroom synchronisé (style SnapCast) entre plusieurs instances Auris.
+- « Super search » : recherche simultanée dans toutes les sources + services.
+- Lecture infinie des radios, sauvegarde/restauration de la config (ZIP local ou WebDAV).
+- CD ripping (via `whipper`/AccurateRip sur Linux), crédits/métadonnées (MusicBrainz).
+- Sleep timer / réveil, égaliseur/DSP (biquad interne ou plugin LSP).
+
+*Sortie : un écosystème de plugins fonctionnel + multiroom de base.*
+
 ## Au-delà (idées, non planifiées)
 
 - v1.1 : DSD natif (ASIO Windows, ALSA DSD), redémarrage auto après update,

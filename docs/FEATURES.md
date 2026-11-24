@@ -43,6 +43,15 @@ kanban avec critères d'acceptation (voir [USER_STORIES.md](USER_STORIES.md)).
 - [ ] UI de gestion : installer/activer/désactiver/configurer
 - [ ] Plugins de type source, sortie, métadonnées
 
+## Should have — v0.5.0 (Réglages façon Nova)
+
+- [x] Modèle `Settings` persisté dans `config.toml` (`[settings]`) + `GET/PUT /api/settings` (validation, 400 si invalide)
+- [x] Réglages lecture appliqués à chaud au moteur : courbe de volume (log/linéaire), volume max (borne le volume courant), mode de volume logiciel / désactivé (bit-perfect, gain 1.0), gapless, resampling off, mode DSD (DoP/PCM)
+- [x] Apparence : thème sombre / clair / système, couleur d'accent `#RRGGBB` personnalisable, image de fond optionnelle
+- [x] Système : nom de l'appareil, fuseau horaire, usage stockage (`/api/system/storage`), logs (`/api/system/logs`, 400 dernières lignes), reset usine confirmé (`{"confirm":"RESET"}`), redémarrer/éteindre protégés par `power_control = true` (403 sinon)
+- [x] Page Réglages façon Nova : recherche de réglage + sections (Lecture, Apparence, Système, Réseau, Sources)
+- [x] Le slider de volume de la barre de lecture est masqué en mode bit-perfect
+
 ## Should have — v1.0.0 (stable)
 
 - [ ] Mise à jour automatique (check 6 h + bouton + checksums SHA-256)
