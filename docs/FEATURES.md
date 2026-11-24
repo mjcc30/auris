@@ -52,6 +52,19 @@ kanban avec critères d'acceptation (voir [USER_STORIES.md](USER_STORIES.md)).
 - [x] Page Réglages façon Nova : recherche de réglage + sections (Lecture, Apparence, Système, Réseau, Sources)
 - [x] Le slider de volume de la barre de lecture est masqué en mode bit-perfect
 
+## Could have — v0.6.0 (équivalents ouverts du Premium)
+
+- [x] **« Jouer ici »** : le navigateur courant devient la sortie audio — PCM f32 décodé
+      streamé en binaire sur `/ws/audio`, lu en WebAudio (lookahead 120 ms, resync sur
+      écart) ; `POST /api/player/output` bascule local/browser, le DAC local reçoit du
+      silence en mode navigateur ; popup « Lire sur… » façon Manifest (Jouer ici /
+      Regroupement / Caster / Autres dispositifs)
+- [ ] Multiroom synchronisé (style SnapCast) entre instances Auris
+- [ ] AirPlay / Roon Ready (RAAT) / Chromecast (protocoles ouverts)
+- [ ] Spotify Connect via librespot (MIT), Tidal/Qobuz via API communautaires
+- [ ] Last.fm (scrobble) + métadonnées MusicBrainz, rip CD (whipper/AccurateRip)
+- [ ] Sleep timer / réveil, égaliseur/DSP, liens de partage (livres audio)
+
 ## Should have — v1.0.0 (stable)
 
 - [ ] Mise à jour automatique (check 6 h + bouton + checksums SHA-256)

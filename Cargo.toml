@@ -45,6 +45,7 @@ bytemuck = "1"
 sled = "0.34"
 fs2 = "0.4"
 walkdir = "2"
+tokio-tungstenite = "0.29"
 smb2 = "0.43"
 reqwest = { version = "0.12", default-features = false, features = ["stream", "native-tls"] }
 

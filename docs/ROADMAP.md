@@ -56,6 +56,9 @@ Parité avec le menu **Réglages** de Volumio Nova, implémentée en propre :
 Contrainte AGPL : pas de DRM ni d'API sous licence — uniquement des protocoles
 ouverts ou des intégrations communautaires avec compte utilisateur :
 
+- **« Jouer ici » (fait)** : pseudo-sortie « Navigateur » — PCM f32 décodé streamé en
+  binaire sur `/ws/audio`, lu en WebAudio côté UI ; popup façon Manifest
+  (Jouer ici / Regroupement / Caster / Autres dispositifs).
 - Plugins « 1st party » : Last.fm (scrobble + « j'aime »), Spotify Connect
   (librespot, MIT), AirPlay, Roon Ready (RAAT), Chromecast, Tidal/Qobuz via leurs
   API publiques communautaires (abonnement requis côté utilisateur).

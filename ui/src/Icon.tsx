@@ -35,6 +35,10 @@ export function Icon({ name, size = 24, filled = false, className = "" }: { name
     chevron: <path d="m6 9 6 6 6-6" />,
     eject: (<><path d="M12 15V4" /><path d="m7 9 5-5 5 5" /><path d="M4 19h16" /></>),
     refresh: (<><path d="M20 12a8 8 0 1 1-2.34-5.66" /><path d="M20 4v5h-5" /></>),
+    speaker: (<><rect x="6" y="3" width="12" height="18" rx="2" /><circle cx="12" cy="14.5" r="3.2" /><circle cx="12" cy="7.5" r="1.2" /></>),
+    cast: (<><path d="M2 8.5V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6" /><path d="M2 12a8 8 0 0 1 8 8" /><path d="M2 16a4 4 0 0 1 4 4" /><circle cx="2.5" cy="19.5" r="1" fill="currentColor" stroke="none" /></>),
+    group: (<><circle cx="8" cy="9" r="3" /><path d="M2.5 19a5.5 5.5 0 0 1 11 0" /><circle cx="17" cy="10" r="2.4" /><path d="M15.5 19a4.6 4.6 0 0 1 6-4.4" /></>),
+    devices: (<><rect x="2" y="5" width="13" height="10" rx="1.5" /><path d="M6 19h6" /><rect x="17" y="9" width="5" height="10" rx="1.2" /></>),
   };
   return (
     <svg

@@ -27,3 +27,5 @@ mime_guess = "2"
 
 [dev-dependencies]
 reqwest = { workspace = true, features = ["json"] }
+tokio-tungstenite.workspace = true
+futures-util.workspace = true

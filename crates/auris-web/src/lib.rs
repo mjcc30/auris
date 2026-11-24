@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 
 use auris_core::{
-    AurisError, BrowseEntry, Playlist, RepeatMode, Settings, Source, Track, WsEvent, ZipWriter,
+    AurisError, BrowseEntry, OutputMode, Playlist, RepeatMode, Settings, Source, Track, WsEvent,
+    ZipWriter,
 };
 use auris_library::Library;
 use auris_player::{AudioOutput, PlayerEngine};
@@ -320,7 +321,9 @@ pub fn router(state: AppState) -> Router {
         // réglages (menu Réglages façon Volumio Nova)
         .route("/api/settings", get(get_settings).put(put_settings))
         // websocket
-        .route("/ws", get(ws_handler));
+        .route("/ws", get(ws_handler))
+        .route("/ws/audio", get(ws_audio_handler))
+        .route("/api/player/output", post(post_output));
 
     Router::new()
         .merge(api)
@@ -1032,6 +1035,79 @@ fn real_power(action: PowerAction) {
         };
         let _ = std::process::Command::new("shutdown").args(args).spawn();
     }
+}
+
+// ---------- « Jouer ici » : sortie navigateur ----------
+
+#[derive(Deserialize)]
+struct OutputBody {
+    mode: OutputMode,
+}
+
+async fn post_output(
+    State(s): State<AppState>,
+    Json(b): Json<OutputBody>,
+) -> Json<auris_core::PlayerState> {
+    s.engine.set_output_mode(b.mode);
+    Json(s.engine.state())
+}
+
+async fn ws_audio_handler(ws: WebSocketUpgrade, State(s): State<AppState>) -> Response {
+    ws.on_upgrade(move |socket| handle_ws_audio(socket, s))
+}
+
+/// Flux binaire « Jouer ici » : 1er trame texte = spec JSON, puis PCM f32 LE.
+async fn handle_ws_audio(socket: axum::extract::ws::WebSocket, s: AppState) {
+    use axum::extract::ws::Message;
+    let (mut tx, mut rx) = socket.split();
+    let mut frames = s.engine.browser_tx.subscribe();
+    // état courant au branchement
+    let st = s.engine.state();
+    let hello = serde_json::json!({
+        "type": "audio_mode",
+        "mode": st.output_mode,
+        "status": st.status,
+    });
+    let _ = tx.send(Message::Text(hello.to_string().into())).await;
+    if let Some((rate, channels)) = s.engine.browser_spec() {
+        let spec =
+            serde_json::json!({ "type": "audio_spec", "sample_rate": rate, "channels": channels });
+        let _ = tx.send(Message::Text(spec.to_string().into())).await;
+    }
+    let send_task = tokio::spawn(async move {
+        loop {
+            match frames.recv().await {
+                Ok(auris_core::BrowserFrame::Spec { rate, channels }) => {
+                    let m = serde_json::json!({ "type": "audio_spec", "sample_rate": rate, "channels": channels });
+                    if tx.send(Message::Text(m.to_string().into())).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(auris_core::BrowserFrame::Pcm(samples)) => {
+                    let mut bytes = Vec::with_capacity(samples.len() * 4);
+                    for s in samples.iter() {
+                        bytes.extend_from_slice(&s.to_le_bytes());
+                    }
+                    if tx.send(Message::Binary(bytes.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    let m = serde_json::json!({ "type": "audio_lag", "skipped": n });
+                    let _ = tx.send(Message::Text(m.to_string().into())).await;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+    while let Some(msg) = rx.next().await {
+        match msg {
+            Ok(Message::Close(_)) => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    send_task.abort();
 }
 
 // ---------- WebSocket ----------

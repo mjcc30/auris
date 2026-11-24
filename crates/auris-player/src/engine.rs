@@ -7,7 +7,8 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use auris_core::{
-    PlayStatus, PlaybackSettings, PlayerState, RepeatMode, Track, VolumeCurve, VolumeMode, WsEvent,
+    BrowserFrame, OutputMode, PlayStatus, PlaybackSettings, PlayerState, RepeatMode, Track,
+    VolumeCurve, VolumeMode, WsEvent,
 };
 use auris_sources::SourcesManager;
 use ringbuf::traits::{Observer, Producer};
@@ -39,6 +40,7 @@ pub enum Command {
     RemoveQueueItem(usize),
     SelectDevice(Option<String>),
     ApplyPlayback(Box<PlaybackSettings>),
+    SetOutputMode(OutputMode),
 }
 
 enum WorkerCmd {
@@ -259,6 +261,10 @@ struct Engine {
     cur_rate: Arc<AtomicU64>,
     output: Option<AudioOutput>,
     device_name: Option<String>,
+    /// 0 = DAC local, 1 = « Jouer ici » (navigateur).
+    out_mode: Arc<AtomicU8>,
+    browser_tx: broadcast::Sender<BrowserFrame>,
+    browser_spec: Arc<RwLock<Option<(u32, u16)>>>,
     worker: Option<WorkerHandle>,
     cur_spec: Option<OutputSpec>,
     pending_uri: Option<String>,
@@ -545,6 +551,18 @@ impl Engine {
                 }
                 self.publish();
             }
+            Command::SetOutputMode(m) => {
+                self.out_mode.store(
+                    if matches!(m, OutputMode::Browser) {
+                        1
+                    } else {
+                        0
+                    },
+                    Ordering::SeqCst,
+                );
+                self.state.write().unwrap().output_mode = m;
+                self.publish();
+            }
         }
     }
 
@@ -581,12 +599,19 @@ impl Engine {
                     self.max_volume.clone(),
                     self.curve.clone(),
                     self.vol_mode.clone(),
+                    self.out_mode.clone(),
+                    self.browser_tx.clone(),
                 ) {
                     self.publish_msg("error", &format!("flux audio: {e}"));
                     return;
                 }
                 self.cur_spec = Some(spec);
                 self.cur_rate.store(spec.rate as u64, Ordering::SeqCst);
+                *self.browser_spec.write().unwrap() = Some((spec.rate, u16::from(spec.channels)));
+                let _ = self.browser_tx.send(BrowserFrame::Spec {
+                    rate: spec.rate,
+                    channels: u16::from(spec.channels),
+                });
                 {
                     let mut st = self.state.write().unwrap();
                     st.current = Some(track);
@@ -675,6 +700,9 @@ pub struct PlayerEngine {
     state: Arc<RwLock<PlayerState>>,
     /// Canal d'evenements temps reel (WebSocket).
     pub events: broadcast::Sender<WsEvent>,
+    /// Canal du flux « Jouer ici » (PCM f32 vers /ws/audio).
+    pub browser_tx: broadcast::Sender<BrowserFrame>,
+    browser_spec: Arc<RwLock<Option<(u32, u16)>>>,
 }
 
 impl PlayerEngine {
@@ -696,6 +724,9 @@ impl PlayerEngine {
         let frames_out = Arc::new(AtomicU64::new(0));
         let gen = Arc::new(AtomicU64::new(0));
         let cur_rate = Arc::new(AtomicU64::new(44100));
+        let (browser_tx, _) = broadcast::channel::<BrowserFrame>(128);
+        let out_mode = Arc::new(AtomicU8::new(0));
+        let browser_spec = Arc::new(RwLock::new(None::<(u32, u16)>));
 
         // horloge de position: 2x / seconde
         {
@@ -737,6 +768,9 @@ impl PlayerEngine {
             cur_rate,
             output: None,
             device_name: device,
+            out_mode: out_mode.clone(),
+            browser_tx: browser_tx.clone(),
+            browser_spec: browser_spec.clone(),
             worker: None,
             cur_spec: None,
             pending_uri: None,
@@ -755,6 +789,8 @@ impl PlayerEngine {
             cmd_tx,
             state,
             events,
+            browser_tx,
+            browser_spec,
         })
     }
 
@@ -824,5 +860,14 @@ impl PlayerEngine {
     }
     pub fn select_device(&self, name: Option<String>) {
         self.send(Command::SelectDevice(name));
+    }
+    /// Bascule la sortie active : DAC local ou navigateur (« Jouer ici »).
+    pub fn set_output_mode(&self, m: OutputMode) {
+        self.state.write().unwrap().output_mode = m;
+        self.send(Command::SetOutputMode(m));
+    }
+    /// Spec du flux navigateur courant (rate, channels), si une piste est lue.
+    pub fn browser_spec(&self) -> Option<(u32, u16)> {
+        *self.browser_spec.read().unwrap()
     }
 }

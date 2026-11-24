@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, fmtBytes, fmtTime, makeSource, type Album, type AppearanceSettings, type AudioDevice, type BrowseEntry, type CopyReport, type MountInfo, type PlaylistDetail, type PlayerState, type Settings, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
+import { BrowserAudio } from "./browserAudio";
 
 type View = "home" | "library" | "browse" | "queue" | "playlists" | "sources" | "settings";
 type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http";
@@ -79,6 +80,7 @@ export default function App() {
   const [searchNonce, setSearchNonce] = useState(0);
   const [searchQ, setSearchQ] = useState("");
   const toastTimer = useRef<number | null>(null);
+  const browserAudio = useRef(new BrowserAudio());
 
   const say = useCallback((msg: string) => {
     setToast(msg);
@@ -106,6 +108,12 @@ export default function App() {
     if (!settings) return;
     applyAppearance(settings.appearance);
   }, [settings]);
+
+  // « Jouer ici » : démarre/arrête le lecteur WebAudio selon la sortie active.
+  useEffect(() => {
+    if (state?.output_mode === "browser") browserAudio.current.start();
+    else browserAudio.current.stop();
+  }, [state?.output_mode]);
 
   const act = useCallback(async (fn: () => Promise<unknown>, okMsg?: string) => {
     try { await fn(); if (okMsg) say(okMsg); await refresh(); }
@@ -150,7 +158,7 @@ export default function App() {
           {view === "settings" && <SettingsView settings={settings} updateSettings={updateSettings} say={say} refresh={refresh} />}
         </main>
       </div>
-      <PlayerBar state={state} devices={devices} act={act} />
+      <PlayerBar state={state} devices={devices} act={act} say={say} />
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
@@ -1001,8 +1009,9 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
 
 // ---------- Barre de lecture ----------
 
-function PlayerBar({ state, devices, act }: { state: PlayerState | null; devices: AudioDevice[]; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void> }) {
+function PlayerBar({ state, devices, act, say }: { state: PlayerState | null; devices: AudioDevice[]; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void }) {
   const playing = state?.status === "playing";
+  const [menuOpen, setMenuOpen] = useState(false);
   const cur = state?.current;
   const pos = state?.position_secs ?? 0;
   const dur = state?.duration_secs ?? cur?.duration_secs ?? 0;
@@ -1029,6 +1038,37 @@ function PlayerBar({ state, devices, act }: { state: PlayerState | null; devices
         </div>
       </div>
       <div className="right">
+        {state?.output_mode === "browser" && <span className="badge" title="Le son sort dans ce navigateur"><Icon name="speaker" size={12} /> Navigateur</span>}
+        <button className={`icon-btn-out ${state?.output_mode === "browser" ? "active" : ""}`} title="Choisir la sortie (Jouer ici, Caster…)" onClick={() => setMenuOpen((v) => !v)}>
+          <Icon name="cast" size={20} />
+        </button>
+        {menuOpen && (
+          <>
+            <div className="menu-overlay" onClick={() => setMenuOpen(false)} />
+            <div className="output-menu">
+              <div className="out-title">Lire sur…</div>
+              <div className="out-grid">
+                <button className={`out-tile ${state?.output_mode === "browser" ? "active" : ""}`}
+                  onClick={() => { act(() => api.setOutput(state?.output_mode === "browser" ? "local" : "browser"), state?.output_mode === "browser" ? "Sortie : DAC local" : "Lecture dans ce navigateur"); setMenuOpen(false); }}>
+                  <Icon name="speaker" size={30} />
+                  <span>{state?.output_mode === "browser" ? "Ce navigateur ✓" : "Jouer ici"}</span>
+                </button>
+                <button className="out-tile" onClick={() => { say("Regroupement multiroom — prévu en v0.6"); setMenuOpen(false); }}>
+                  <Icon name="group" size={30} />
+                  <span>Regroupement</span>
+                </button>
+                <button className="out-tile" onClick={() => { say("Caster (AirPlay/Chromecast) — prévu en v0.6"); setMenuOpen(false); }}>
+                  <Icon name="cast" size={30} />
+                  <span>Caster</span>
+                </button>
+                <button className="out-tile" onClick={() => { say("Contrôler d'autres dispositifs — prévu en v0.6"); setMenuOpen(false); }}>
+                  <Icon name="devices" size={30} />
+                  <span>Autres dispositifs</span>
+                </button>
+              </div>
+            </div>
+          </>
+        )}
         {state?.current_format && <span className="badge">{fmtFormat(state.current_format)}</span>}
         <select value={state?.audio_device ?? ""} onChange={(e) => act(() => api.selectDevice(e.target.value || null))} aria-label="Périphérique audio">
           <option value="">DAC par défaut</option>

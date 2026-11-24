@@ -284,6 +284,25 @@ pub enum RepeatMode {
     One,
 }
 
+/// Sortie audio active : DAC local ou navigateur (« Jouer ici »).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputMode {
+    #[default]
+    Local,
+    /// « Jouer ici » : le PCM décodé est streamé au navigateur via /ws/audio.
+    Browser,
+}
+
+/// Trame envoyée aux clients du flux navigateur (`/ws/audio`).
+#[derive(Debug, Clone)]
+pub enum BrowserFrame {
+    /// Spécifie le format du flux (envoyé à chaque changement de piste).
+    Spec { rate: u32, channels: u16 },
+    /// Échantillons f32 entrelacés, post-gain (le volume UI s'applique côté serveur).
+    Pcm(std::sync::Arc<[f32]>),
+}
+
 /// Etat complet du lecteur, envoye tel quel a l'UI (REST + WebSocket).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerState {
@@ -305,6 +324,9 @@ pub struct PlayerState {
     /// Mode de volume : "software" ou "disabled" (bit-perfect).
     #[serde(default = "default_volume_mode")]
     pub volume_mode: String,
+    /// Sortie active : "local" (DAC) ou "browser" (« Jouer ici »).
+    #[serde(default)]
+    pub output_mode: OutputMode,
 }
 
 fn default_max_volume() -> u8 {
@@ -332,6 +354,7 @@ impl Default for PlayerState {
             current_format: None,
             max_volume: 100,
             volume_mode: "software".into(),
+            output_mode: OutputMode::Local,
         }
     }
 }

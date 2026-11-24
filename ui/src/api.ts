@@ -51,6 +51,7 @@ export interface PlayerState {
   current_format: AudioFormat | null;
   max_volume: number;
   volume_mode: string;
+  output_mode: "local" | "browser";
 }
 
 export interface Source {
@@ -205,6 +206,7 @@ export const api = {
   volume: (volume: number) => req<PlayerState>("/api/player/volume", post({ volume })),
   mute: (muted: boolean) => req<PlayerState>("/api/player/mute", post({ muted })),
   repeat: (mode: PlayerState["repeat"]) => req<PlayerState>("/api/player/repeat", post({ mode })),
+  setOutput: (mode: PlayerState["output_mode"]) => req<PlayerState>("/api/player/output", post({ mode })),
   shuffle: (enabled: boolean) => req<PlayerState>("/api/player/shuffle", post({ enabled })),
   queue: () => req<Track[]>("/api/queue"),
   clearQueue: () => req<unknown>("/api/queue/clear", post({})),

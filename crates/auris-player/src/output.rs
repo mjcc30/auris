@@ -9,7 +9,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
-use auris_core::{AudioDeviceInfo, AurisError, Result};
+use auris_core::{AudioDeviceInfo, AurisError, BrowserFrame, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
     BufferSize, Device, SampleFormat, SizedSample, Stream, StreamConfig,
@@ -17,6 +17,7 @@ use cpal::{
 };
 use ringbuf::traits::{Consumer, Split};
 use ringbuf::{HeapCons, HeapProd, HeapRb};
+use tokio::sync::broadcast;
 
 use crate::decoder::{Chunk, ChunkData, OutputSpec};
 
@@ -32,6 +33,8 @@ pub fn make_ring(capacity_chunks: usize) -> (Prod, Cons) {
 /// Conversion d'un echantillon vers le type de sortie cpal.
 trait WriteOut: SizedSample + Send + 'static {
     fn from_f32(v: f32, gain: f32) -> Self;
+    /// Conversion inverse (pour le flux navigateur) : échantillon normalisé [-1, 1].
+    fn to_f32(self) -> f32;
     /// v = mot 24 bits DoP (marqueur dans l'octet haut). Le gain ne s'applique
     /// qu'aux 16 bits de donnees, jamais au marqueur.
     fn from_dop24(v: i32, gain: f32) -> Self;
@@ -41,6 +44,9 @@ trait WriteOut: SizedSample + Send + 'static {
 impl WriteOut for f32 {
     fn from_f32(v: f32, gain: f32) -> Self {
         v * gain
+    }
+    fn to_f32(self) -> f32 {
+        self
     }
     fn from_dop24(_v: i32, _gain: f32) -> Self {
         0.0
@@ -53,6 +59,9 @@ impl WriteOut for i16 {
     fn from_f32(v: f32, gain: f32) -> Self {
         (v * gain * i16::MAX as f32) as i16
     }
+    fn to_f32(self) -> f32 {
+        self as f32 / i16::MAX as f32
+    }
     fn from_dop24(v: i32, gain: f32) -> Self {
         let bits = ((v & 0xFFFF) as f32 * gain) as i32 & 0xFFFF;
         (((v & 0xFF0000) | bits) >> 8) as i16
@@ -62,6 +71,9 @@ impl WriteOut for i16 {
     }
 }
 impl WriteOut for i32 {
+    fn to_f32(self) -> f32 {
+        self as f32 / i32::MAX as f32
+    }
     fn from_f32(v: f32, gain: f32) -> Self {
         (v * gain * i32::MAX as f32) as i32
     }
@@ -74,6 +86,9 @@ impl WriteOut for i32 {
     }
 }
 impl WriteOut for I24 {
+    fn to_f32(self) -> f32 {
+        self.inner() as f32 / (1 << 23) as f32
+    }
     fn from_f32(v: f32, gain: f32) -> Self {
         I24::new_unchecked((v * gain * 8_388_607.0) as i32)
     }
@@ -184,6 +199,9 @@ impl AudioOutput {
         max_volume: Arc<AtomicU8>,
         curve: Arc<AtomicU8>,
         vol_mode: Arc<AtomicU8>,
+        // 0 = DAC local, 1 = « Jouer ici » (PCM vers le navigateur, DAC muet).
+        out_mode: Arc<AtomicU8>,
+        browser_tx: broadcast::Sender<BrowserFrame>,
     ) -> Result<()> {
         self.stream = None; // stoppe l'ancien flux
         let configs: Vec<SupportedStreamConfigRange> = self
@@ -243,6 +261,8 @@ impl AudioOutput {
             buffer_size: BufferSize::Default,
         };
         let src_channels = spec.channels as usize;
+        // Le flux navigateur ne transporte que du PCM f32 (pas de trames DoP).
+        let forward_browser = !spec.is_dsd_dop;
 
         macro_rules! start {
             ($t:ty) => {{
@@ -253,6 +273,8 @@ impl AudioOutput {
                 let max_volume = max_volume.clone();
                 let curve = curve.clone();
                 let vol_mode = vol_mode.clone();
+                let out_mode = out_mode.clone();
+                let browser_tx = browser_tx.clone();
                 // stash persistant entre les appels du callback: un chunk plus gros
                 // que le buffer cpal est consomme sur plusieurs appels.
                 let mut stash: Option<Stash> = None;
@@ -335,6 +357,19 @@ impl AudioOutput {
                                 };
                                 if done {
                                     stash = None;
+                                }
+                            }
+                            // « Jouer ici » : on forward le PCM post-gain au
+                            // navigateur, et le DAC local reçoit du silence.
+                            if forward_browser && out_mode.load(Ordering::Relaxed) == 1 {
+                                let mut v: Vec<f32> = Vec::with_capacity(data.len());
+                                for s in data.iter() {
+                                    v.push(s.to_f32());
+                                }
+                                // send() est non bloquant; Err si aucun client connecté.
+                                let _ = browser_tx.send(BrowserFrame::Pcm(v.into()));
+                                for s in data.iter_mut() {
+                                    *s = <$t>::zero();
                                 }
                             }
                             frames_out.fetch_add(frames_written, Ordering::Relaxed);

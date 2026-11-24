@@ -122,6 +122,15 @@ gapless, resampling, `dsd_mode`), `appearance` (thème dark/light/system, `accen
 `sources` (`metadata_discovery`). `PlayerState` expose aussi `max_volume` et
 `volume_mode` pour que l'UI masque le volume en mode bit-perfect.
 
+## « Jouer ici » (sortie navigateur)
+
+| Méthode | Route | Description |
+|---|---|---|
+| POST | `/api/player/output` | `{ "mode": "local" \| "browser" }` — « Jouer ici » : le navigateur courant devient la sortie audio |
+| WS | `/ws/audio` | flux binaire : trame texte `audio_spec` (JSON) puis PCM f32 LE entrelacé, post-gain (volume UI actif) |
+
+`PlayerState.output_mode` = `"local"` ou `"browser"`.
+
 ## WebSocket `/ws`
 
 Connexion upgrade → l'UI reçoit immédiatement `{"type":"state","payload":{...}}`,
