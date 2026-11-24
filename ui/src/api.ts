@@ -95,6 +95,17 @@ export interface PlaylistDetail {
   tracks: Track[];
 }
 
+/** Lien de partage public (v0.6) : /share/<token>. */
+export interface ShareLink {
+  token: string;
+  kind: "track" | "album" | "playlist";
+  id: string;
+  title: string;
+  created_at: number;
+  expires_at: number | null;
+  url: string;
+}
+
 /** Construit un objet Source sérialisable côté backend (serde taggé). */
 export function makeSource(
   id: string,
@@ -246,6 +257,11 @@ export const api = {
   playlist: (id: string) => req<PlaylistDetail>(`/api/playlists/${encodeURIComponent(id)}`),
   deletePlaylist: (id: string) => req<unknown>(`/api/playlists/${encodeURIComponent(id)}`, del()),
   playPlaylist: (id: string) => req<PlayerState>(`/api/playlists/${encodeURIComponent(id)}/play`, post({})),
+  listShares: () => req<ShareLink[]>("/api/shares"),
+  createShare: (kind: ShareLink["kind"], id: string, expires_in_secs?: number) =>
+    req<ShareLink>("/api/shares", post({ kind, id, expires_in_secs })),
+  deleteShare: (token: string) => req<{ ok: boolean }>(`/api/shares/${encodeURIComponent(token)}`, del()),
+  shareUrl: (token: string) => `${location.origin}/share/${token}`,
   devices: () => req<AudioDevice[]>("/api/audio/devices"),
   selectDevice: (name: string | null) => req<PlayerState>("/api/audio/device", post({ name })),
   system: () => req<SystemInfo>("/api/system/info"),

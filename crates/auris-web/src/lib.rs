@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 
 use auris_core::{
-    AurisError, BrowseEntry, OutputMode, Playlist, RepeatMode, Settings, Source, Track, WsEvent,
-    ZipWriter,
+    AurisError, BrowseEntry, OutputMode, Playlist, RepeatMode, Settings, ShareKind, ShareLink,
+    Source, Track, WsEvent, ZipWriter,
 };
 use auris_library::Library;
 use auris_player::{AudioOutput, PlayerEngine};
@@ -320,6 +320,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/system/shutdown", post(post_shutdown))
         // réglages (menu Réglages façon Volumio Nova)
         .route("/api/settings", get(get_settings).put(put_settings))
+        .route("/api/shares", get(get_shares).post(post_share))
+        .route("/api/shares/{token}", delete(delete_share))
+        .route("/api/public/shares/{token}", get(public_share))
+        .route("/share/{token}", get(share_page))
+        .route("/share/{token}/stream", get(share_stream))
+        .route("/share/{token}/stream/{track_id}", get(share_stream_track))
         // websocket
         .route("/ws", get(ws_handler))
         .route("/ws/audio", get(ws_audio_handler))
@@ -793,6 +799,309 @@ async fn delete_playlist(
     Ok(Json(serde_json::json!({ "removed": id })))
 }
 
+// ---------- liens de partage (v0.6) ----------
+
+#[derive(Deserialize)]
+struct ShareBody {
+    kind: ShareKind,
+    /// ID de la ressource (piste / album / playlist).
+    id: String,
+    /// Secondes avant expiration ; absent = permanent.
+    expires_in_secs: Option<i64>,
+}
+
+fn share_json(s: &ShareLink) -> serde_json::Value {
+    let mut v = serde_json::to_value(s).unwrap_or_default();
+    v["url"] = serde_json::json!(format!("/share/{}", s.token));
+    v
+}
+
+fn share_not_found(token: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": format!("lien de partage introuvable ou expire: {token}") })),
+    )
+        .into_response()
+}
+
+async fn get_shares(State(s): State<AppState>) -> Json<Vec<serde_json::Value>> {
+    Json(s.library.shares().iter().map(share_json).collect())
+}
+
+async fn post_share(
+    State(s): State<AppState>,
+    Json(b): Json<ShareBody>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    // la ressource doit exister ; son titre est fige dans le lien
+    let title = match b.kind {
+        ShareKind::Track => {
+            s.library
+                .track(&b.id)
+                .ok_or_else(|| AurisError::TrackNotFound(b.id.clone()))?
+                .title
+        }
+        ShareKind::Album => {
+            s.library
+                .album(&b.id)
+                .ok_or_else(|| AurisError::AlbumNotFound(b.id.clone()))?
+                .0
+                .title
+        }
+        ShareKind::Playlist => {
+            s.library
+                .playlist(&b.id)
+                .ok_or_else(|| AurisError::other(format!("playlist introuvable: {}", b.id)))?
+                .0
+                .name
+        }
+    };
+    let share = s
+        .library
+        .create_share(b.kind, &b.id, &title, b.expires_in_secs)?;
+    Ok((StatusCode::CREATED, Json(share_json(&share))))
+}
+
+async fn delete_share(State(s): State<AppState>, Path(token): Path<String>) -> Response {
+    match s.library.delete_share(&token) {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "ok": true, "removed": token })),
+        )
+            .into_response(),
+        Ok(false) => share_not_found(&token),
+        Err(e) => ApiError(e).into_response(),
+    }
+}
+
+/// Pistes resolues d'un lien (piste seule, album ou playlist).
+fn share_tracks(s: &AppState, share: &ShareLink) -> Result<Vec<Track>, AurisError> {
+    match share.kind {
+        ShareKind::Track => Ok(vec![s
+            .library
+            .track(&share.id)
+            .ok_or_else(|| AurisError::TrackNotFound(share.id.clone()))?]),
+        ShareKind::Album => Ok(s
+            .library
+            .album(&share.id)
+            .ok_or_else(|| AurisError::AlbumNotFound(share.id.clone()))?
+            .1),
+        ShareKind::Playlist => Ok(s
+            .library
+            .playlist(&share.id)
+            .ok_or_else(|| AurisError::other(format!("playlist introuvable: {}", share.id)))?
+            .1),
+    }
+}
+
+fn stream_url(share: &ShareLink, track_id: &str) -> String {
+    match share.kind {
+        ShareKind::Track => format!("/share/{}/stream", share.token),
+        _ => format!("/share/{}/stream/{}", share.token, track_id),
+    }
+}
+
+fn share_payload(s: &AppState, share: &ShareLink) -> Result<serde_json::Value, AurisError> {
+    let tracks = share_tracks(s, share)?;
+    let items: Vec<serde_json::Value> = tracks
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "id": t.id,
+                "title": t.title,
+                "artist": t.artist,
+                "album": t.album,
+                "duration_secs": t.duration_secs,
+                "cover_url": if t.has_cover { Some(format!("/api/library/cover/{}", t.id)) } else { None::<String> },
+                "stream_url": stream_url(share, &t.id),
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "kind": share.kind,
+        "title": share.title,
+        "created_at": share.created_at,
+        "expires_at": share.expires_at,
+        "cover_url": tracks.iter().find(|t| t.has_cover).map(|t| format!("/api/library/cover/{}", t.id)),
+        "tracks": items,
+    }))
+}
+
+/// JSON public d'un lien de partage (sans authentification, comme la page HTML).
+async fn public_share(State(s): State<AppState>, Path(token): Path<String>) -> Response {
+    let Some(share) = s.library.share(&token) else {
+        return share_not_found(&token);
+    };
+    match share_payload(&s, &share) {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => ApiError(e).into_response(),
+    }
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn audio_content_type(uri: &str) -> &'static str {
+    let after_dot = uri.rsplit('.').next().unwrap_or("");
+    let ext = after_dot
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "wav" => "audio/wav",
+        "flac" => "audio/flac",
+        "mp3" => "audio/mpeg",
+        "m4a" | "mp4" => "audio/mp4",
+        "ogg" => "audio/ogg",
+        "opus" => "audio/ogg",
+        "aif" | "aiff" => "audio/aiff",
+        "dsf" | "dff" => "audio/dsd",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Lit le fichier audio d'une piste en memoire (morceaux de taille raisonnable).
+async fn stream_track_bytes(s: &AppState, t: &Track) -> Result<Vec<u8>, AurisError> {
+    let mut reader = s.sources.open_uri(&t.uri).await?;
+    let mut buf = Vec::new();
+    std::io::Read::read_to_end(&mut reader, &mut buf).map_err(AurisError::Io)?;
+    Ok(buf)
+}
+
+fn stream_response(uri: &str, bytes: Vec<u8>) -> Response {
+    let ct = audio_content_type(uri);
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, ct),
+            (header::CONTENT_LENGTH, bytes.len().to_string().as_str()),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+/// Flux audio d'un lien « piste » : `/share/<token>/stream`.
+async fn share_stream(State(s): State<AppState>, Path(token): Path<String>) -> Response {
+    let Some(share) = s.library.share(&token) else {
+        return share_not_found(&token);
+    };
+    if share.kind != ShareKind::Track {
+        return ApiError(AurisError::other(
+            "ce lien ne partage pas une piste seule".to_string(),
+        ))
+        .into_response();
+    }
+    let Some(t) = s.library.track(&share.id) else {
+        return share_not_found(&token);
+    };
+    match stream_track_bytes(&s, &t).await {
+        Ok(bytes) => stream_response(&t.uri, bytes),
+        Err(e) => ApiError(e).into_response(),
+    }
+}
+
+/// Flux audio d'une piste d'un lien « album »/« playlist » : `/share/<token>/stream/<track_id>`.
+async fn share_stream_track(
+    State(s): State<AppState>,
+    Path((token, track_id)): Path<(String, String)>,
+) -> Response {
+    let Some(share) = s.library.share(&token) else {
+        return share_not_found(&token);
+    };
+    // un lien « piste » n'est servi que par /share/<token>/stream
+    if share.kind == ShareKind::Track {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "piste hors du partage" })),
+        )
+            .into_response();
+    }
+    let tracks = match share_tracks(&s, &share) {
+        Ok(t) => t,
+        Err(e) => return ApiError(e).into_response(),
+    };
+    let Some(t) = tracks.into_iter().find(|t| t.id == track_id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "piste hors du partage" })),
+        )
+            .into_response();
+    };
+    match stream_track_bytes(&s, &t).await {
+        Ok(bytes) => stream_response(&t.uri, bytes),
+        Err(e) => ApiError(e).into_response(),
+    }
+}
+
+/// Mini-page publique façon Nova (sombre, accent vert) pour un lien de partage.
+async fn share_page(State(s): State<AppState>, Path(token): Path<String>) -> Response {
+    let Some(share) = s.library.share(&token) else {
+        return share_not_found(&token);
+    };
+    let payload = match share_payload(&s, &share) {
+        Ok(v) => v,
+        Err(e) => return ApiError(e).into_response(),
+    };
+    let title = html_escape(&share.title);
+    let kind_label = match share.kind {
+        ShareKind::Track => "Piste",
+        ShareKind::Album => "Album",
+        ShareKind::Playlist => "Playlist",
+    };
+    let cover = payload["cover_url"]
+        .as_str()
+        .map(|c| format!("<img class=\"cover\" src=\"{}\" alt=\"\">", html_escape(c)))
+        .unwrap_or_default();
+    let player = if share.kind == ShareKind::Track {
+        let src = format!("/share/{}/stream", share.token);
+        format!("<audio controls preload=\"none\" src=\"{src}\"></audio>")
+    } else {
+        let items: String = payload["tracks"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        format!(
+                            "<li><button data-src=\"{}\">{}. {} — {}</button></li>",
+                            html_escape(t["stream_url"].as_str().unwrap_or("")),
+                            i + 1,
+                            html_escape(t["title"].as_str().unwrap_or("?")),
+                            html_escape(t["artist"].as_str().unwrap_or("?")),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .unwrap_or_default();
+        format!(
+            "<audio controls preload=\"none\" id=\"a\"></audio><ol class=\"tracks\">{items}</ol>
+<script>var a=document.getElementById('a');document.querySelectorAll('.tracks button').forEach(function(b){{b.onclick=function(){{a.src=b.dataset.src;a.play();}};}});</script>"
+        )
+    };
+    let html = format!(
+        "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{title} — Auris</title><style>
+body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0a0a0a;color:#f5f5f5;font-family:-apple-system,'Segoe UI',Roboto,sans-serif}}
+.card{{background:#161616;border:1px solid #262626;border-radius:16px;padding:32px;max-width:520px;width:92%;box-shadow:0 12px 40px rgba(0,0,0,.5)}}
+.cover{{width:100%;border-radius:12px;margin-bottom:16px}}
+h1{{font-size:22px;margin:0 0 4px}}
+.kind{{color:#1ED760;font-size:12px;text-transform:uppercase;letter-spacing:.12em;margin-bottom:16px}}
+audio{{width:100%;margin:8px 0 16px}}
+ol.tracks{{margin:0;padding-left:0;list-style:none;max-height:300px;overflow:auto}}
+ol.tracks li{{margin:2px 0}}
+ol.tracks button{{width:100%;text-align:left;background:#1f1f1f;color:#f5f5f5;border:1px solid #2a2a2a;border-radius:8px;padding:10px 12px;cursor:pointer;font-size:14px}}
+ol.tracks button:hover{{border-color:#1ED760}}
+footer{{margin-top:16px;color:#888;font-size:12px;text-align:center}}
+</style></head><body><main class=\"card\">{cover}<h1>{title}</h1><div class=\"kind\">{kind_label} partagée avec Auris</div>{player}<footer>Partagé depuis Auris — lecteur audiophile open source (AGPL-3.0)</footer></main></body></html>"
+    );
+    html_response(html.into_bytes())
+}
+
 async fn post_playlist_play(
     State(s): State<AppState>,
     Path(id): Path<String>,
@@ -982,7 +1291,7 @@ async fn post_reset(
     Ok(Json(serde_json::json!({
         "ok": true,
         "restart_recommended": true,
-        "note": "bibliothèque, playlists, sources et réglages remis à zéro"
+        "note": "bibliothèque, playlists, liens de partage, sources et réglages remis à zéro"
     })))
 }
 

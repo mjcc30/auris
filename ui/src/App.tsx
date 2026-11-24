@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, fmtBytes, fmtTime, makeSource, type Album, type AppearanceSettings, type AudioDevice, type BrowseEntry, type CopyReport, type MountInfo, type PlaylistDetail, type PlayerState, type Settings, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, fmtBytes, fmtTime, makeSource, type Album, type AppearanceSettings, type AudioDevice, type BrowseEntry, type CopyReport, type MountInfo, type PlaylistDetail, type PlayerState, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 
@@ -291,7 +291,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ }: { p
     } catch (e) { say(e instanceof Error ? e.message : String(e)); setScanning(false); }
   };
   if (albumDetail) {
-    return <AlbumView id={albumDetail.id} title={albumDetail.title} artist={albumDetail.artist} playAll={playAll} playTrack={playTrack} onBack={() => setAlbumDetail(null)} />;
+    return <AlbumView id={albumDetail.id} title={albumDetail.title} artist={albumDetail.artist} playAll={playAll} playTrack={playTrack} say={say} onBack={() => setAlbumDetail(null)} />;
   }
   return (
     <div>
@@ -327,7 +327,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ }: { p
   );
 }
 
-function AlbumView({ id, title, artist, playAll, playTrack, onBack }: { id: string; title: string; artist: string; playAll: (t: Track[]) => void; playTrack: (t: Track) => void; onBack: () => void }) {
+function AlbumView({ id, title, artist, playAll, playTrack, say, onBack }: { id: string; title: string; artist: string; playAll: (t: Track[]) => void; playTrack: (t: Track) => void; say: (m: string) => void; onBack: () => void }) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [cover, setCover] = useState<string | null>(null);
   useEffect(() => {
@@ -342,6 +342,14 @@ function AlbumView({ id, title, artist, playAll, playTrack, onBack }: { id: stri
         <button className="btn ghost sm" onClick={onBack}><Icon name="back" size={16} /> Retour</button>
         <button className="btn sm" onClick={() => tracks.length && playAll(tracks)}><Icon name="play" size={14} filled /> Tout lire</button>
         <button className="btn ghost sm" onClick={() => { window.location.href = api.albumExportUrl(id); }}><Icon name="download" size={16} /> Export ZIP</button>
+        <button className="btn ghost sm" onClick={async () => {
+          try {
+            const sh = await api.createShare("album", id);
+            const url = api.shareUrl(sh.token);
+            await navigator.clipboard?.writeText(url).catch(() => {});
+            say(`Lien de partage copié : ${url}`);
+          } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+        }}><Icon name="share" size={16} /> Partager</button>
       </div>
       <h1>{title}</h1>
       <h2 style={{ marginTop: 0 }}>{artist}</h2>
@@ -583,6 +591,14 @@ function Playlists({ act, say, playAll, playTrack }: { act: (fn: () => Promise<u
           <div className="spacer" />
           <button className="btn sm" onClick={() => act(() => api.playPlaylist(detail.playlist.id))}><Icon name="play" size={14} filled /> Lire</button>
           <button className="btn ghost sm" onClick={() => act(async () => { await api.deletePlaylist(detail.playlist.id); setDetail(null); load(); }, "Liste supprimée")}><Icon name="trash" size={16} /> Supprimer</button>
+          <button className="btn ghost sm" onClick={async () => {
+            try {
+              const sh = await api.createShare("playlist", detail.playlist.id);
+              const url = api.shareUrl(sh.token);
+              await navigator.clipboard?.writeText(url).catch(() => {});
+              say(`Lien de partage copié : ${url}`);
+            } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+          }}><Icon name="share" size={16} /> Partager</button>
         </div>
         <h1>{detail.playlist.name}</h1>
         <TrackTable tracks={detail.tracks} playTrack={playTrack} playAll={playAll} />
@@ -801,6 +817,9 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
   const [storage, setStorage] = useState<StorageInfo | null>(null);
   const [logs, setLogs] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
+  const [shares, setShares] = useState<ShareLink[]>([]);
+  const loadShares = useCallback(() => { api.listShares().then(setShares).catch(() => {}); }, []);
+  useEffect(() => { loadShares(); }, [loadShares]);
 
   useEffect(() => {
     api.systemStorage().then(setStorage).catch(() => {});
@@ -985,6 +1004,16 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
         ),
       ].filter(Boolean) as React.ReactNode[],
     },
+    {
+      title: "Partage",
+      rows: [
+        show("Liens de partage", "URL publiques /share/<token> pour écouter une piste, un album ou une playlist depuis un autre appareil") && (
+          <SetRow key="shares" label="Liens de partage" desc={shares.length ? `${shares.length} lien(s) actif(s)` : "aucun lien actif"}>
+            <button className="btn ghost sm" onClick={loadShares}><Icon name="refresh" size={16} /> Actualiser</button>
+          </SetRow>
+        ),
+      ].filter(Boolean) as React.ReactNode[],
+    },
   ].map((sec) => ({ ...sec, rows: sec.rows.filter(Boolean) }));
 
   const visible = sections.filter((s) => s.rows.length > 0);
@@ -1002,6 +1031,22 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
           {sec.rows}
         </section>
       ))}
+      {show("Liens de partage") && (
+        <section className="set-card">
+          <h2>Liens de partage actifs</h2>
+          {shares.length === 0 && <div className="empty">Aucun lien — partagez une piste (barre de lecture), un album ou une playlist.</div>}
+          {shares.map((sh) => (
+            <div key={sh.token} className="share-row">
+              <span className="badge">{sh.kind}</span>
+              <span className="share-title">{sh.title}</span>
+              <code className="share-url">{api.shareUrl(sh.token)}</code>
+              <button className="icon-btn" title="Copier le lien" onClick={async () => { await navigator.clipboard?.writeText(api.shareUrl(sh.token)).catch(() => {}); say("Lien copié dans le presse-papiers"); }}><Icon name="copy" size={16} /></button>
+              <button className="icon-btn" title="Ouvrir dans un onglet" onClick={() => window.open(api.shareUrl(sh.token), "_blank")}><Icon name="link" size={16} /></button>
+              <button className="icon-btn danger" title="Révoquer ce lien" onClick={async () => { try { await api.deleteShare(sh.token); say("Lien révoqué"); loadShares(); } catch (e) { say(e instanceof Error ? e.message : String(e)); } }}><Icon name="trash" size={16} /></button>
+            </div>
+          ))}
+        </section>
+      )}
       {logs !== null && (
         <div className="modal-bg" onClick={() => setLogs(null)}>
           <div className="modal wide" onClick={(e) => e.stopPropagation()}>
@@ -1049,6 +1094,14 @@ function PlayerBar({ state, devices, act, say }: { state: PlayerState | null; de
       </div>
       <div className="right">
         {state?.output_mode === "browser" && <span className="badge" title="Le son sort dans ce navigateur"><Icon name="speaker" size={12} /> Navigateur</span>}
+        {cur && <button className="icon-btn-out" title="Partager un lien public de la piste en cours" onClick={async () => {
+          try {
+            const sh = await api.createShare("track", cur.id);
+            const url = api.shareUrl(sh.token);
+            await navigator.clipboard?.writeText(url).catch(() => {});
+            say(`Lien de partage copié : ${url}`);
+          } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+        }}><Icon name="share" size={20} /></button>}
         <button className={`icon-btn-out ${state?.output_mode === "browser" ? "active" : ""}`} title="Choisir la sortie (Jouer ici, Caster…)" onClick={() => setMenuOpen((v) => !v)}>
           <Icon name="cast" size={20} />
         </button>

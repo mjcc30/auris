@@ -59,6 +59,10 @@ ouverts ou des intégrations communautaires avec compte utilisateur :
 - **« Jouer ici » (fait)** : pseudo-sortie « Navigateur » — PCM f32 décodé streamé en
   binaire sur `/ws/audio`, lu en WebAudio côté UI ; popup façon Manifest
   (Jouer ici / Regroupement / Caster / Autres dispositifs).
+- **Liens de partage (faits)** : `POST /api/shares` crée un lien public
+  `/share/<token>` (piste / album / playlist) avec mini-page HTML + flux audio
+  (`/share/<token>/stream[/<track_id>]`), révocation et expiration ; boutons
+  « Partager » (barre de lecture, album, playlist) + gestion dans Réglages > Partage.
 - Plugins « 1st party » : Last.fm (scrobble + « j'aime »), Spotify Connect
   (librespot, MIT), AirPlay, Roon Ready (RAAT), Chromecast, Tidal/Qobuz via leurs
   API publiques communautaires (abonnement requis côté utilisateur).

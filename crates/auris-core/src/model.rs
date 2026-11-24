@@ -257,6 +257,36 @@ pub struct Playlist {
     pub created_at: i64,
 }
 
+/// Sorte de ressource partagee par un lien public.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShareKind {
+    Track,
+    Album,
+    Playlist,
+}
+
+/// Lien de partage public (piste, album ou playlist) : `/share/<token>`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShareLink {
+    /// Jeton aleatoire (32 caracteres hex).
+    pub token: String,
+    pub kind: ShareKind,
+    /// ID de la ressource (piste / album / playlist).
+    pub id: String,
+    /// Titre fige au moment du partage (affiche meme si la ressource disparait).
+    pub title: String,
+    pub created_at: i64,
+    /// Expiration (timestamp unix) ; `None` = permanent.
+    pub expires_at: Option<i64>,
+}
+
+impl ShareLink {
+    pub fn is_expired(&self, now: i64) -> bool {
+        self.expires_at.is_some_and(|e| now >= e)
+    }
+}
+
 /// Entree de navigation dans une source (dossier ou fichier).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowseEntry {

@@ -131,6 +131,22 @@ gapless, resampling, `dsd_mode`), `appearance` (thème dark/light/system, `accen
 
 `PlayerState.output_mode` = `"local"` ou `"browser"`.
 
+## Liens de partage (v0.6)
+
+| Méthode | Route | Description |
+|---|---|---|
+| GET | `/api/shares` | liens actifs, chacun avec son `url` (`/share/<token>`) |
+| POST | `/api/shares` | `{kind: "track"\|"album"\|"playlist", id, expires_in_secs?}` → 201 + lien ; ressource inconnue → 400 |
+| DELETE | `/api/shares/{token}` | révoque le lien (404 si inconnu) |
+| GET | `/api/public/shares/{token}` | JSON public : métadonnées + pistes avec `stream_url` |
+| GET | `/share/{token}` | mini-page HTML publique façon Nova (lecteur audio intégré, liste de pistes) |
+| GET | `/share/{token}/stream` | flux audio d'un lien « piste » (Content-Type selon l'extension) |
+| GET | `/share/{token}/stream/{track_id}` | flux d'une piste d'un lien « album »/« playlist » (404 si hors partage) |
+
+Les liens expirés sont purgés à la lecture ; le reset usine les supprime (stockés dans
+la bibliothèque, arbre sled `shares`). Boutons « Partager » : barre de lecture (piste
+en cours), fiche album, détail de playlist ; gestion dans Réglages > Partage.
+
 ## WebSocket `/ws`
 
 Connexion upgrade → l'UI reçoit immédiatement `{"type":"state","payload":{...}}`,

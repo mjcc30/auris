@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use auris_core::{Album, Artist, AurisError, Playlist, Result, Source, Track};
+use auris_core::{
+    Album, Artist, AurisError, Playlist, Result, ShareKind, ShareLink, Source, Track,
+};
 use auris_player::probe_meta;
 use auris_sources::{make_uri, SourcesManager};
 
@@ -31,6 +33,7 @@ const TREE_ARTISTS: &str = "artists";
 const TREE_ARTIST_BY_KEY: &str = "artist_by_key";
 
 const TREE_PLAYLISTS: &str = "playlists";
+const TREE_SHARES: &str = "shares";
 
 pub struct Library {
     db: sled::Db,
@@ -63,6 +66,7 @@ impl Library {
             TREE_ARTISTS,
             TREE_ARTIST_BY_KEY,
             TREE_PLAYLISTS,
+            TREE_SHARES,
         ] {
             db.open_tree(t)
                 .map_err(|e| AurisError::Storage(e.to_string()))?;
@@ -358,6 +362,64 @@ impl Library {
         Ok(self
             .tree(TREE_PLAYLISTS)
             .remove(id.as_bytes())
+            .map_err(se)?
+            .is_some())
+    }
+
+    // ---------- liens de partage ----------
+
+    /// Cree un lien de partage. `expires_in_secs` : `None` = permanent.
+    pub fn create_share(
+        &self,
+        kind: ShareKind,
+        id: &str,
+        title: &str,
+        expires_in_secs: Option<i64>,
+    ) -> Result<ShareLink> {
+        let now = chrono::Utc::now().timestamp();
+        let share = ShareLink {
+            token: uuid::Uuid::new_v4().simple().to_string(),
+            kind,
+            id: id.to_string(),
+            title: title.to_string(),
+            created_at: now,
+            expires_at: expires_in_secs.map(|d| now + d),
+        };
+        self.tree(TREE_SHARES)
+            .insert(share.token.as_bytes(), enc(&share)?)
+            .map_err(se)?;
+        Ok(share)
+    }
+
+    /// Tous les liens de partage, plus recents d'abord.
+    pub fn shares(&self) -> Vec<ShareLink> {
+        let mut out: Vec<ShareLink> = self
+            .tree(TREE_SHARES)
+            .iter()
+            .filter_map(|r| r.ok())
+            .filter_map(|(_, v)| dec::<ShareLink>(&v).ok())
+            .collect();
+        out.sort_by_key(|s| std::cmp::Reverse(s.created_at));
+        out
+    }
+
+    /// Lien de partage valide (non expire) ; les liens expires sont purges.
+    pub fn share(&self, token: &str) -> Option<ShareLink> {
+        let tree = self.tree(TREE_SHARES);
+        let raw = tree.get(token.as_bytes()).ok()??;
+        let share: ShareLink = dec(&raw).ok()?;
+        if share.is_expired(chrono::Utc::now().timestamp()) {
+            let _ = tree.remove(token.as_bytes());
+            return None;
+        }
+        Some(share)
+    }
+
+    /// Revoque un lien de partage. Retourne true s'il existait.
+    pub fn delete_share(&self, token: &str) -> Result<bool> {
+        Ok(self
+            .tree(TREE_SHARES)
+            .remove(token.as_bytes())
             .map_err(se)?
             .is_some())
     }

@@ -59,11 +59,16 @@ kanban avec critères d'acceptation (voir [USER_STORIES.md](USER_STORIES.md)).
       écart) ; `POST /api/player/output` bascule local/browser, le DAC local reçoit du
       silence en mode navigateur ; popup « Lire sur… » façon Manifest (Jouer ici /
       Regroupement / Caster / Autres dispositifs)
+- [x] **Liens de partage** : lien public `/share/<token>` pour une piste, un album ou une
+      playlist — mini-page HTML façon Nova avec lecteur intégré, flux audio
+      `/share/<token>/stream[/<track_id>]`, JSON public `/api/public/shares/<token>`,
+      révocation (`DELETE /api/shares/<token>`), expiration optionnelle ; boutons
+      « Partager » barre de lecture / album / playlist + liste dans Réglages > Partage
 - [ ] Multiroom synchronisé (style SnapCast) entre instances Auris
 - [ ] AirPlay / Roon Ready (RAAT) / Chromecast (protocoles ouverts)
 - [ ] Spotify Connect via librespot (MIT), Tidal/Qobuz via API communautaires
 - [ ] Last.fm (scrobble) + métadonnées MusicBrainz, rip CD (whipper/AccurateRip)
-- [ ] Sleep timer / réveil, égaliseur/DSP, liens de partage (livres audio)
+- [ ] Sleep timer / réveil, égaliseur/DSP
 
 ## Should have — v1.0.0 (stable)
 
