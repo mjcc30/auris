@@ -191,9 +191,10 @@ fn run_worker(
             Ok(c) => c,
             Err(e) => {
                 tracing::error!("smb: connexion {addr}: {e}");
+                let msg = friendly_connect_error(&e.to_string());
                 // Repond l'erreur a tous les jobs restants.
                 while let Ok(job) = rx.recv() {
-                    respond_err(job, format!("connexion SMB echouee: {e}"));
+                    respond_err(job, format!("connexion SMB echouee: {msg}"));
                 }
                 return;
             }
@@ -348,6 +349,29 @@ fn respond_err(job: Job, msg: String) {
             let _ = tx.send(Err(AurisError::Network(msg)));
         }
     }
+}
+
+/// Traduit les erreurs de connexion SMB les plus courantes en message clair.
+fn friendly_connect_error(raw: &str) -> String {
+    let m = raw.to_lowercase();
+    if m.contains("guest session") {
+        return "identifiants refusés par le NAS (il propose une session « invité ») : \
+                vérifiez le nom d'utilisateur et le mot de passe, ou laissez le champ \
+                utilisateur vide pour un accès invité (souvent en lecture seule)"
+            .into();
+    }
+    if m.contains("refused") || m.contains("10061") {
+        return "connexion refusée : vérifiez l'adresse IP, le port 445 et que le \
+                service SMB est bien actif sur le NAS"
+            .into();
+    }
+    if m.contains("timed out") || m.contains("timeout") {
+        return "délai de connexion dépassé : le NAS ne répond pas (IP, pare-feu, port 445)".into();
+    }
+    if m.contains("no such host") || m.contains("name or service not known") {
+        return "hôte inconnu : vérifiez l'adresse IP du NAS".into();
+    }
+    raw.to_string()
 }
 
 /// Refuse les chemins relatifs qui sortiraient de la racine du partage.
@@ -579,5 +603,44 @@ impl SourceBackend for SmbSource {
             }
         }
         self.worker.call_finish_write(handle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::friendly_connect_error;
+
+    #[test]
+    fn guest_session_expliquee() {
+        let raw = "the server offered a guest session instead of signing in as mjcc. Check the username and password: a Samba server set to `map to guest = bad user` answers a wrong password this way. To sign in as guest, leave the username empty or use `Guest`";
+        let msg = friendly_connect_error(raw);
+        assert!(msg.contains("identifiants refusés"));
+        assert!(msg.contains("vide"));
+    }
+
+    #[test]
+    fn connexion_refusee_expliquee() {
+        let msg = friendly_connect_error("Connection refused (os error 10061)");
+        assert!(msg.contains("connexion refusée"));
+        assert!(msg.contains("445"));
+    }
+
+    #[test]
+    fn timeout_explique() {
+        let msg = friendly_connect_error("operation timed out");
+        assert!(msg.contains("délai"));
+    }
+
+    #[test]
+    fn hote_inconnu_explique() {
+        let msg = friendly_connect_error(
+            "failed to lookup address information: Name or service not known",
+        );
+        assert!(msg.contains("hôte inconnu"));
+    }
+
+    #[test]
+    fn autre_erreur_laissee_telle_quelle() {
+        assert_eq!(friendly_connect_error("weird error"), "weird error");
     }
 }

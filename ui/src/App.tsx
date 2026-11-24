@@ -688,7 +688,7 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
                 <select value="CIFS" disabled><option>CIFS (SMB)</option></select>
               </label>
               <label>Chemin (partage)<input type="text" value={share} onChange={(e) => setShare(e.target.value)} placeholder="music" /></label>
-              <label>Nom d'utilisateur (facultatif)<input type="text" value={user} onChange={(e) => setUser(e.target.value)} placeholder="user" /></label>
+              <label>Nom d'utilisateur (facultatif)<input type="text" value={user} onChange={(e) => setUser(e.target.value)} placeholder="laisser vide = accès invité (guest)" /></label>
               <label>Mot de passe (facultatif)<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••" /></label>
               <details className="span2 adv">
                 <summary><Icon name="chevron" size={16} /> Options avancées</summary>

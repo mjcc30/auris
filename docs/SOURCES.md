@@ -21,6 +21,13 @@ depuis l'onglet **Parcourir** de l'UI.
 - Les sources sont **persistées** dans `<data-dir>/config.toml` à chaque
   ajout/suppression/activation (`POST`/`DELETE`/`PATCH /api/sources`).
 - Un `id` en double est refusé (HTTP 400).
+- **SMB / NAS** : laisser `user` vide = connexion « invité » (guest), souvent en
+  lecture seule. Si le NAS répond « session guest » alors que vous avez saisi un
+  utilisateur, c'est que le couple utilisateur/mot de passe est refusé
+  (`map to guest = bad user` côté Samba) : vérifiez le compte sur le NAS, que le
+  service SMB est actif et que le port 445 est ouvert
+  (`Test-NetConnection 192.168.50.129 -Port 445` sous Windows). Le partage doit
+  aussi accorder les droits à l'utilisateur dans ses permissions.
 
 ## Navigation dans l'arborescence
 
