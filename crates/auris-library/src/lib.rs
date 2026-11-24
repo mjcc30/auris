@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use auris_core::{Album, Artist, AurisError, Result, Source, Track};
+use auris_core::{Album, Artist, AurisError, Playlist, Result, Source, Track};
 use auris_player::probe_meta;
 use auris_sources::{make_uri, SourcesManager};
 
@@ -29,6 +29,8 @@ const TREE_ALBUMS: &str = "albums";
 const TREE_ALBUM_BY_KEY: &str = "album_by_key";
 const TREE_ARTISTS: &str = "artists";
 const TREE_ARTIST_BY_KEY: &str = "artist_by_key";
+
+const TREE_PLAYLISTS: &str = "playlists";
 
 pub struct Library {
     db: sled::Db,
@@ -60,6 +62,7 @@ impl Library {
             TREE_ALBUM_BY_KEY,
             TREE_ARTISTS,
             TREE_ARTIST_BY_KEY,
+            TREE_PLAYLISTS,
         ] {
             db.open_tree(t)
                 .map_err(|e| AurisError::Storage(e.to_string()))?;
@@ -225,6 +228,18 @@ impl Library {
             .and_then(|v| dec::<Track>(&v).ok())
     }
 
+    /// Insere ou remplace une piste dans l'index (idempotent par id et par URI).
+    /// Utilise pour les pistes jouees hors scan (dossier parcouru directement).
+    pub fn upsert_track(&self, t: &Track) -> Result<()> {
+        self.tree(TREE_TRACKS)
+            .insert(t.id.as_bytes(), enc(t)?)
+            .map_err(se)?;
+        self.tree(TREE_BY_URI)
+            .insert(t.uri.as_bytes(), enc(&t.id)?)
+            .map_err(se)?;
+        Ok(())
+    }
+
     pub fn search(&self, q: &str) -> Vec<Track> {
         let q = q.to_lowercase();
         self.tracks()
@@ -295,6 +310,56 @@ impl Library {
             .get(track_id.as_bytes())
             .ok()?
             .map(|v| v.to_vec())
+    }
+
+    // ---------- listes de lecture ----------
+
+    pub fn playlists(&self) -> Vec<Playlist> {
+        let tree = self.tree(TREE_PLAYLISTS);
+        let mut out: Vec<Playlist> = tree
+            .iter()
+            .filter_map(|r| r.ok())
+            .filter_map(|(_, v)| dec::<Playlist>(&v).ok())
+            .collect();
+        out.sort_by_key(|a| std::cmp::Reverse(a.created_at));
+        out
+    }
+
+    /// Cree une liste de lecture. Les IDs inconnus sont filtres a la lecture.
+    pub fn create_playlist(&self, name: &str, track_ids: Vec<String>) -> Result<Playlist> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(AurisError::other("nom de playlist vide"));
+        }
+        let p = Playlist {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: name.to_string(),
+            track_ids,
+            created_at: chrono::Utc::now().timestamp(),
+        };
+        self.tree(TREE_PLAYLISTS)
+            .insert(p.id.as_bytes(), enc(&p)?)
+            .map_err(se)?;
+        Ok(p)
+    }
+
+    /// Playlist + ses pistes resolues (les IDs inconnus sont ignores).
+    pub fn playlist(&self, id: &str) -> Option<(Playlist, Vec<Track>)> {
+        let p: Playlist = dec(&self.tree(TREE_PLAYLISTS).get(id.as_bytes()).ok()??).ok()?;
+        let tracks = p
+            .track_ids
+            .iter()
+            .filter_map(|tid| self.track(tid))
+            .collect();
+        Some((p, tracks))
+    }
+
+    pub fn delete_playlist(&self, id: &str) -> Result<bool> {
+        Ok(self
+            .tree(TREE_PLAYLISTS)
+            .remove(id.as_bytes())
+            .map_err(se)?
+            .is_some())
     }
 }
 

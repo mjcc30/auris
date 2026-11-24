@@ -18,12 +18,15 @@ kanban avec critères d'acceptation (voir [USER_STORIES.md](USER_STORIES.md)).
 
 ## Should have — v0.2.0 (NAS & bibliothèque)
 
-- [ ] Source SMB/CIFS vers NAS (Synology, QNAP, TrueNAS...)
-- [ ] Source UPnP/DLNA (découverte SSDP, navigation ContentDirectory)
-- [ ] Webradios (m3u/m3u8) et URLs HTTP directes
-- [ ] Scan des sources, index sled, métadonnées + pochettes
-- [ ] Recherche plein texte, pages albums/artistes
-- [ ] Gestion des sources depuis l'UI (ajout/suppression)
+- [x] Source SMB/CIFS vers NAS (Synology, QNAP, TrueNAS...) — inscriptible (copie vers le NAS)
+- [x] Sources multiples: dossier local (NTFS monté), **USB** (détection des disques amovibles), SMB, HTTP, UPnP/DLNA, webradio
+- [x] Source UPnP/DLNA (découverte SSDP, navigation ContentDirectory)
+- [x] Webradios (m3u/m3u8) et URLs HTTP directes
+- [x] Scan des sources, index sled, métadonnées + pochettes
+- [x] Recherche plein texte, pages albums/artistes
+- [x] Gestion des sources depuis l'UI (ajout/suppression/activation, persistées dans `config.toml`)
+- [x] **Explorateur d'arborescence** dans chaque source (grille ou liste, fil d'Ariane, lecture d'un dossier entier)
+- [x] **Import/export**: copier fichiers/albums/dossiers d'une source à une autre (ex. NAS → clé USB), exporter en ZIP (fichier, dossier ou album)
 
 ## Must have — v0.3.0 (audio audiophile)
 

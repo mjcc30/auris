@@ -26,6 +26,10 @@ async fn main() -> anyhow::Result<()> {
             app::list_audio_devices();
             Ok(())
         }
+        Some(Command::UsbDevices) => {
+            app::list_usb_devices();
+            Ok(())
+        }
         Some(Command::Version) => {
             println!("auris {}", env!("CARGO_PKG_VERSION"));
             Ok(())

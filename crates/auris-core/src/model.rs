@@ -157,8 +157,11 @@ pub struct Artist {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum SourceKind {
-    /// Repertoire local (NAS monte en local, disque USB...).
+    /// Repertoire local (dossier monte, disque NTFS...).
     Local { path: String },
+    /// Disque amovible monte (cle USB, disque externe): Windows `E:\`,
+    /// Linux `/media/<user>/CLE`, macOS `/Volumes/CLE`.
+    Usb { path: String },
     /// Partage SMB/CIFS direct vers un NAS (Synology, QNAP...).
     Smb {
         host: String,
@@ -171,6 +174,18 @@ pub enum SourceKind {
     Http { base_url: Option<String> },
     /// Serveur UPnP/DLNA (decouverte SSDP + navigation ContentDirectory).
     Upnp { url: String },
+    /// Webradio: flux HTTP(S) joue directement.
+    Radio { url: String },
+}
+
+impl SourceKind {
+    /// Kind ecritable (import/copie vers cette source possible).
+    pub fn is_writable(&self) -> bool {
+        matches!(
+            self,
+            SourceKind::Local { .. } | SourceKind::Usb { .. } | SourceKind::Smb { .. }
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +228,33 @@ impl Source {
             enabled: true,
         }
     }
+
+    pub fn new_usb(name: &str, path: &str) -> Self {
+        Source {
+            id: Uuid::new_v4().to_string(),
+            name: name.into(),
+            kind: SourceKind::Usb { path: path.into() },
+            enabled: true,
+        }
+    }
+
+    pub fn new_radio(name: &str, url: &str) -> Self {
+        Source {
+            id: Uuid::new_v4().to_string(),
+            name: name.into(),
+            kind: SourceKind::Radio { url: url.into() },
+            enabled: true,
+        }
+    }
+}
+
+/// Une liste de lecture (file d'attente enregistree).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Playlist {
+    pub id: String,
+    pub name: String,
+    pub track_ids: Vec<String>,
+    pub created_at: i64,
 }
 
 /// Entree de navigation dans une source (dossier ou fichier).

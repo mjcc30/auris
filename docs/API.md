@@ -36,6 +36,7 @@ Base : `http://<hôte>:3000`. Toutes les réponses sont en JSON. Les erreurs :
 |---|---|---|
 | GET | `/api/queue` | la file |
 | POST | `/api/queue` | ajoute une `Track` |
+| POST | `/api/queue/add` | `{uri}` ajoute un fichier **ou tout un dossier** (`src://id/...`) |
 | DELETE | `/api/queue/{index}` | retire |
 | POST | `/api/queue/clear` | vide (et stoppe) |
 
@@ -49,6 +50,7 @@ Base : `http://<hôte>:3000`. Toutes les réponses sont en JSON. Les erreurs :
 | GET | `/api/library/artists` · `/api/library/artists/{id}` | artistes |
 | GET | `/api/library/search?q=...` | recherche |
 | GET | `/api/library/cover/{track_id}` | image (JPEG/PNG) |
+| GET | `/api/library/albums/{id}/export` | exporte l'album en ZIP (pistes + pochettes) |
 | POST | `/api/library/scan` | `{source_id?}` lance un scan (toutes sources si omis) |
 | GET | `/api/library/scan/status` | progression du scan |
 
@@ -57,10 +59,25 @@ Base : `http://<hôte>:3000`. Toutes les réponses sont en JSON. Les erreurs :
 | Méthode | Route | Description |
 |---|---|---|
 | GET | `/api/sources` | sources configurées |
-| POST | `/api/sources` | ajoute une source (voir ci-dessous) |
+| POST | `/api/sources` | ajoute une source (id unique requis, sinon 400) |
 | DELETE | `/api/sources/{id}` | supprime |
+| PATCH | `/api/sources/{id}` | `{enabled}` active/désactive (persisté) |
 | GET | `/api/browse?uri=...` | contenu d'un dossier (`src://id/...`, `upnp://...`, URL m3u) |
+| GET | `/api/browse/tree?uri=...` | parcours **récursif** (fichiers audio ; un fichier = lui-même) |
+| GET | `/api/usb/devices` | disques amovibles détectés par l'OS (`[{label, path}]`) |
 | GET | `/api/upnp/discover` | serveurs UPnP du LAN |
+
+## Import / export & playlists
+
+| Méthode | Route | Description |
+|---|---|---|
+| POST | `/api/transfer/copy` | `{from, to}` copie fichier/dossier entre sources (`src://a/x` → `src://b/y`) → `{files, bytes, dirs, errors}` ; destination en lecture seule ou chemin `..` → 400 |
+| GET | `/api/export?uri=...&name=...` | exporte un fichier/dossier en **ZIP** (attachement) |
+| GET | `/api/playlists` | liste des listes de lecture |
+| POST | `/api/playlists` | `{name, track_ids?}` ; sans `track_ids` = sauvegarde de la file courante |
+| GET | `/api/playlists/{id}` | `{playlist, tracks}` (pistes résolues) |
+| DELETE | `/api/playlists/{id}` | supprime |
+| POST | `/api/playlists/{id}/play` | joue la liste |
 
 Création d'une source SMB :
 
@@ -69,8 +86,12 @@ Création d'une source SMB :
   "user": "...", "password": "...", "base_path": "" }
 ```
 
-(`kind`: `local` `{path}`, `smb` `{host,share,user,password,base_path}`,
-`http` `{base_url?}`, `upnp` `{url}`.)
+(`kind`: `local` `{path}` (dossier, ex. NTFS monté), `usb` `{path}` (clé/disque
+amovible, inscriptible), `smb` `{host,share,user,password,base_path?}` (NAS,
+inscriptible), `radio` `{url}` (flux), `http` `{base_url?}`, `upnp` `{url}`.
+Les sources `local`, `usb` et `smb` sont **inscriptibles** : on peut y copier
+depuis n'importe quelle autre source. Les URI `src://` acceptent l'encodage
+percent (`%20`) ou les espaces bruts dans le chemin.)
 
 ## Audio & système
 

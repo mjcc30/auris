@@ -35,6 +35,26 @@ enum Job {
     Close {
         handle: u64,
     },
+    OpenWrite {
+        path: String,
+        tx: SyncSender<Result<u64>>,
+    },
+    WriteChunk {
+        handle: u64,
+        data: Vec<u8>,
+        tx: SyncSender<Result<()>>,
+    },
+    FinishWrite {
+        handle: u64,
+        tx: SyncSender<Result<u64>>,
+    },
+    CloseWrite {
+        handle: u64,
+    },
+    Mkdir {
+        path: String,
+        tx: SyncSender<Result<()>>,
+    },
 }
 
 struct Worker {
@@ -106,6 +126,46 @@ impl Worker {
     fn call_close(&self, handle: u64) {
         let _ = self.tx.send(Job::Close { handle });
     }
+
+    fn call_open_write(&self, path: String) -> Result<u64> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        self.tx
+            .send(Job::OpenWrite { path, tx })
+            .map_err(|_| AurisError::Network("worker smb mort".into()))?;
+        rx.recv()
+            .map_err(|_| AurisError::Network("worker smb mort".into()))?
+    }
+
+    fn call_write_chunk(&self, handle: u64, data: Vec<u8>) -> Result<()> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        self.tx
+            .send(Job::WriteChunk { handle, data, tx })
+            .map_err(|_| AurisError::Network("worker smb mort".into()))?;
+        rx.recv()
+            .map_err(|_| AurisError::Network("worker smb mort".into()))?
+    }
+
+    fn call_finish_write(&self, handle: u64) -> Result<u64> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        self.tx
+            .send(Job::FinishWrite { handle, tx })
+            .map_err(|_| AurisError::Network("worker smb mort".into()))?;
+        rx.recv()
+            .map_err(|_| AurisError::Network("worker smb mort".into()))?
+    }
+
+    fn call_close_write(&self, handle: u64) {
+        let _ = self.tx.send(Job::CloseWrite { handle });
+    }
+
+    fn call_mkdir(&self, path: String) -> Result<()> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        self.tx
+            .send(Job::Mkdir { path, tx })
+            .map_err(|_| AurisError::Network("worker smb mort".into()))?;
+        rx.recv()
+            .map_err(|_| AurisError::Network("worker smb mort".into()))?
+    }
 }
 
 fn run_worker(
@@ -149,6 +209,7 @@ fn run_worker(
             }
         };
         let mut readers: HashMap<u64, smb2::client::stream::FileReader> = HashMap::new();
+        let mut writers: HashMap<u64, smb2::client::stream::FileWriter> = HashMap::new();
         let mut next_id: u64 = 1;
         while let Ok(job) = rx.recv() {
             match job {
@@ -205,6 +266,57 @@ fn run_worker(
                 Job::Close { handle } => {
                     readers.remove(&handle);
                 }
+                Job::OpenWrite { path, tx } => {
+                    let full = join_path(base_path, &path);
+                    let res = async {
+                        let conn = client.connection_for(&tree)?;
+                        let w = smb2::client::stream::open_file_writer(
+                            Arc::new(tree.clone()),
+                            conn,
+                            &full,
+                        )
+                        .await?;
+                        let id = next_id;
+                        next_id += 1;
+                        writers.insert(id, w);
+                        Ok(id)
+                    }
+                    .await;
+                    let _ = tx.send(res.map_err(|e: smb2::Error| {
+                        AurisError::Network(format!("open_write {full}: {e}"))
+                    }));
+                }
+                Job::WriteChunk { handle, data, tx } => {
+                    let res = match writers.get_mut(&handle) {
+                        Some(w) => w
+                            .write_chunk(&data)
+                            .await
+                            .map_err(|e| AurisError::Network(format!("write_chunk: {e}"))),
+                        None => Err(AurisError::Network("handle smb write inconnu".into())),
+                    };
+                    let _ = tx.send(res);
+                }
+                Job::FinishWrite { handle, tx } => {
+                    let res = match writers.remove(&handle) {
+                        Some(w) => w
+                            .finish()
+                            .await
+                            .map_err(|e| AurisError::Network(format!("finish_write: {e}"))),
+                        None => Err(AurisError::Network("handle smb write inconnu".into())),
+                    };
+                    let _ = tx.send(res);
+                }
+                Job::CloseWrite { handle } => {
+                    writers.remove(&handle);
+                }
+                Job::Mkdir { path, tx } => {
+                    let full = join_path(base_path, &path);
+                    let res = client
+                        .create_directory(&tree, &full)
+                        .await
+                        .map_err(|e| AurisError::Network(format!("mkdir {full}: {e}")));
+                    let _ = tx.send(res);
+                }
             }
         }
     });
@@ -222,7 +334,42 @@ fn respond_err(job: Job, msg: String) {
             let _ = tx.send(Err(AurisError::Network(msg)));
         }
         Job::Close { .. } => {}
+        Job::OpenWrite { tx, .. } => {
+            let _ = tx.send(Err(AurisError::Network(msg)));
+        }
+        Job::WriteChunk { tx, .. } => {
+            let _ = tx.send(Err(AurisError::Network(msg)));
+        }
+        Job::FinishWrite { tx, .. } => {
+            let _ = tx.send(Err(AurisError::Network(msg)));
+        }
+        Job::CloseWrite { .. } => {}
+        Job::Mkdir { tx, .. } => {
+            let _ = tx.send(Err(AurisError::Network(msg)));
+        }
     }
+}
+
+/// Refuse les chemins relatifs qui sortiraient de la racine du partage.
+fn safe_rel(rel: &str) -> Result<String> {
+    let rel = rel.trim_matches('/');
+    for seg in rel.split('/') {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." || seg.contains('\\') || seg.contains(':') {
+            return Err(AurisError::InvalidUri(format!(
+                "chemin relatif invalide: {rel}"
+            )));
+        }
+    }
+    Ok(rel.to_string())
+}
+
+/// True si l'erreur SMB signifie "le dossier existe deja".
+fn is_already_exists(e: &AurisError) -> bool {
+    let m = e.to_string().to_uppercase();
+    m.contains("ALREADY_EXISTS") || m.contains("COLLISION") || m.contains("EXISTS")
 }
 
 fn join_path(base: &str, rel: &str) -> String {
@@ -365,5 +512,72 @@ impl SourceBackend for SmbSource {
             .into_iter()
             .find(|(n, _, is_dir)| *n == name && !is_dir)
             .map(|(_, s, _)| s))
+    }
+
+    fn writable(&self) -> bool {
+        true
+    }
+
+    async fn mkdir_p(&self, rel_path: &str) -> Result<()> {
+        let rel = safe_rel(rel_path)?;
+        let mut prefix = String::new();
+        for seg in rel.split('/') {
+            if seg.is_empty() {
+                continue;
+            }
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(seg);
+            match self.worker.call_mkdir(prefix.clone()) {
+                Ok(()) => {}
+                Err(e) if is_already_exists(&e) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    async fn put(
+        &self,
+        rel_path: &str,
+        mut reader: Box<dyn Read + Send>,
+        _size: Option<u64>,
+    ) -> Result<u64> {
+        let rel = safe_rel(rel_path)?;
+        // cree les parents si besoin
+        if let Some((dir, _)) = rel.rsplit_once('/') {
+            let mut prefix = String::new();
+            for seg in dir.split('/') {
+                if seg.is_empty() {
+                    continue;
+                }
+                if !prefix.is_empty() {
+                    prefix.push('/');
+                }
+                prefix.push_str(seg);
+                if let Err(e) = self.worker.call_mkdir(prefix.clone()) {
+                    if !is_already_exists(&e) {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        let handle = self.worker.call_open_write(rel)?;
+        let mut buf = vec![0u8; MAX_READ as usize];
+        loop {
+            let n = reader.read(&mut buf).map_err(|e| {
+                self.worker.call_close_write(handle);
+                AurisError::other(format!("lecture source: {e}"))
+            })?;
+            if n == 0 {
+                break;
+            }
+            if let Err(e) = self.worker.call_write_chunk(handle, buf[..n].to_vec()) {
+                self.worker.call_close_write(handle);
+                return Err(e);
+            }
+        }
+        self.worker.call_finish_write(handle)
     }
 }

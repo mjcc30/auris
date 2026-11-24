@@ -68,12 +68,23 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
     }));
     updater.spawn_background_check();
 
+    // persistance des sources dans config.toml a chaque modification via l'API
+    let sink_data_dir = data_dir.clone();
+    let sources_sink = Arc::new(move |list: Vec<auris_core::Source>| {
+        let mut cfg = AppConfig::load(Some(sink_data_dir.clone()));
+        cfg.sources = list;
+        if let Err(e) = cfg.save() {
+            tracing::warn!("persistance des sources: {e}");
+        }
+    });
+
     let state = AppState {
         engine,
         library,
         sources,
         updater,
         started_at: chrono::Utc::now().timestamp(),
+        sources_sink: Some(sources_sink),
     };
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)
@@ -88,6 +99,19 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         r = serve(state, addr) => r.context("serveur web"),
         _ = shutdown => { tracing::info!("au revoir"); Ok(()) }
     }
+}
+
+/// Affiche les disques amovibles (USB) détectés, pour créer une source `usb`.
+pub fn list_usb_devices() {
+    let mounts = auris_sources::discover_removable();
+    if mounts.is_empty() {
+        println!("Aucun disque amovible détecté (branchez une clé USB / un disque externe).");
+        return;
+    }
+    for m in mounts {
+        println!("{}  ->  {}", m.label, m.path);
+    }
+    println!("\nAjoutez une source USB depuis l'interface web (Sources & réglages > USB).");
 }
 
 /// Affiche les périphériques de sortie détectés.

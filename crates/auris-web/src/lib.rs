@@ -18,10 +18,12 @@ use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 
-use auris_core::{AurisError, RepeatMode, Source, Track, WsEvent};
+use auris_core::{
+    AurisError, BrowseEntry, Playlist, RepeatMode, Source, Track, WsEvent, ZipWriter,
+};
 use auris_library::Library;
 use auris_player::{AudioOutput, PlayerEngine};
-use auris_sources::SourcesManager;
+use auris_sources::{discover_removable, SourcesManager};
 use auris_updater::Updater;
 
 #[derive(RustEmbed)]
@@ -36,6 +38,17 @@ pub struct AppState {
     pub sources: Arc<SourcesManager>,
     pub updater: Arc<Updater>,
     pub started_at: i64,
+    /// Appele apres chaque modification des sources (ajout/suppression/toggle)
+    /// pour persister la config. `None` = pas de persistance (tests).
+    pub sources_sink: Option<Arc<dyn Fn(Vec<Source>) + Send + Sync>>,
+}
+
+impl AppState {
+    fn persist_sources(&self) {
+        if let Some(sink) = &self.sources_sink {
+            sink(self.sources.list());
+        }
+    }
 }
 
 /// Erreur API -> JSON {"error": ...}.
@@ -107,6 +120,37 @@ struct BrowseQuery {
     uri: String,
 }
 
+#[derive(Deserialize)]
+struct CopyBody {
+    /// URI du fichier ou dossier a copier: `src://<id>/<chemin>`.
+    from: String,
+    /// URI du dossier destination: `src://<id>/<chemin>`.
+    to: String,
+}
+
+#[derive(Deserialize)]
+struct ExportQuery {
+    uri: String,
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PlaylistBody {
+    name: String,
+    /// Si absent: la file d'attente courante est enregistree.
+    track_ids: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct ToggleBody {
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct QueueAddBody {
+    uri: String,
+}
+
 #[derive(Serialize)]
 struct SystemInfo {
     name: &'static str,
@@ -169,6 +213,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/player/shuffle", post(post_shuffle))
         // file d'attente
         .route("/api/queue", get(get_queue).post(post_queue))
+        .route("/api/queue/add", post(post_queue_add))
         .route(
             "/api/queue/clear",
             post(|State(s): State<AppState>| async move {
@@ -189,9 +234,25 @@ pub fn router(state: AppState) -> Router {
         .route("/api/library/scan/status", get(get_scan_status))
         // sources
         .route("/api/sources", get(get_sources).post(post_source))
-        .route("/api/sources/{id}", delete(delete_source))
+        .route(
+            "/api/sources/{id}",
+            delete(delete_source).patch(patch_source),
+        )
         .route("/api/browse", get(get_browse))
+        .route("/api/browse/tree", get(get_browse_tree))
         .route("/api/upnp/discover", get(get_upnp_discover))
+        .route("/api/usb/devices", get(get_usb_devices))
+        // import / export
+        .route("/api/transfer/copy", post(post_copy))
+        .route("/api/export", get(get_export))
+        .route("/api/library/albums/{id}/export", get(get_album_export))
+        // listes de lecture
+        .route("/api/playlists", get(get_playlists).post(post_playlist))
+        .route(
+            "/api/playlists/{id}",
+            get(get_playlist).delete(delete_playlist),
+        )
+        .route("/api/playlists/{id}/play", post(post_playlist_play))
         // audio
         .route("/api/audio/devices", get(get_devices))
         .route("/api/audio/device", post(post_device))
@@ -237,11 +298,39 @@ async fn post_play(
             .ok_or_else(|| AurisError::TrackNotFound(track_id.clone()))?;
         s.engine.play_uri(t.uri);
     } else if let Some(uri) = body.uri {
+        // un dossier est joue en "tout lire": file remplie de ses fichiers audio
+        if let Ok(entry) = s.sources.stat(&uri).await {
+            if entry.is_dir {
+                let tracks = browse_tracks(&s.sources, &uri).await?;
+                if tracks.is_empty() {
+                    return Err(AurisError::other("dossier sans fichier audio".to_string()).into());
+                }
+                s.engine.play_queue(tracks, 0);
+                return Ok(Json(s.engine.state()));
+            }
+        }
         s.engine.play_uri(uri);
     } else {
         return Err(AurisError::InvalidUri("uri, track_id ou queue requis".into()).into());
     }
     Ok(Json(s.engine.state()))
+}
+
+/// Construit des pistes jouables a partir des fichiers audio d'un dossier.
+async fn browse_tracks(sources: &SourcesManager, dir_uri: &str) -> ApiResult<Vec<Track>> {
+    let entries = sources.walk_audio(dir_uri).await?;
+    let mut out = Vec::new();
+    for e in entries {
+        let source_id = auris_sources::parse_src_uri(&e.uri)
+            .map(|(id, _)| id)
+            .unwrap_or_default();
+        let mut t = Track::new(e.uri.clone(), source_id);
+        t.title = e.name.clone();
+        t.size_bytes = e.size;
+        t.finalize_keys();
+        out.push(t);
+    }
+    Ok(out)
 }
 
 async fn post_seek(
@@ -287,6 +376,29 @@ async fn post_queue(
     State(s): State<AppState>,
     Json(t): Json<Track>,
 ) -> ApiResult<Json<auris_core::PlayerState>> {
+    s.engine.enqueue(t);
+    Ok(Json(s.engine.state()))
+}
+
+/// Ajoute un URI (fichier, dossier ou URL) a la file d'attente.
+async fn post_queue_add(
+    State(s): State<AppState>,
+    Json(b): Json<QueueAddBody>,
+) -> ApiResult<Json<auris_core::PlayerState>> {
+    if let Ok(entry) = s.sources.stat(&b.uri).await {
+        if entry.is_dir {
+            for t in browse_tracks(&s.sources, &b.uri).await? {
+                s.engine.enqueue(t);
+            }
+            return Ok(Json(s.engine.state()));
+        }
+    }
+    let source_id = auris_sources::parse_src_uri(&b.uri)
+        .map(|(id, _)| id)
+        .unwrap_or_default();
+    let mut t = Track::new(b.uri.clone(), source_id);
+    t.title = b.uri.rsplit('/').next().unwrap_or(&b.uri).to_string();
+    t.finalize_keys();
     s.engine.enqueue(t);
     Ok(Json(s.engine.state()))
 }
@@ -391,6 +503,7 @@ async fn post_source(
     Json(src): Json<Source>,
 ) -> ApiResult<Json<Source>> {
     s.sources.add(src.clone())?;
+    s.persist_sources();
     Ok(Json(src))
 }
 async fn delete_source(
@@ -398,7 +511,17 @@ async fn delete_source(
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     s.sources.remove(&id)?;
+    s.persist_sources();
     Ok(Json(serde_json::json!({ "removed": id })))
+}
+async fn patch_source(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<ToggleBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    s.sources.set_enabled(&id, b.enabled)?;
+    s.persist_sources();
+    Ok(Json(serde_json::json!({ "id": id, "enabled": b.enabled })))
 }
 async fn get_browse(
     State(s): State<AppState>,
@@ -407,9 +530,204 @@ async fn get_browse(
     let entries = s.sources.browse(&q.uri).await?;
     Ok(Json(entries))
 }
+
+/// Parcours recursif: tous les fichiers audio sous un dossier (ou le fichier
+/// lui-meme si l'URI pointe sur un fichier audio).
+async fn get_browse_tree(
+    State(s): State<AppState>,
+    Query(q): Query<BrowseQuery>,
+) -> ApiResult<Json<Vec<BrowseEntry>>> {
+    let entry = s.sources.stat(&q.uri).await?;
+    let out = if entry.is_dir {
+        s.sources.walk_audio(&q.uri).await?
+    } else if entry.is_audio {
+        vec![entry]
+    } else {
+        Vec::new()
+    };
+    Ok(Json(out))
+}
+
 async fn get_upnp_discover(State(s): State<AppState>) -> Json<serde_json::Value> {
     let devs = s.sources.discover_upnp();
     Json(serde_json::to_value(devs).unwrap_or_default())
+}
+
+/// Disques amovibles (USB) detectes par l'OS.
+async fn get_usb_devices() -> Json<serde_json::Value> {
+    Json(serde_json::to_value(discover_removable()).unwrap_or_default())
+}
+
+/// Copie (import) d'un fichier/dossier d'une source vers un dossier d'une
+/// autre source (ex: NAS -> cle USB).
+async fn post_copy(
+    State(s): State<AppState>,
+    Json(b): Json<CopyBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let report = s.sources.copy(&b.from, &b.to).await?;
+    Ok(Json(serde_json::to_value(report).unwrap_or_default()))
+}
+
+/// Construit l'archive ZIP (stored) d'un URI de source: fichier ou dossier.
+async fn build_zip_from_uri(sources: &SourcesManager, uri: &str) -> ApiResult<Vec<u8>> {
+    let entry = sources.stat(uri).await?;
+    let mut z = ZipWriter::new();
+    if entry.is_dir {
+        // prefixe a retirer pour les noms internes: src://<id>/<dir_rel>/
+        let (src_id, dir_rel) = auris_sources::parse_src_uri(uri)
+            .ok_or_else(|| AurisError::InvalidUri(uri.to_string()))?;
+        let prefix = format!("src://{}/{}/", src_id, dir_rel.trim_matches('/'));
+        let files = sources.walk_all(uri).await?;
+        for f in files {
+            let rel = f.uri.strip_prefix(&prefix).unwrap_or(&f.uri);
+            let name = format!("{}/{}", entry.name, rel);
+            let reader = sources.open_uri(&f.uri).await?;
+            z.add_stream(&name, reader, f.size)
+                .map_err(AurisError::Io)?;
+        }
+    } else {
+        let reader = sources.open_uri(uri).await?;
+        z.add_stream(&entry.name, reader, entry.size)
+            .map_err(AurisError::Io)?;
+    }
+    Ok(z.finish())
+}
+
+/// Nom de fichier ZIP "propre" pour l'en-tete Content-Disposition.
+fn zip_download_name(raw: &str) -> String {
+    let ascii: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || " -_.".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let ascii = ascii.trim_matches('_').to_string();
+    let name = if ascii.is_empty() {
+        "export".to_string()
+    } else {
+        ascii
+    };
+    format!("{name}.zip")
+}
+
+fn zip_response(bytes: Vec<u8>, name: &str) -> Response {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/zip"),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{name}\"").as_str(),
+            ),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+/// Export ZIP d'un fichier ou dossier d'une source (telechargement).
+async fn get_export(
+    State(s): State<AppState>,
+    Query(q): Query<ExportQuery>,
+) -> ApiResult<Response> {
+    let bytes = build_zip_from_uri(&s.sources, &q.uri).await?;
+    let base = s
+        .sources
+        .stat(&q.uri)
+        .await
+        .map(|e| e.name)
+        .unwrap_or_else(|_| "export".into());
+    let name = q
+        .name
+        .map(|n| format!("{n}.zip"))
+        .unwrap_or_else(|| zip_download_name(&base));
+    Ok(zip_response(bytes, &name))
+}
+
+/// Export ZIP d'un album de la bibliotheque (toutes ses pistes).
+async fn get_album_export(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Response> {
+    let (album, tracks) = s
+        .library
+        .album(&id)
+        .ok_or_else(|| AurisError::AlbumNotFound(id.clone()))?;
+    let mut z = ZipWriter::new();
+    for t in &tracks {
+        let file_name = t.uri.rsplit('/').next().unwrap_or(&t.uri).to_string();
+        let name = format!("{} - {}/{}", album.artist, album.title, file_name);
+        let reader = s.sources.open_uri(&t.uri).await?;
+        z.add_stream(&name, reader, t.size_bytes)
+            .map_err(AurisError::Io)?;
+    }
+    let name = zip_download_name(&format!("{} - {}", album.artist, album.title));
+    Ok(zip_response(z.finish(), &name))
+}
+
+// ---------- listes de lecture ----------
+
+async fn get_playlists(State(s): State<AppState>) -> Json<Vec<Playlist>> {
+    Json(s.library.playlists())
+}
+
+async fn post_playlist(
+    State(s): State<AppState>,
+    Json(b): Json<PlaylistBody>,
+) -> ApiResult<Json<Playlist>> {
+    let ids = match b.track_ids {
+        Some(ids) => ids,
+        None => {
+            // sauvegarde de la file d'attente: les pistes hors scan y sont indexees
+            let queue = s.engine.state().queue;
+            for t in &queue {
+                s.library.upsert_track(t)?;
+            }
+            queue.iter().map(|t| t.id.clone()).collect()
+        }
+    };
+    let p = s.library.create_playlist(&b.name, ids)?;
+    Ok(Json(p))
+}
+
+async fn get_playlist(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let (p, tracks) = s
+        .library
+        .playlist(&id)
+        .ok_or_else(|| AurisError::other(format!("playlist introuvable: {id}")))?;
+    Ok(Json(serde_json::json!({ "playlist": p, "tracks": tracks })))
+}
+
+async fn delete_playlist(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    if !s.library.delete_playlist(&id)? {
+        return Err(AurisError::other(format!("playlist introuvable: {id}")).into());
+    }
+    Ok(Json(serde_json::json!({ "removed": id })))
+}
+
+async fn post_playlist_play(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<auris_core::PlayerState>> {
+    let (_, tracks) = s
+        .library
+        .playlist(&id)
+        .ok_or_else(|| AurisError::other(format!("playlist introuvable: {id}")))?;
+    if tracks.is_empty() {
+        return Err(AurisError::other("playlist vide".to_string()).into());
+    }
+    s.engine.play_queue(tracks, 0);
+    Ok(Json(s.engine.state()))
 }
 
 async fn get_devices() -> Json<Vec<auris_core::AudioDeviceInfo>> {

@@ -68,6 +68,40 @@ export interface BrowseEntry {
   is_audio: boolean;
 }
 
+export interface MountInfo {
+  label: string;
+  path: string;
+}
+
+export interface CopyReport {
+  files: number;
+  bytes: number;
+  dirs: number;
+  errors: string[];
+}
+
+export interface Playlist {
+  id: string;
+  name: string;
+  track_ids: string[];
+  created_at: number;
+}
+
+export interface PlaylistDetail {
+  playlist: Playlist;
+  tracks: Track[];
+}
+
+/** Construit un objet Source sérialisable côté backend (serde taggé). */
+export function makeSource(
+  id: string,
+  name: string,
+  kind: "local" | "usb" | "smb" | "http" | "radio" | "upnp",
+  fields: Record<string, unknown>,
+): Source {
+  return { id, name, enabled: true, kind, ...fields };
+}
+
 export interface AudioDevice {
   name: string;
   is_default: boolean;
@@ -127,6 +161,8 @@ export const api = {
   shuffle: (enabled: boolean) => req<PlayerState>("/api/player/shuffle", post({ enabled })),
   queue: () => req<Track[]>("/api/queue"),
   clearQueue: () => req<unknown>("/api/queue/clear", post({})),
+  queueAdd: (uri: string) => req<PlayerState>("/api/queue/add", post({ uri })),
+  removeQueueItem: (index: number) => req<PlayerState>(`/api/queue/${index}`, del()),
   tracks: () => req<Track[]>("/api/library/tracks"),
   albums: () => req<Album[]>("/api/library/albums"),
   artists: () => req<Artist[]>("/api/library/artists"),
@@ -135,7 +171,26 @@ export const api = {
   scanStatus: () => req<unknown>("/api/library/scan/status"),
   sources: () => req<Source[]>("/api/sources"),
   addSource: (s: Source) => req<Source>("/api/sources", post(s)),
+  deleteSource: (id: string) => req<unknown>(`/api/sources/${encodeURIComponent(id)}`, del()),
+  toggleSource: (id: string, enabled: boolean) =>
+    req<unknown>(`/api/sources/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    }),
   browse: (uri: string) => req<BrowseEntry[]>(`/api/browse?uri=${encodeURIComponent(uri)}`),
+  browseTree: (uri: string) => req<BrowseEntry[]>(`/api/browse/tree?uri=${encodeURIComponent(uri)}`),
+  usbDevices: () => req<MountInfo[]>("/api/usb/devices"),
+  copy: (from: string, to: string) => req<CopyReport>("/api/transfer/copy", post({ from, to })),
+  exportUrl: (uri: string, name?: string) =>
+    `/api/export?uri=${encodeURIComponent(uri)}${name ? `&name=${encodeURIComponent(name)}` : ""}`,
+  albumExportUrl: (albumId: string) => `/api/library/albums/${encodeURIComponent(albumId)}/export`,
+  playlists: () => req<Playlist[]>("/api/playlists"),
+  addPlaylist: (name: string, trackIds?: string[]) =>
+    req<Playlist>("/api/playlists", post({ name, track_ids: trackIds })),
+  playlist: (id: string) => req<PlaylistDetail>(`/api/playlists/${encodeURIComponent(id)}`),
+  deletePlaylist: (id: string) => req<unknown>(`/api/playlists/${encodeURIComponent(id)}`, del()),
+  playPlaylist: (id: string) => req<PlayerState>(`/api/playlists/${encodeURIComponent(id)}/play`, post({})),
   devices: () => req<AudioDevice[]>("/api/audio/devices"),
   selectDevice: (name: string | null) => req<PlayerState>("/api/audio/device", post({ name })),
   system: () => req<SystemInfo>("/api/system/info"),
@@ -149,6 +204,10 @@ function post(body: unknown): RequestInit {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   };
+}
+
+function del(): RequestInit {
+  return { method: "DELETE" };
 }
 
 export function fmtTime(secs: number): string {

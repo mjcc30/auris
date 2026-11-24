@@ -19,6 +19,8 @@ pub enum Command {
     Update,
     /// Liste les peripheriques de sortie audio (DAC) detectes.
     AudioDevices,
+    /// Liste les disques amovibles (cles USB, disques externes) detectes.
+    UsbDevices,
     /// Affiche la version.
     Version,
 }

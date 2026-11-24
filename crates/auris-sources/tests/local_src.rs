@@ -7,11 +7,14 @@ use auris_sources::local::{walk_audio_files, LocalSource};
 use auris_sources::SourceBackend;
 
 fn unique_tmp(tag: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("auris-{tag}-{}-{nanos}", std::process::id()))
+    std::env::temp_dir().join(format!("auris-{tag}-{}-{nanos}-{n}", std::process::id()))
 }
 
 #[tokio::test]

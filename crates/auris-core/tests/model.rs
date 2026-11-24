@@ -1,6 +1,6 @@
 //! Tests du modele de donnees (auris-core).
 
-use auris_core::{is_audio_file, AudioFormat, Source, SourceKind, Track};
+use auris_core::{is_audio_file, AudioFormat, Playlist, Source, SourceKind, Track};
 
 #[test]
 fn audio_extensions_reconnues() {
@@ -82,6 +82,50 @@ fn source_smb_json_roundtrip() {
         }
         other => panic!("kind inattendu: {other:?}"),
     }
+}
+
+#[test]
+fn source_usb_et_radio_json_roundtrip() {
+    let usb = Source::new_usb("Clé USB", "E:\\");
+    let json = serde_json::to_string(&usb).unwrap();
+    assert!(json.contains("\"kind\":\"usb\""), "{json}");
+    let back: Source = serde_json::from_str(&json).unwrap();
+    assert!(matches!(&back.kind, SourceKind::Usb { path } if path == "E:\\"));
+    assert!(back.kind.is_writable());
+
+    let radio = Source::new_radio("FIP", "https://icecast.radiofrance.fr/fip-hifi.aac");
+    let json = serde_json::to_string(&radio).unwrap();
+    assert!(json.contains("\"kind\":\"radio\""), "{json}");
+    let back: Source = serde_json::from_str(&json).unwrap();
+    assert!(matches!(&back.kind, SourceKind::Radio { url } if url.contains("fip")));
+    assert!(!back.kind.is_writable());
+
+    // les autres kinds
+    assert!(SourceKind::Local { path: "/x".into() }.is_writable());
+    assert!(SourceKind::Smb {
+        host: "h".into(),
+        share: "s".into(),
+        user: "u".into(),
+        password: "p".into(),
+        base_path: String::new()
+    }
+    .is_writable());
+    assert!(!SourceKind::Http { base_url: None }.is_writable());
+    assert!(!SourceKind::Upnp { url: "u".into() }.is_writable());
+}
+
+#[test]
+fn playlist_json_roundtrip() {
+    let p = Playlist {
+        id: "pl-1".into(),
+        name: "Soirée DSD".into(),
+        track_ids: vec!["t1".into(), "t2".into()],
+        created_at: 1_800_000_000,
+    };
+    let json = serde_json::to_string(&p).unwrap();
+    let back: Playlist = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.name, "Soirée DSD");
+    assert_eq!(back.track_ids.len(), 2);
 }
 
 #[test]

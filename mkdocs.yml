@@ -25,6 +25,7 @@ nav:
   - Guide:
       - Spécifications: SPECIFICATIONS.md
       - Fonctionnalités: FEATURES.md
+      - Sources & import/export: SOURCES.md
       - User stories: USER_STORIES.md
       - Roadmap: ROADMAP.md
   - Développeurs:

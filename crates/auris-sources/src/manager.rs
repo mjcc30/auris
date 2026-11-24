@@ -6,8 +6,10 @@ use std::sync::{Arc, RwLock};
 use auris_core::{AurisError, BrowseEntry, Result, Source, SourceKind};
 
 use crate::http::HttpSource;
-use crate::local::LocalSource;
+use crate::local::{LocalSource, UsbSource};
+use crate::radio::RadioSource;
 use crate::smb::SmbSource;
+use crate::transfer::{copy_uri, join_rel, CopyReport};
 use crate::upnp::{self, UpnpDevice};
 use crate::{resolve_uri, SeekRead, SourceBackend, UriRef};
 
@@ -31,7 +33,16 @@ impl SourcesManager {
             backends: RwLock::new(HashMap::new()),
             http,
         };
+        // Un config historique peut contenir des doublons d'id: la dernière occurrence gagne.
+        let mut dedup: Vec<Source> = Vec::new();
         for s in sources {
+            if let Some(pos) = dedup.iter().position(|x| x.id == s.id) {
+                dedup[pos] = s;
+            } else {
+                dedup.push(s);
+            }
+        }
+        for s in dedup {
             mgr.add(s)?;
         }
         Ok(mgr)
@@ -40,9 +51,11 @@ impl SourcesManager {
     fn build_backend(src: &Source) -> Result<Arc<dyn SourceBackend>> {
         match &src.kind {
             SourceKind::Local { .. } => Ok(Arc::new(LocalSource::new(src.clone())?)),
+            SourceKind::Usb { .. } => Ok(Arc::new(UsbSource::new(src.clone())?)),
             SourceKind::Smb { .. } => Ok(Arc::new(SmbSource::new(src.clone())?)),
             SourceKind::Http { .. } => Ok(Arc::new(HttpSource::new(src.clone())?)),
             SourceKind::Upnp { .. } => Ok(Arc::new(HttpSource::new(src.clone())?)), // UPnP = browse + lecture http
+            SourceKind::Radio { .. } => Ok(Arc::new(RadioSource::new(src.clone())?)),
         }
     }
 
@@ -60,6 +73,18 @@ impl SourcesManager {
     }
 
     pub fn add(&self, source: Source) -> Result<()> {
+        if self
+            .sources
+            .read()
+            .unwrap()
+            .iter()
+            .any(|s| s.id == source.id)
+        {
+            return Err(AurisError::other(format!(
+                "une source avec l'id '{}' existe déjà",
+                source.id
+            )));
+        }
         let backend = Self::build_backend(&source)?;
         self.backends
             .write()
@@ -77,6 +102,17 @@ impl SourcesManager {
         if s.len() == before {
             return Err(AurisError::SourceNotFound(id.to_string()));
         }
+        Ok(())
+    }
+
+    /// Active/desactive une source (le backend reste instancie).
+    pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<()> {
+        let mut s = self.sources.write().unwrap();
+        let src = s
+            .iter_mut()
+            .find(|x| x.id == id)
+            .ok_or_else(|| AurisError::SourceNotFound(id.to_string()))?;
+        src.enabled = enabled;
         Ok(())
     }
 
@@ -146,5 +182,89 @@ impl SourcesManager {
 
     pub fn http_source(&self) -> Arc<HttpSource> {
         self.http.clone()
+    }
+
+    /// `stat` d'un URI `src://id/chemin`: retrouve l'entree en listant le parent.
+    /// La racine ("" ) est un dossier virtuel nomme d'apres la source.
+    pub async fn stat(&self, uri: &str) -> Result<BrowseEntry> {
+        let (source_id, path) =
+            crate::parse_src_uri(uri).ok_or_else(|| AurisError::InvalidUri(uri.into()))?;
+        let src = self
+            .get(&source_id)
+            .ok_or_else(|| AurisError::SourceNotFound(source_id.clone()))?;
+        let rel = path.trim_matches('/');
+        if rel.is_empty() {
+            return Ok(BrowseEntry {
+                name: src.name.clone(),
+                uri: uri.to_string(),
+                is_dir: true,
+                size: None,
+                format: None,
+                is_audio: false,
+            });
+        }
+        let (dir, name) = match rel.rsplit_once('/') {
+            Some((d, n)) => (d.to_string(), n.to_string()),
+            None => (String::new(), rel.to_string()),
+        };
+        let entries = self.browse(&crate::make_uri(&source_id, &dir)).await?;
+        entries
+            .into_iter()
+            .find(|e| e.name == name)
+            .ok_or_else(|| AurisError::InvalidUri(format!("entree introuvable: {uri}")))
+    }
+
+    /// Parcours recursif d'un dossier de source: tous les fichiers audio
+    /// (utile pour "tout lire" un dossier depuis l'explorateur).
+    pub async fn walk_audio(&self, uri: &str) -> Result<Vec<BrowseEntry>> {
+        let all = self.walk_all(uri).await?;
+        Ok(all.into_iter().filter(|e| e.is_audio).collect())
+    }
+
+    /// Parcours recursif d'un dossier de source: tous les fichiers (audio ou non,
+    /// utile pour l'export ZIP d'un dossier complet avec pochettes).
+    pub async fn walk_all(&self, uri: &str) -> Result<Vec<BrowseEntry>> {
+        let mut out = Vec::new();
+        let mut stack = vec![(uri.to_string(), 0usize)];
+        while let Some((u, depth)) = stack.pop() {
+            if depth > 12 {
+                continue;
+            }
+            match self.browse(&u).await {
+                Ok(entries) => {
+                    for e in entries {
+                        if e.is_dir {
+                            stack.push((e.uri.clone(), depth + 1));
+                        } else {
+                            out.push(e);
+                        }
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!("walk_all {u}: {err}");
+                }
+            }
+        }
+        out.sort_by(|a, b| a.uri.cmp(&b.uri));
+        Ok(out)
+    }
+
+    /// Copie un fichier ou un dossier d'une source vers un dossier d'une
+    /// autre source (import). `to` = dossier destination `src://dst/...`.
+    pub async fn copy(&self, from: &str, to: &str) -> Result<CopyReport> {
+        copy_uri(self, from, to).await
+    }
+
+    /// Liste les sources vers lesquelles on peut copier (ecritables).
+    pub fn writable_sources(&self) -> Vec<Source> {
+        self.list()
+            .into_iter()
+            .filter(|s| s.kind.is_writable() && s.enabled)
+            .collect()
+    }
+
+    /// Chemin relatif d'un URI src:// par rapport a une racine de dossier.
+    pub fn rel_join(dir: &str, name: &str) -> String {
+        join_rel(dir, name)
     }
 }
