@@ -138,11 +138,14 @@ function Library({ playTrack, playAll, say, refresh }: { playTrack: (t: Track) =
     if (!q.trim()) { api.tracks().then(setTracks); return; }
     setTracks(await api.search(q));
   };
-  const scan = async (sourceId: string) => {
+  const scan = async (sourceId?: string) => {
     setScanning(true);
     try {
-      await api.scan(sourceId);
-      say(`Scan de ${sourceId} lancé`);
+      // sans argument: scan de la première source active
+      const id = sourceId ?? (await api.sources()).find((s) => s.enabled)?.id;
+      if (!id) { say("Aucune source active"); setScanning(false); return; }
+      await api.scan(id);
+      say(`Scan de ${id} lancé`);
       setTimeout(() => { refresh(); setScanning(false); }, 1500);
     } catch (e) { say(e instanceof Error ? e.message : String(e)); setScanning(false); }
   };
@@ -153,7 +156,7 @@ function Library({ playTrack, playAll, say, refresh }: { playTrack: (t: Track) =
         <input type="text" placeholder="Rechercher un titre, un artiste…" value={q}
           onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} style={{ flex: 1, maxWidth: 420 }} />
         <button className="btn ghost" onClick={doSearch}>Rechercher</button>
-        <button className="btn" disabled={scanning} onClick={() => scan("local1")}>{scanning ? "Scan…" : "Scanner la source locale"}</button>
+        <button className="btn" disabled={scanning} onClick={() => scan()}>{scanning ? "Scan…" : "Scanner la source"}</button>
       </div>
       <div className="searchbar">
         {(["tracks", "albums", "artists"] as const).map((t) => (
