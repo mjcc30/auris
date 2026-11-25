@@ -569,3 +569,14 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-w
 .eq-band input[type="range"] { width: 100%; }
 .eq-gain { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .eq-freq { font-size: 12px; font-weight: 600; }
+
+/* Pochette de dossier dans Parcourir (liste) */
+.row-ico img { width: 20px; height: 20px; border-radius: 4px; object-fit: cover; display: block; }
+
+/* Page artiste */
+.artist-head { display: flex; gap: 16px; align-items: center; margin: 12px 0 20px; }
+.cover.big { width: 96px; height: 96px; border-radius: 12px; overflow: hidden; flex: none; }
+
+/* Ligne cliquable (artistes) */
+tr.link { cursor: pointer; }
+tr.link:hover { background: var(--hover, rgba(255,255,255,0.06)); }

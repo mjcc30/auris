@@ -297,6 +297,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/browse", get(get_browse))
         .route("/api/browse/tree", get(get_browse_tree))
+        .route("/api/browse/cover", get(get_browse_cover))
         .route("/api/upnp/discover", get(get_upnp_discover))
         .route("/api/usb/devices", get(get_usb_devices))
         // import / export
@@ -573,9 +574,16 @@ async fn get_artist(
         .library
         .artist(&id)
         .ok_or_else(|| AurisError::ArtistNotFound(id.clone()))?;
-    Ok(Json(
-        serde_json::json!({ "artist": artist, "albums": albums }),
-    ))
+    let tracks = s.library.artist_tracks(&id).unwrap_or_default();
+    Ok(Json(serde_json::json!({
+        "artist": artist,
+        "albums": albums,
+        "tracks": tracks,
+        "cover_url": albums
+            .iter()
+            .find_map(|a| a.cover_track_id.as_ref())
+            .map(|c| format!("/api/library/cover/{c}")),
+    })))
 }
 async fn get_search(
     State(s): State<AppState>,
@@ -681,6 +689,107 @@ async fn get_browse_tree(
         Vec::new()
     };
     Ok(Json(out))
+}
+
+/// Extensions image reconnues pour la pochette d'un dossier.
+const COVER_EXTS: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
+/// Noms de fichiers pochette prioritaires (cover.jpg, folder.jpg...).
+const COVER_NAMES: [&str; 6] = ["cover", "folder", "front", "albumart", "art", "thumb"];
+
+/// Content-Type d'une image, deviné depuis les octets magiques puis l'extension.
+fn content_type_for_image(name: &str, bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return "image/jpeg";
+    }
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return "image/png";
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return "image/webp";
+    }
+    match name
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "webp" => "image/webp",
+        _ => "image/jpeg",
+    }
+}
+
+/// Pochette d'un dossier (vue Parcourir): fichier image du dossier
+/// (cover.jpg, folder.jpg...), sinon pochette embarquee du premier fichier
+/// audio. `None` si aucune.
+async fn browse_cover(
+    sources: &SourcesManager,
+    uri: &str,
+) -> auris_core::Result<Option<(Vec<u8>, &'static str)>> {
+    use std::io::Read as _;
+    let entries = sources.browse(uri).await?;
+    let files: Vec<&BrowseEntry> = entries.iter().filter(|e| !e.is_dir).collect();
+    let ext_of =
+        |e: &BrowseEntry| -> String { e.name.rsplit('.').next().unwrap_or("").to_lowercase() };
+    let img = COVER_NAMES
+        .iter()
+        .find_map(|want| {
+            files.iter().copied().find(|e| {
+                let lower = e.name.to_lowercase();
+                let stem = lower.rsplit('.').next().unwrap_or(lower.as_str());
+                stem == *want && COVER_EXTS.contains(&ext_of(e).as_str())
+            })
+        })
+        .or_else(|| {
+            files
+                .iter()
+                .copied()
+                .find(|e| COVER_EXTS.contains(&ext_of(e).as_str()))
+        });
+    if let Some(e) = img {
+        let r = sources.open_uri(&e.uri).await?;
+        let mut buf = Vec::new();
+        std::io::Read::take(r, 15 * 1024 * 1024)
+            .read_to_end(&mut buf)
+            .map_err(|e| AurisError::other(format!("lecture pochette: {e}")))?;
+        let ct = content_type_for_image(&e.name, &buf);
+        return Ok(Some((buf, ct)));
+    }
+    let audio = files
+        .iter()
+        .copied()
+        .filter(|e| e.is_audio)
+        .min_by_key(|e| e.name.to_lowercase());
+    if let Some(e) = audio {
+        let ext = ext_of(e);
+        let r = sources.open_uri(&e.uri).await?;
+        if let Ok((meta, _, _)) = auris_player::probe_meta(r, &ext) {
+            if let Some(c) = meta.cover {
+                let ct = content_type_for_image(&e.name, &c);
+                return Ok(Some((c, ct)));
+            }
+        }
+    }
+    Ok(None)
+}
+
+async fn get_browse_cover(State(s): State<AppState>, Query(q): Query<BrowseQuery>) -> Response {
+    match browse_cover(&s.sources, &q.uri).await {
+        Ok(Some((bytes, ct))) => {
+            (StatusCode::OK, [(header::CONTENT_TYPE, ct)], bytes).into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "pas de pochette pour ce dossier"})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 async fn get_upnp_discover(State(s): State<AppState>) -> Json<serde_json::Value> {

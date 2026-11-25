@@ -36,6 +36,13 @@ export interface Artist {
   album_count: number;
 }
 
+export interface ArtistDetail {
+  artist: Artist;
+  albums: Album[];
+  tracks: Track[];
+  cover_url: string | null;
+}
+
 export interface PlayerState {
   status: "stopped" | "playing" | "paused";
   current: Track | null;
@@ -248,6 +255,7 @@ export const api = {
   tracks: () => req<Track[]>("/api/library/tracks"),
   albums: () => req<Album[]>("/api/library/albums"),
   artists: () => req<Artist[]>("/api/library/artists"),
+  artist: (id: string) => req<ArtistDetail>(`/api/library/artists/${encodeURIComponent(id)}`),
   search: (q: string) => req<Track[]>(`/api/library/search?q=${encodeURIComponent(q)}`),
   scan: (sourceId: string) => req<unknown>("/api/library/scan", post({ source_id: sourceId })),
   scanStatus: () => req<unknown>("/api/library/scan/status"),

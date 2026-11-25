@@ -114,20 +114,41 @@ enum Stash {
 }
 
 pub struct AudioOutput {
-    device: Device,
+    /// `None` = sortie « navigateur uniquement » (aucun périphérique cpal).
+    device: Option<Device>,
     device_name: String,
     stream: Option<Stream>,
+    drain_stop: Option<Arc<AtomicBool>>,
+    drain: Option<std::thread::JoinHandle<()>>,
+    paused: Arc<AtomicBool>,
 }
 
 impl AudioOutput {
-    /// Liste les peripheriques de sortie (DAC) avec leurs capacites.
+    /// Liste les peripheriques de sortie (DAC) de TOUS les hosts cpal
+    /// (WASAPI + autres sous Windows, ALSA + autres sous Linux...), sans
+    /// doublons: un DAC USB branche apres le demarrage apparait ainsi dans
+    /// la liste meme s'il n'etait pas present au lancement.
     pub fn devices() -> Vec<AudioDeviceInfo> {
-        let host = cpal::default_host();
-        let default_name = host.default_output_device().and_then(|d| dev_name(&d));
-        let mut out = Vec::new();
-        if let Ok(devices) = host.output_devices() {
+        let mut out: Vec<AudioDeviceInfo> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut defaults: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for host_id in cpal::ALL_HOSTS {
+            let Ok(host) = cpal::host_from_id(*host_id) else {
+                continue;
+            };
+            if let Some(d) = host.default_output_device() {
+                if let Some(n) = dev_name(&d) {
+                    defaults.insert(n);
+                }
+            }
+            let Ok(devices) = host.output_devices() else {
+                continue;
+            };
             for d in devices {
                 let name = dev_name(&d).unwrap_or_else(|| "Peripherique inconnu".into());
+                if !seen.insert(name.clone()) {
+                    continue;
+                }
                 let mut rates: Vec<u32> = Vec::new();
                 let mut supports_i24 = false;
                 let mut supports_f32 = false;
@@ -148,7 +169,7 @@ impl AudioOutput {
                 rates.dedup();
                 out.push(AudioDeviceInfo {
                     name: name.clone(),
-                    is_default: default_name.as_deref() == Some(name.as_str()),
+                    is_default: defaults.contains(&name),
                     sample_rates: rates,
                     supports_i24,
                     supports_f32,
@@ -177,14 +198,46 @@ impl AudioOutput {
         };
         let name = dev_name(&device).unwrap_or_else(|| "default".into());
         Ok(AudioOutput {
-            device,
+            device: Some(device),
             device_name: name,
             stream: None,
+            drain_stop: None,
+            drain: None,
+            paused: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// Sortie « navigateur uniquement » (Jouer ici) utilisee quand aucun
+    /// peripherique audio local n'est disponible (ex: binaire WSL sans DAC
+    /// visible): le PCM post-gain est forwardé au navigateur via WebSocket,
+    /// sans passer par cpal.
+    pub fn browser_only(name: &str) -> Self {
+        AudioOutput {
+            device: None,
+            device_name: name.to_string(),
+            stream: None,
+            drain_stop: None,
+            drain: None,
+            paused: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     pub fn name(&self) -> &str {
         &self.device_name
+    }
+
+    /// True si un vrai peripherique cpal est attache (false = navigateur seul).
+    pub fn has_device(&self) -> bool {
+        self.device.is_some()
+    }
+
+    fn stop_drain(&mut self) {
+        if let Some(stop) = self.drain_stop.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+        if let Some(h) = self.drain.take() {
+            let _ = h.join();
+        }
     }
 
     /// Construit (et remplace) le flux de sortie pour un spec donne.
@@ -207,8 +260,16 @@ impl AudioOutput {
         eq: Arc<std::sync::RwLock<EqConfig>>,
     ) -> Result<()> {
         self.stream = None; // stoppe l'ancien flux
-        let configs: Vec<SupportedStreamConfigRange> = self
-            .device
+        self.stop_drain();
+        if self.device.is_none() {
+            // Pas de peripherique cpal: flux « Jouer ici » vers le navigateur.
+            return self.build_browser_stream(
+                spec, cons, volume, muted, frames_out, gen, max_volume, curve, vol_mode, out_mode,
+                browser_tx, eq,
+            );
+        }
+        let device = self.device.as_ref().unwrap();
+        let configs: Vec<SupportedStreamConfigRange> = device
             .supported_output_configs()
             .map_err(|e| AurisError::Output(e.to_string()))?
             .collect();
@@ -286,8 +347,7 @@ impl AudioOutput {
                 let mut stash: Option<Stash> = None;
                 // EQ paramétrique : la chaîne est reconstruite à chaud si la config change.
                 let mut eq_proc = EqProcessor::new();
-                let stream = self
-                    .device
+                let stream = device
                     .build_output_stream::<$t, _, _>(
                         stream_config.clone(),
                         move |data: &mut [$t], _info| {
@@ -417,18 +477,122 @@ impl AudioOutput {
         Ok(())
     }
 
+    /// Flux « navigateur uniquement »: un thread drain l'anneau a cadence
+    /// temps reel, applique EQ + gain, et forward le PCM f32 au navigateur.
+    /// Le thread est rythme sur l'horloge reelle pour ne pas inonder le
+    /// buffer du navigateur.
+    #[allow(clippy::too_many_arguments)]
+    fn build_browser_stream(
+        &mut self,
+        spec: &OutputSpec,
+        mut cons: Cons,
+        volume: Arc<AtomicU8>,
+        muted: Arc<AtomicBool>,
+        frames_out: Arc<AtomicU64>,
+        gen: Arc<AtomicU64>,
+        max_volume: Arc<AtomicU8>,
+        curve: Arc<AtomicU8>,
+        vol_mode: Arc<AtomicU8>,
+        _out_mode: Arc<AtomicU8>,
+        browser_tx: broadcast::Sender<BrowserFrame>,
+        eq: Arc<std::sync::RwLock<EqConfig>>,
+    ) -> Result<()> {
+        let src_channels = spec.channels as usize;
+        let rate = spec.rate.max(1);
+        // Le flux navigateur ne transporte que du PCM f32 (pas de trames DoP).
+        let forward_pcm = !spec.is_dsd_dop;
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop2 = stop.clone();
+        let paused = self.paused.clone();
+        let handle = std::thread::Builder::new()
+            .name("auris-browser".into())
+            .spawn(move || {
+                let start = std::time::Instant::now();
+                let mut eq_proc = EqProcessor::new();
+                let mut sent: u64 = 0;
+                loop {
+                    if stop2.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if paused.load(Ordering::Relaxed) {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        continue;
+                    }
+                    match cons.try_pop() {
+                        Some(chunk) if chunk.gen == gen.load(Ordering::Relaxed) => {
+                            let frames = match &chunk.data {
+                                ChunkData::F32(v) => (v.len() / src_channels.max(1)) as u64,
+                                ChunkData::I24Dop(v) => (v.len() / src_channels.max(1)) as u64,
+                            };
+                            frames_out.fetch_add(frames, Ordering::Relaxed);
+                            if forward_pcm {
+                                if let ChunkData::F32(v) = chunk.data {
+                                    let eq_cfg = eq.read().unwrap();
+                                    let gain = compute_gain(
+                                        volume.load(Ordering::Relaxed),
+                                        max_volume.load(Ordering::Relaxed),
+                                        curve.load(Ordering::Relaxed),
+                                        vol_mode.load(Ordering::Relaxed),
+                                        muted.load(Ordering::Relaxed),
+                                    );
+                                    let mut pcm = Vec::with_capacity(v.len());
+                                    for f in 0..frames as usize {
+                                        for c in 0..src_channels {
+                                            let s = eq_proc.process(
+                                                &eq_cfg,
+                                                rate,
+                                                src_channels,
+                                                c,
+                                                v[f * src_channels + c],
+                                            );
+                                            pcm.push(s * gain);
+                                        }
+                                    }
+                                    // send() non bloquant; Err si aucun client.
+                                    let _ = browser_tx.send(BrowserFrame::Pcm(pcm.into()));
+                                }
+                                // ChunkData::I24Dop: consomme sans forwarder.
+                            }
+                            sent += frames;
+                            let target = start
+                                + std::time::Duration::from_secs_f64(sent as f64 / rate as f64);
+                            let now = std::time::Instant::now();
+                            if target > now {
+                                std::thread::sleep(target - now);
+                            }
+                        }
+                        Some(_) => continue, // generation perimee (seek)
+                        None => std::thread::sleep(std::time::Duration::from_millis(5)),
+                    }
+                }
+            })
+            .map_err(|e| AurisError::other(format!("spawn drain navigateur: {e}")))?;
+        self.drain_stop = Some(stop);
+        self.drain = Some(handle);
+        Ok(())
+    }
+
     pub fn pause(&mut self) {
+        self.paused.store(true, Ordering::Relaxed);
         if let Some(s) = &self.stream {
             let _ = s.pause();
         }
     }
     pub fn resume(&mut self) {
+        self.paused.store(false, Ordering::Relaxed);
         if let Some(s) = &self.stream {
             let _ = s.play();
         }
     }
     pub fn stop(&mut self) {
         self.stream = None;
+        self.stop_drain();
+    }
+}
+
+impl Drop for AudioOutput {
+    fn drop(&mut self) {
+        self.stop_drain();
     }
 }
 
@@ -457,6 +621,7 @@ pub fn compute_gain(volume: u8, max_volume: u8, curve: u8, vol_mode: u8, muted: 
 #[cfg(test)]
 mod tests {
     use super::compute_gain;
+    use ringbuf::traits::Producer;
 
     #[test]
     fn logiciel_log_par_defaut() {
@@ -486,5 +651,120 @@ mod tests {
     #[test]
     fn mute_coupe_en_logiciel() {
         assert_eq!(compute_gain(80, 100, 0, 0, true), 0.0);
+    }
+
+    #[test]
+    fn browser_only_forward_pcm_sans_peripherique() {
+        use super::*;
+        use crate::decoder::{Chunk, ChunkData, OutputSpec};
+        use crate::eq::EqConfig;
+        use std::sync::atomic::AtomicU8;
+
+        // Sortie « navigateur uniquement »: aucun device cpal requis.
+        let mut out = AudioOutput::browser_only("Navigateur (Jouer ici)");
+        assert!(!out.has_device());
+        let (mut prod, cons) = make_ring(8);
+        let (browser_tx, mut browser_rx) = broadcast::channel::<BrowserFrame>(16);
+        let spec = OutputSpec {
+            rate: 44100,
+            channels: 2,
+            is_dsd_dop: false,
+        };
+        let frames_out = Arc::new(AtomicU64::new(0));
+        let gen = Arc::new(AtomicU64::new(7));
+        let eq = Arc::new(std::sync::RwLock::new(EqConfig {
+            enabled: false,
+            bands: Vec::new(),
+            version: 0,
+        }));
+        out.build_stream(
+            &spec,
+            cons,
+            Arc::new(AtomicU8::new(100)),
+            Arc::new(AtomicBool::new(false)),
+            frames_out.clone(),
+            gen.clone(),
+            Arc::new(AtomicU8::new(100)),
+            Arc::new(AtomicU8::new(0)),
+            Arc::new(AtomicU8::new(0)),
+            Arc::new(AtomicU8::new(1)),
+            browser_tx,
+            eq,
+        )
+        .unwrap();
+        // 4 frames stereo, gen courante
+        prod.try_push(Chunk {
+            gen: 7,
+            data: ChunkData::F32(vec![0.5, -0.5, 0.25, -0.25, 1.0, -1.0, 0.0, 0.0]),
+        })
+        .unwrap();
+        match browser_rx.blocking_recv() {
+            Ok(BrowserFrame::Pcm(samples)) => {
+                assert_eq!(samples.len(), 8);
+                assert!((samples[0] - 0.5).abs() < 1e-6); // 0.5 * gain 100% = 0.5
+            }
+            other => panic!("frame inattendu: {other:?}"),
+        }
+        // la generation perimee est ignoree
+        prod.try_push(Chunk {
+            gen: 6,
+            data: ChunkData::F32(vec![9.0; 4]),
+        })
+        .unwrap();
+        prod.try_push(Chunk {
+            gen: 7,
+            data: ChunkData::F32(vec![0.1; 4]),
+        })
+        .unwrap();
+        match browser_rx.blocking_recv() {
+            Ok(BrowserFrame::Pcm(samples)) => assert_eq!(samples.len(), 4),
+            other => panic!("frame inattendu: {other:?}"),
+        }
+        assert_eq!(frames_out.load(Ordering::Relaxed), 6);
+        out.stop();
+    }
+
+    #[test]
+    fn browser_only_ne_forward_pas_le_dop() {
+        use super::*;
+        use crate::decoder::{Chunk, ChunkData, OutputSpec};
+        use crate::eq::EqConfig;
+        use std::sync::atomic::AtomicU8;
+
+        let mut out = AudioOutput::browser_only("Navigateur");
+        let (mut prod, cons) = make_ring(8);
+        let (browser_tx, mut browser_rx) = broadcast::channel::<BrowserFrame>(16);
+        let spec = OutputSpec {
+            rate: 44100,
+            channels: 2,
+            is_dsd_dop: true,
+        };
+        out.build_stream(
+            &spec,
+            cons,
+            Arc::new(AtomicU8::new(100)),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(1)),
+            Arc::new(AtomicU8::new(100)),
+            Arc::new(AtomicU8::new(0)),
+            Arc::new(AtomicU8::new(0)),
+            Arc::new(AtomicU8::new(1)),
+            browser_tx,
+            Arc::new(std::sync::RwLock::new(EqConfig {
+                enabled: false,
+                bands: Vec::new(),
+                version: 0,
+            })),
+        )
+        .unwrap();
+        prod.try_push(Chunk {
+            gen: 1,
+            data: ChunkData::I24Dop(vec![0x1234; 8]),
+        })
+        .unwrap();
+        // aucun frame PCM ne doit sortir pour du DoP
+        assert!(browser_rx.try_recv().is_err());
+        out.stop();
     }
 }

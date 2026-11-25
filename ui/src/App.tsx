@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, fmtBytes, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type AudioDevice, type BrowseEntry, type CopyReport, type MountInfo, type PlaylistDetail, type PlayerState, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, fmtBytes, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type MountInfo, type PlaylistDetail, type PlayerState, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 
@@ -155,6 +155,9 @@ export default function App() {
   const playUri = (u: string) => act(() => api.play(u));
   const openSource = (id: string) => { setBrowseSrc(id); setView("browse"); };
   const globalSearch = () => { if (searchQ.trim()) { setSearchNonce((n) => n + 1); setView("library"); } };
+  const refreshDevices = useCallback(async () => {
+    try { setDevices(await api.devices()); } catch { /* inchangé si erreur */ }
+  }, []);
 
   return (
     <div className="app">
@@ -167,6 +170,7 @@ export default function App() {
               <Icon name="search" size={18} />
               <input type="text" placeholder="Rechercher un titre, un artiste…" value={searchQ}
                 onChange={(e) => setSearchQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && globalSearch()} />
+              <button className="icon-btn" title="Rechercher" onClick={globalSearch}><Icon name="search" size={18} /></button>
             </div>
           </div>
           {view === "home" && <Home state={state} sources={sources} playTrack={playTrack} playAll={playAll} openSource={openSource} />}
@@ -178,7 +182,7 @@ export default function App() {
           {view === "settings" && <SettingsView settings={settings} updateSettings={updateSettings} say={say} refresh={refresh} />}
         </main>
       </div>
-      <PlayerBar state={state} devices={devices} act={act} say={say} alarms={alarms} />
+      <PlayerBar state={state} devices={devices} act={act} say={say} alarms={alarms} refreshDevices={refreshDevices} />
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
@@ -273,21 +277,35 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ }: { p
   const [tab, setTab] = useState<"tracks" | "albums" | "artists">("tracks");
   const [tracks, setTracks] = useState<Track[]>([]);
   const [albums, setAlbums] = useState<Album[]>([]);
-  const [artists, setArtists] = useState<{ id: string; name: string; album_count: number }[]>([]);
+  const [artists, setArtists] = useState<Artist[]>([]);
   const [q, setQ] = useState("");
+  const [searching, setSearching] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [albumDetail, setAlbumDetail] = useState<{ id: string; title: string; artist: string } | null>(null);
+  const [artistDetail, setArtistDetail] = useState<{ id: string; name: string } | null>(null);
   useEffect(() => {
     api.tracks().then(setTracks).catch(() => {});
     api.albums().then(setAlbums).catch(() => {});
     api.artists().then(setArtists).catch(() => {});
   }, []);
   useEffect(() => {
-    if (searchNonce > 0) { setQ(searchQ); setTab("tracks"); api.search(searchQ).then(setTracks).catch(() => {}); }
+    if (searchNonce > 0) {
+      setQ(searchQ);
+      if (searchQ.trim()) {
+        setSearching(true);
+        setTab("tracks");
+        api.search(searchQ).then(setTracks).catch(() => {});
+      } else {
+        setSearching(false);
+        api.tracks().then(setTracks).catch(() => {});
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchNonce]);
   const doSearch = async () => {
-    if (!q.trim()) { api.tracks().then(setTracks); return; }
+    if (!q.trim()) { setSearching(false); api.tracks().then(setTracks); return; }
+    setSearching(true);
+    setTab("tracks");
     setTracks(await api.search(q));
   };
   const scan = async () => {
@@ -303,14 +321,44 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ }: { p
   if (albumDetail) {
     return <AlbumView id={albumDetail.id} title={albumDetail.title} artist={albumDetail.artist} playAll={playAll} playTrack={playTrack} say={say} onBack={() => setAlbumDetail(null)} />;
   }
+  if (artistDetail) {
+    return <ArtistView id={artistDetail.id} name={artistDetail.name} playAll={playAll} playTrack={playTrack} onBack={() => setArtistDetail(null)} onOpenAlbum={(a) => setAlbumDetail(a)} />;
+  }
+  const ql = q.trim().toLowerCase();
+  const hitArtists = searching ? artists.filter((a) => a.name.toLowerCase().includes(ql)) : artists;
+  const hitAlbums = searching ? albums.filter((a) => a.title.toLowerCase().includes(ql) || a.artist.toLowerCase().includes(ql)) : albums;
   return (
     <div>
       <div className="searchbar">
         <div className="input-wrap"><Icon name="search" size={18} /><input type="text" placeholder="Rechercher…" value={q}
           onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} /></div>
         <button className="btn ghost" onClick={doSearch}>Rechercher</button>
+        {searching && <button className="btn ghost" onClick={() => { setSearching(false); setQ(""); api.tracks().then(setTracks); }}>Effacer</button>}
         <button className="btn" disabled={scanning} onClick={scan}>{scanning ? "Scan…" : "Scanner la source"}</button>
       </div>
+      {searching ? (
+        <div>
+          <h2>Artistes ({hitArtists.length})</h2>
+          {hitArtists.length === 0 && <div className="empty">Aucun artiste ne correspond.</div>}
+          <table className="tracks"><tbody>
+            {hitArtists.map((a) => <tr key={a.id} className="link" onClick={() => setArtistDetail({ id: a.id, name: a.name })}><td>{a.name}</td><td className="meta">{a.album_count} album(s)</td></tr>)}
+          </tbody></table>
+          <h2>Albums ({hitAlbums.length})</h2>
+          {hitAlbums.length === 0 && <div className="empty">Aucun album ne correspond.</div>}
+          <div className="grid">
+            {hitAlbums.map((a) => (
+              <div key={a.id} className="card" onClick={() => setAlbumDetail({ id: a.id, title: a.title, artist: a.artist })}>
+                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}</div>
+                <div className="t">{a.title}</div>
+                <div className="s">{a.artist} · {a.track_count} titres · {fmtTime(a.duration_secs)}</div>
+              </div>
+            ))}
+          </div>
+          <h2>Titres ({tracks.length})</h2>
+          <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} />
+        </div>
+      ) : (
+        <>
       <div className="seg">
         {([["tracks", "Titres"], ["albums", "Albums"], ["artists", "Artistes"]] as const).map(([t, label]) => (
           <button key={t} className={`seg-btn ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{label}</button>
@@ -330,9 +378,50 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ }: { p
       )}
       {tab === "artists" && (
         <table className="tracks"><tbody>
-          {artists.map((a) => <tr key={a.id}><td>{a.name}</td><td className="meta">{a.album_count} album(s)</td></tr>)}
+          {artists.map((a) => <tr key={a.id} className="link" onClick={() => setArtistDetail({ id: a.id, name: a.name })}><td>{a.name}</td><td className="meta">{a.album_count} album(s)</td></tr>)}
         </tbody></table>
       )}
+        </>
+      )}
+    </div>
+  );
+}
+
+
+function ArtistView({ id, name, playAll, playTrack, onBack, onOpenAlbum }: { id: string; name: string; playAll: (t: Track[]) => void; playTrack: (t: Track) => void; onBack: () => void; onOpenAlbum: (a: { id: string; title: string; artist: string }) => void }) {
+  const [detail, setDetail] = useState<ArtistDetail | null>(null);
+  useEffect(() => { api.artist(id).then(setDetail).catch(() => {}); }, [id]);
+  const tracks = detail?.tracks ?? [];
+  const albums = detail?.albums ?? [];
+  return (
+    <div>
+      <div className="toolbar">
+        <button className="btn ghost sm" onClick={onBack}><Icon name="back" size={16} /> Retour</button>
+        <button className="btn sm" disabled={!tracks.length} onClick={() => playAll(tracks)}><Icon name="play" size={14} filled /> Tout lire</button>
+      </div>
+      <div className="artist-head">
+        <div className="cover big">{detail?.cover_url ? <img src={detail.cover_url} alt="" /> : <Icon name="note" size={44} />}</div>
+        <div>
+          <h1 style={{ margin: 0 }}>{name}</h1>
+          <div className="s">{albums.length} album(s) · {tracks.length} titres</div>
+        </div>
+      </div>
+      {albums.length > 0 && (
+        <>
+          <h2>Albums</h2>
+          <div className="grid">
+            {albums.map((a) => (
+              <div key={a.id} className="card" onClick={() => onOpenAlbum({ id: a.id, title: a.title, artist: a.artist })}>
+                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}</div>
+                <div className="t">{a.title}</div>
+                <div className="s">{a.artist}{a.year ? ` · ${a.year}` : ""} · {a.track_count} titres</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      <h2>Titres</h2>
+      <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} />
     </div>
   );
 }
@@ -402,6 +491,14 @@ function TrackTable({ tracks, current, playTrack, playAll, albumCover }: { track
 
 type MenuState = { x: number; y: number; entry: BrowseEntry } | null;
 
+/// Pochette d'un dossier (Parcourir): image du dossier (cover.jpg...) ou
+/// pochette embarquee du premier fichier audio; repli sur l'icone si 404.
+function CoverImg({ uri, icon, size = 44 }: { uri: string; icon: string; size?: number }) {
+  const [err, setErr] = useState(false);
+  if (err) return <Icon name={icon} size={size} />;
+  return <img src={`/api/browse/cover?uri=${encodeURIComponent(uri)}`} alt="" loading="lazy" onError={() => setErr(true)} />;
+}
+
 function Browse({ sources, src, playUri, act, say }: { sources: Source[]; src: string | null; playUri: (u: string) => void; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void }) {
   const [path, setPath] = useState<string[]>([]);
   const [entries, setEntries] = useState<BrowseEntry[]>([]);
@@ -458,7 +555,7 @@ function Browse({ sources, src, playUri, act, say }: { sources: Source[]; src: s
             <div key={e.uri} className="card" onDoubleClick={() => (e.is_dir ? setPath([...path, e.name]) : playUri(e.uri))}
               onClick={() => { if (e.is_audio) playUri(e.uri); }}
               onContextMenu={(ev) => openMenu(ev, e)} title={e.name}>
-              <div className="cover"><Icon name={e.is_dir ? "folder" : "note"} size={44} /></div>
+              <div className="cover">{e.is_dir ? <CoverImg uri={e.uri} icon="folder" /> : <Icon name="note" size={44} />}</div>
               <div className="t">{e.name}</div>
               <div className="s">{e.is_dir ? "dossier" : `${e.is_audio ? "audio" : "fichier"}${e.size ? ` · ${fmtBytes(e.size)}` : ""}`}</div>
             </div>
@@ -468,7 +565,7 @@ function Browse({ sources, src, playUri, act, say }: { sources: Source[]; src: s
       {!loading && !grid && entries.map((e) => (
         <div key={e.uri} className="browse-row" onDoubleClick={() => (e.is_dir ? setPath([...path, e.name]) : playUri(e.uri))}
           onClick={() => e.is_audio && playUri(e.uri)} onContextMenu={(ev) => openMenu(ev, e)}>
-          <span className="row-ico"><Icon name={e.is_dir ? "folder" : "note"} size={20} /></span>
+          <span className="row-ico">{e.is_dir ? <CoverImg uri={e.uri} icon="folder" size={20} /> : <Icon name="note" size={20} />}</span>
           <span className="name">{e.name}</span>
           <span className="meta">{e.is_audio && e.format ? fmtFormat(e.format) : ""}{e.size ? ` · ${fmtBytes(e.size)}` : ""}</span>
           <button className="icon-btn" onClick={(ev) => { ev.stopPropagation(); openMenu(ev, e); }}><Icon name="dots" size={18} /></button>
@@ -1115,7 +1212,7 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
 
 // ---------- Barre de lecture ----------
 
-function PlayerBar({ state, devices, act, say, alarms }: { state: PlayerState | null; devices: AudioDevice[]; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; alarms: AlarmsInfo | null }) {
+function PlayerBar({ state, devices, act, say, alarms, refreshDevices }: { state: PlayerState | null; devices: AudioDevice[]; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; alarms: AlarmsInfo | null; refreshDevices: () => Promise<void> }) {
   const playing = state?.status === "playing";
   const [menuOpen, setMenuOpen] = useState(false);
   const cur = state?.current;
@@ -1160,7 +1257,7 @@ function PlayerBar({ state, devices, act, say, alarms }: { state: PlayerState | 
             say(`Lien de partage copié : ${url}`);
           } catch (e) { say(e instanceof Error ? e.message : String(e)); }
         }}><Icon name="share" size={20} /></button>}
-        <button className={`icon-btn-out ${state?.output_mode === "browser" ? "active" : ""}`} title="Choisir la sortie (Jouer ici, Caster…)" onClick={() => setMenuOpen((v) => !v)}>
+        <button className={`icon-btn-out ${state?.output_mode === "browser" ? "active" : ""}`} title="Choisir la sortie (Jouer ici, Caster…)" onClick={() => { setMenuOpen((v) => !v); refreshDevices(); }}>
           <Icon name="cast" size={20} />
         </button>
         {menuOpen && (
@@ -1191,10 +1288,13 @@ function PlayerBar({ state, devices, act, say, alarms }: { state: PlayerState | 
           </>
         )}
         {state?.current_format && <span className="badge">{fmtFormat(state.current_format)}</span>}
-        <select value={state?.audio_device ?? ""} onChange={(e) => act(() => api.selectDevice(e.target.value || null))} aria-label="Périphérique audio">
+        <select value={state?.audio_device ?? ""} onChange={(e) => act(() => api.selectDevice(e.target.value || null))} aria-label="Périphérique audio"
+          title={devices.length === 0 ? "Aucun périphérique de sortie détecté — si vous lancez le binaire Linux/WSL, les DAC USB Windows n'y sont pas visibles : lancez auris.exe sous Windows" : "Périphérique audio"}>
           <option value="">DAC par défaut</option>
-          {devices.map((d) => <option key={d.name} value={d.name}>{d.name}{d.supports_i24 ? " (DoP)" : ""}</option>)}
+          {devices.length === 0 && <option value="" disabled>Aucun périphérique détecté</option>}
+          {devices.map((d) => <option key={d.name} value={d.name}>{d.name}{d.is_default ? " ★" : ""}{d.supports_i24 ? " (DoP)" : ""}</option>)}
         </select>
+        <button className="icon-btn" title="Rechercher à nouveau les périphériques audio (DAC branché à chaud)" onClick={() => refreshDevices()}><Icon name="refresh" size={16} /></button>
         {state?.volume_mode === "disabled"
           ? <span className="badge" title="Volume géré par le DAC/ampli (bit-perfect)">bit-perfect · vol. sur l'ampli</span>
           : (<>

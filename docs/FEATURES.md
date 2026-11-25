@@ -12,7 +12,7 @@ kanban avec critères d'acceptation (voir [USER_STORIES.md](USER_STORIES.md)).
 - [ ] API REST v1 + WebSocket état temps réel
 - [ ] File d'attente, lecture/pause/stop, suivant/précédent, seek, volume, muet,
       répétition (off/all/one), aléatoire
-- [ ] Sélection du périphérique de sortie (DAC) depuis l'UI
+- [x] Sélection du périphérique de sortie (DAC) depuis l'UI — liste de **tous** les hôtes audio, re-scan à chaud (bouton actualiser), étoile sur le défaut
 - [ ] CLI : `serve`, `version`, `audio-devices`, `update`
 - [ ] CI : fmt, clippy, tests, couverture, commits conventionnels
 
@@ -23,10 +23,10 @@ kanban avec critères d'acceptation (voir [USER_STORIES.md](USER_STORIES.md)).
 - [x] Source UPnP/DLNA (découverte SSDP, navigation ContentDirectory)
 - [x] Webradios (m3u/m3u8) et URLs HTTP directes
 - [x] Scan des sources, index sled, métadonnées + pochettes
-- [x] Recherche plein texte, pages albums/artistes
+- [x] Recherche plein texte (barre globale + bibliothèque) : résultats **artistes + albums + titres** ; pages albums et **artistes** (pochette, albums, tous les titres, « Tout lire »)
 - [x] Gestion des sources depuis l'UI façon Nova (cartes avec interrupteur, modale d'édition 2 colonnes, ajout par onglets local/USB/NAS/radio/HTTP) — ajout/édition (PUT)/suppression/activation, persistées dans `config.toml`
 - [x] UI conforme à la charte graphique (thème sombre `#121212`, accent `#1ED760`, icônes SVG, recherche globale en barre supérieure)
-- [x] **Explorateur d'arborescence** dans chaque source (grille ou liste, fil d'Ariane, lecture d'un dossier entier)
+- [x] **Explorateur d'arborescence** dans chaque source (grille ou liste, fil d'Ariane, lecture d'un dossier entier) — **pochettes des dossiers** (`/api/browse/cover`) : `cover.jpg`/`folder.jpg` du dossier, sinon pochette embarquée du 1er fichier audio
 - [x] **Import/export**: copier fichiers/albums/dossiers d'une source à une autre (ex. NAS → clé USB), exporter en ZIP (fichier, dossier ou album)
 
 ## Must have — v0.3.0 (audio audiophile)
@@ -58,7 +58,9 @@ kanban avec critères d'acceptation (voir [USER_STORIES.md](USER_STORIES.md)).
       streamé en binaire sur `/ws/audio`, lu en WebAudio (lookahead 120 ms, resync sur
       écart) ; `POST /api/player/output` bascule local/browser, le DAC local reçoit du
       silence en mode navigateur ; popup « Lire sur… » façon Manifest (Jouer ici /
-      Regroupement / Caster / Autres dispositifs)
+      Regroupement / Caster / Autres dispositifs). **Repli navigateur** : si aucun
+      périphérique audio local n'est disponible (ex. binaire WSL), « Jouer ici »
+      fonctionne quand même (PCM forwardé au navigateur sans cpal)
 - [x] **Liens de partage** : lien public `/share/<token>` pour une piste, un album ou une
       playlist — mini-page HTML façon Nova avec lecteur intégré, flux audio
       `/share/<token>/stream[/<track_id>]`, JSON public `/api/public/shares/<token>`,

@@ -47,8 +47,9 @@ Base : `http://<hôte>:3000`. Toutes les réponses sont en JSON. Les erreurs :
 | GET | `/api/library/tracks` | toutes les pistes |
 | GET | `/api/library/albums` | albums (+ `cover_url`) |
 | GET | `/api/library/albums/{id}` | `{album, tracks, cover_url}` |
-| GET | `/api/library/artists` · `/api/library/artists/{id}` | artistes |
-| GET | `/api/library/search?q=...` | recherche |
+| GET | `/api/library/artists` | artistes |
+| GET | `/api/library/artists/{id}` | `{artist, albums, tracks, cover_url}` — page artiste complète |
+| GET | `/api/library/search?q=...` | recherche plein texte (titre/artiste/album/genre) sur les pistes |
 | GET | `/api/library/cover/{track_id}` | image (JPEG/PNG) |
 | GET | `/api/library/albums/{id}/export` | exporte l'album en ZIP (pistes + pochettes) |
 | POST | `/api/library/scan` | `{source_id?}` lance un scan (toutes sources si omis) |
@@ -65,6 +66,7 @@ Base : `http://<hôte>:3000`. Toutes les réponses sont en JSON. Les erreurs :
 | PUT | `/api/sources/{id}` | remplace la source (corps = source complète, `id` identique requis, sinon 400 ; persisté) |
 | GET | `/api/browse?uri=...` | contenu d'un dossier (`src://id/...`, `upnp://...`, URL m3u) |
 | GET | `/api/browse/tree?uri=...` | parcours **récursif** (fichiers audio ; un fichier = lui-même) |
+| GET | `/api/browse/cover?uri=...` | pochette d'un dossier : `cover.jpg`/`folder.jpg`/… du dossier, sinon pochette embarquée du 1er fichier audio (404 si aucune) |
 | GET | `/api/usb/devices` | disques amovibles détectés par l'OS (`[{label, path}]`) |
 | GET | `/api/upnp/discover` | serveurs UPnP du LAN |
 
@@ -98,7 +100,7 @@ percent (`%20`) ou les espaces bruts dans le chemin.)
 
 | Méthode | Route | Description |
 |---|---|---|
-| GET | `/api/audio/devices` | DAC détectés (capacités, taux) |
+| GET | `/api/audio/devices` | DAC détectés sur **tous** les hôtes audio (WASAPI/ALSA/CoreAudio…), dédupliqués : un DAC branché à chaud apparaît sans redémarrer (capacités, taux, `is_default`) |
 | POST | `/api/audio/device` | `{name?}` sélectionne le DAC |
 | GET | `/api/system/info` | version, OS, uptime, counts |
 | GET | `/api/system/update` | dernière vérification de mise à jour |

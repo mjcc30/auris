@@ -309,6 +309,31 @@ impl Library {
         Some((artist, albums))
     }
 
+    /// Tous les titres d'un artiste, tries par album/disque/piste.
+    pub fn artist_tracks(&self, artist_id: &str) -> Option<Vec<Track>> {
+        let (artist, _) = self.artist(artist_id)?;
+        let mut tracks: Vec<Track> = self
+            .tracks()
+            .into_iter()
+            .filter(|t| t.artist.to_lowercase() == artist.name.to_lowercase())
+            .collect();
+        tracks.sort_by(|a, b| {
+            (
+                a.album.to_lowercase(),
+                a.disc_number.unwrap_or(1),
+                a.track_number.unwrap_or(0),
+                a.title.to_lowercase(),
+            )
+                .cmp(&(
+                    b.album.to_lowercase(),
+                    b.disc_number.unwrap_or(1),
+                    b.track_number.unwrap_or(0),
+                    b.title.to_lowercase(),
+                ))
+        });
+        Some(tracks)
+    }
+
     pub fn cover(&self, track_id: &str) -> Option<Vec<u8>> {
         self.tree(TREE_COVERS)
             .get(track_id.as_bytes())

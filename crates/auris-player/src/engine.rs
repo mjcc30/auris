@@ -600,8 +600,16 @@ impl Engine {
                             self.output = Some(o);
                         }
                         Err(e) => {
-                            self.publish_msg("error", &format!("sortie audio: {e}"));
-                            return;
+                            if self.out_mode.load(Ordering::SeqCst) == 1 {
+                                // « Jouer ici » sans peripherique audio local
+                                // (ex: binaire WSL, aucun DAC visible): on
+                                // forward le PCM au navigateur via WebSocket.
+                                self.output =
+                                    Some(AudioOutput::browser_only("Navigateur (Jouer ici)"));
+                            } else {
+                                self.publish_msg("error", &format!("sortie audio: {e}"));
+                                return;
+                            }
                         }
                     }
                 }
@@ -637,7 +645,13 @@ impl Engine {
                     st.position_secs = 0.0;
                     st.status = PlayStatus::Playing;
                     st.current_format = meta.format;
-                    st.audio_device = Some(out.name().to_string());
+                    // Sans peripherique local (« Jouer ici » seul), on garde le
+                    // nom de device choisi plutot que « Navigateur ».
+                    st.audio_device = if out.has_device() {
+                        Some(out.name().to_string())
+                    } else {
+                        self.device_name.clone()
+                    };
                 }
                 if let Some(s) = self.seek_after_ready.take() {
                     if let Some(w) = &self.worker {
