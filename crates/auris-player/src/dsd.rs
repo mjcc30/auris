@@ -47,14 +47,21 @@ impl DsdInfo {
     }
 }
 
-fn rd_u16(b: &[u8], off: usize) -> u16 {
-    u16::from_le_bytes([b[off], b[off + 1]])
-}
 fn rd_u32(b: &[u8], off: usize) -> u32 {
     u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
 }
 fn rd_u64(b: &[u8], off: usize) -> u64 {
     u64::from_le_bytes(b[off..off + 8].try_into().unwrap())
+}
+// DFF est big-endian (contrairement au DSF).
+fn rd_u16be(b: &[u8], off: usize) -> u16 {
+    u16::from_be_bytes([b[off], b[off + 1]])
+}
+fn rd_u32be(b: &[u8], off: usize) -> u32 {
+    u32::from_be_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
+}
+fn rd_u64be(b: &[u8], off: usize) -> u64 {
+    u64::from_be_bytes(b[off..off + 8].try_into().unwrap())
 }
 
 /// Parse l'en-tete DSF ("DSD ") ou DFF ("FRM8"/"DSD ").
@@ -77,42 +84,82 @@ pub fn parse_header(reader: &mut dyn SeekRead) -> Result<DsdInfo> {
     }
 }
 
+/// Parse un chunk DSF selon le vrai layout du format (little-endian):
+/// en-tete « DSD » de 28 octets, puis chunks a partir de l'offset 28.
+/// Particularite DSF: la taille d'un chunk INCLUT son en-tete de 12 octets
+/// (id 4 + taille u64), donc le chunk suivant est a `pos + size`.
+/// Chunk « fmt » (52 octets dont 12 d'en-tete, corps de 40): version u32,
+/// format id u32, type canal u32, canaux u32, frequence u32, bits/sample u32,
+/// echantillons/canal u64, taille bloc/canal u32, reserve u32.
 fn parse_dsf(head: &[u8]) -> Result<DsdInfo> {
-    if head.len() < 88 || &head[12..16] != b"fmt " {
-        return Err(AurisError::UnsupportedFormat("DSF sans chunk fmt".into()));
+    if head.len() < 28 {
+        return Err(AurisError::UnsupportedFormat("DSF trop court".into()));
     }
-    let fmt_size = rd_u64(head, 16) as usize;
-    let format_id = rd_u32(head, 28);
+    let mut pos = 28usize;
+    let mut fmt: Option<(usize, usize)> = None; // (offset du corps, taille du corps)
+    let mut data: Option<u64> = None; // offset du corps du chunk data
+    while pos + 12 <= head.len() {
+        let id = &head[pos..pos + 4];
+        let size = rd_u64(head, pos + 4) as usize; // inclut l'en-tete de 12 octets
+        let body = pos + 12;
+        if body > head.len() {
+            break;
+        }
+        match id {
+            b"fmt " => fmt = Some((body, size.saturating_sub(12))),
+            b"data" => {
+                data = Some(body as u64);
+                break;
+            }
+            _ => {}
+        }
+        if size < 12 {
+            break;
+        }
+        pos += size;
+    }
+    let (foff, fsize) =
+        fmt.ok_or_else(|| AurisError::UnsupportedFormat("DSF sans chunk fmt".into()))?;
+    if fsize < 36 || foff + 36 > head.len() {
+        return Err(AurisError::UnsupportedFormat(
+            "chunk fmt DSF tronque".into(),
+        ));
+    }
+    let format_id = rd_u32(head, foff + 4);
     if format_id != 0 {
         return Err(AurisError::UnsupportedFormat(
             "DSF compresse (DST) non supporte".into(),
         ));
     }
-    let rate = rd_u32(head, 32);
-    let channels = rd_u32(head, 36);
-    let block_bytes = rd_u32(head, 40) as usize;
-    let samples = rd_u64(head, 44);
-    let data_chunk = 24 + fmt_size;
-    if head.len() < data_chunk + 12 || &head[data_chunk..data_chunk + 4] != b"data" {
-        return Err(AurisError::UnsupportedFormat("DSF sans chunk data".into()));
-    }
+    let channels = rd_u32(head, foff + 12);
+    let rate = rd_u32(head, foff + 16);
+    let samples = rd_u64(head, foff + 24);
+    let block_bytes = rd_u32(head, foff + 32) as usize;
+    let data_offset =
+        data.ok_or_else(|| AurisError::UnsupportedFormat("DSF sans chunk data".into()))?;
     Ok(DsdInfo {
         rate,
         channels: channels as u8,
         samples_per_channel: samples,
-        data_offset: (data_chunk + 12) as u64,
+        data_offset,
         block_bytes_per_channel: if block_bytes > 0 { block_bytes } else { 4096 },
     })
 }
 
+/// Parse un DFF (EA IFF 85, **big-endian**): « FRM8 » + taille form (u64 BE, 4..12)
+/// puis type de forme « DSD » (12..16), puis chunks `id(4) + taille(u64 BE) + corps`
+/// a partir de l'offset 16.
+/// Chunk « PROP »: « SND » + count (u32 BE) + proprietes `id(4) + taille(u64 BE) + data`
+/// (FS = frequence u32 BE, CHNL = canaux u16 BE, CMPR = type compression 4 octets).
+/// Chunk « DSD »: donnees DSD brutes, blocs de 4096 octets par canal entrelaces.
 fn parse_dff(reader: &mut dyn SeekRead, head: &[u8]) -> Result<DsdInfo> {
-    if head.len() < 12 || &head[8..12] != b"DSD " {
+    if head.len() < 16 || &head[12..16] != b"DSD " {
         return Err(AurisError::UnsupportedFormat("DFF sans form DSD".into()));
     }
     let mut rate = 0u32;
     let mut channels = 0u16;
     let mut compressed = false;
-    let mut pos = 12u64;
+    let mut pos = 16u64;
     let mut data_offset = None;
     let mut data_size = 0u64;
     loop {
@@ -122,25 +169,25 @@ fn parse_dff(reader: &mut dyn SeekRead, head: &[u8]) -> Result<DsdInfo> {
             break;
         }
         let id = &hdr[0..4];
-        let size = rd_u64(&hdr, 4);
+        let size = rd_u64be(&hdr, 4);
         match id {
             b"PROP" => {
                 let mut prop = vec![0u8; (size.min(65536)) as usize];
                 let pn = reader.read(&mut prop)?;
                 let prop = &prop[..pn];
-                if prop.len() >= 4 {
-                    let count = rd_u32(prop, 0);
-                    let mut p = 4usize;
+                if prop.len() >= 8 && &prop[0..4] == b"SND " {
+                    let count = rd_u32be(prop, 4);
+                    let mut p = 8usize;
                     for _ in 0..count {
                         if p + 12 > prop.len() {
                             break;
                         }
                         let pid = &prop[p..p + 4];
-                        let psize = rd_u64(prop, p + 4) as usize;
+                        let psize = rd_u64be(prop, p + 4) as usize;
                         let pdata = p + 12;
                         match pid {
-                            b"FS  " if pdata + 4 <= prop.len() => rate = rd_u32(prop, pdata),
-                            b"CHNL" if pdata + 2 <= prop.len() => channels = rd_u16(prop, pdata),
+                            b"FS  " if pdata + 4 <= prop.len() => rate = rd_u32be(prop, pdata),
+                            b"CHNL" if pdata + 2 <= prop.len() => channels = rd_u16be(prop, pdata),
                             b"CMPR"
                                 if pdata + 4 <= prop.len()
                                     && &prop[pdata..pdata + 4] != b"DSD " =>

@@ -565,7 +565,7 @@ async fn probe_and_store(db: &sled::Db, sources: &Arc<SourcesManager>, uri: &str
         .next()
         .unwrap_or("")
         .to_string();
-    let (meta, _spec, _dur) = probe_meta(reader, &ext)?;
+    let (meta, _spec, dur) = probe_meta(reader, &ext)?;
     let (source_id, rel) =
         auris_sources::parse_src_uri(uri).ok_or_else(|| AurisError::InvalidUri(uri.into()))?;
     let mut t = Track::new(uri.to_string(), source_id);
@@ -587,7 +587,9 @@ async fn probe_and_store(db: &sled::Db, sources: &Arc<SourcesManager>, uri: &str
     t.disc_number = meta.disc_number;
     t.year = meta.year;
     t.genre = meta.genre.clone();
-    t.duration_secs = meta.duration_secs;
+    // Pour le DSD (DSF/DFF), la durée provient du champ samples de l'en-tête,
+    // pas des métadonnées taguées.
+    t.duration_secs = meta.duration_secs.or(dur);
     t.format = meta.format;
     t.has_cover = meta.has_cover;
     t.finalize_keys();
