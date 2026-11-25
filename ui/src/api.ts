@@ -113,6 +113,47 @@ export interface ShareLink {
   url: string;
 }
 
+/** Paroles d'une piste : tag embarqué ou lrclib.net. */
+export interface LyricsResponse {
+  track_id: string;
+  /** "tag" (USLT/LYRICS embarqué), "lrclib" (lrclib.net) ou "none". */
+  source: "tag" | "lrclib" | "none" | string;
+  /** Paroles en texte brut (null si aucune). */
+  plain: string | null;
+  /** Paroles synchronisées LRC: [[secondes, ligne], ...]. */
+  synced: [number, string][];
+}
+
+/** Infos de la lecture en cours (onglet Infos du panneau). */
+export interface InfosResponse {
+  track_id: string;
+  title: string;
+  artist: string;
+  album: string;
+  album_artist: string;
+  track_number: number | null;
+  disc_number: number | null;
+  year: number | null;
+  genre: string | null;
+  duration_secs: number | null;
+  format: AudioFormat | null;
+  /** Commentaire embarqué (tag COMM/COMMENT). */
+  comment: string | null;
+  album_info: {
+    id: string;
+    title: string;
+    artist: string;
+    year: number | null;
+    track_count: number;
+    duration_secs: number;
+    cover_url: string | null;
+  } | null;
+  /** Bio Wikipedia de l'artiste (null si introuvable). */
+  bio: string | null;
+  /** "cache" (sled), "wikipedia" ou "none". */
+  bio_source: string;
+}
+
 /** Construit un objet Source sérialisable côté backend (serde taggé). */
 export function makeSource(
   id: string,
@@ -318,6 +359,8 @@ export const api = {
   reboot: () => req<unknown>("/api/system/reboot", post({})),
   shutdown: () => req<unknown>("/api/system/shutdown", post({})),
   coverUrl: (trackId: string) => `/api/library/cover/${encodeURIComponent(trackId)}`,
+  lyrics: (trackId: string) => req<LyricsResponse>(`/api/lyrics/${encodeURIComponent(trackId)}`),
+  infos: (trackId: string) => req<InfosResponse>(`/api/infos/${encodeURIComponent(trackId)}`),
 };
 
 function post(body: unknown): RequestInit {

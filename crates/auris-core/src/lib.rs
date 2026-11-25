@@ -1,6 +1,7 @@
 //! Types partages entre tous les composants d'Auris.
 
 pub mod error;
+pub mod lyrics;
 pub mod model;
 pub mod schedule;
 pub mod settings;

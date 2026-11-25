@@ -134,6 +134,7 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         settings_sink: Some(settings_sink),
         player_sink: Some(player_sink),
         device_lister: None,
+        ext_http: None,
         data_dir: data_dir.clone(),
         power_control: config.power_control,
         power_ops: None,

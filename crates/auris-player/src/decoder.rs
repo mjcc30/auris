@@ -65,6 +65,10 @@ pub struct TrackMeta {
     pub format: Option<AudioFormat>,
     pub has_cover: bool,
     pub cover: Option<Vec<u8>>,
+    /// Paroles embarquees (tag USLT/LYRICS, souvent au format LRC).
+    pub lyrics: Option<String>,
+    /// Commentaire embarque (tag COMM/COMMENT).
+    pub comment: Option<String>,
 }
 
 /// Decodeur de flux.
@@ -274,6 +278,8 @@ pub fn read_metadata(format: &mut dyn FormatReader) -> TrackMeta {
                 Some(StandardTag::DiscNumber(n)) => meta.disc_number = Some(*n as u32),
                 Some(StandardTag::ReleaseYear(y)) => meta.year = Some(*y as u32),
                 Some(StandardTag::Genre(v)) => meta.genre = Some(v.to_string()),
+                Some(StandardTag::Lyrics(v)) => meta.lyrics = Some(v.to_string()),
+                Some(StandardTag::Comment(v)) => meta.comment = Some(v.to_string()),
                 _ => {
                     // repli sur les cles brutes
                     let key = tag.raw.key.to_ascii_uppercase();
@@ -303,6 +309,12 @@ pub fn read_metadata(format: &mut dyn FormatReader) -> TrackMeta {
                         }
                         "GENRE" | "TCON" => {
                             meta.genre.get_or_insert(value);
+                        }
+                        "USLT" | "LYRICS" | "UNSYNCEDLYRICS" | "SYLT" => {
+                            meta.lyrics.get_or_insert(value);
+                        }
+                        "COMM" | "COMMENT" => {
+                            meta.comment.get_or_insert(value);
                         }
                         _ => {}
                     }

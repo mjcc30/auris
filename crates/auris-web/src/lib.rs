@@ -20,11 +20,11 @@ use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 
 use auris_core::{
-    Alarm, AlarmState, AurisError, BrowseEntry, OutputMode, PlayStatus, Playlist, RepeatMode,
-    Settings, ShareKind, ShareLink, Source, Track, WsEvent, ZipWriter,
+    lyrics, Alarm, AlarmState, AurisError, BrowseEntry, OutputMode, PlayStatus, Playlist,
+    RepeatMode, Settings, ShareKind, ShareLink, Source, Track, WsEvent, ZipWriter,
 };
 use auris_library::Library;
-use auris_player::{AudioOutput, PlayerEngine};
+use auris_player::{probe_meta, AudioOutput, PlayerEngine, TrackMeta};
 use auris_sources::{discover_removable, SourcesManager};
 use auris_updater::Updater;
 
@@ -40,6 +40,10 @@ pub type PlayerSink = Arc<dyn Fn(Option<String>, OutputMode) + Send + Sync>;
 
 /// Liste les périphériques audio disponibles (injectable pour les tests).
 pub type DeviceLister = Arc<dyn Fn() -> Vec<auris_core::AudioDeviceInfo> + Send + Sync>;
+
+/// GET HTTP externe (lrclib.net, Wikipedia), injectable pour les tests.
+/// Retourne le corps de la réponse, ou None si la requête échoue.
+pub type ExtHttpGet = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 /// Etat partagé de l'application web.
 #[derive(Clone)]
@@ -61,6 +65,8 @@ pub struct AppState {
     pub player_sink: Option<PlayerSink>,
     /// Liste les périphériques audio (par défaut `AudioOutput::devices`).
     pub device_lister: Option<DeviceLister>,
+    /// GET HTTP externe (paroles lrclib, bio Wikipedia). `None` = reqwest réel.
+    pub ext_http: Option<ExtHttpGet>,
     /// Répertoire de données (stockage, logs, reset usine).
     pub data_dir: PathBuf,
     /// Autorise redémarrer/éteindre depuis l'UI (config `power_control`).
@@ -100,6 +106,7 @@ impl AppState {
             settings_sink: None,
             player_sink: None,
             device_lister: None,
+            ext_http: None,
             data_dir,
             power_control: false,
             power_ops: None,
@@ -313,6 +320,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/library/artists/{id}", get(get_artist))
         .route("/api/library/search", get(get_search))
         .route("/api/library/cover/{track_id}", get(get_cover))
+        .route("/api/lyrics/{track_id}", get(get_lyrics))
+        .route("/api/infos/{track_id}", get(get_infos))
         .route("/api/library/scan", post(post_scan))
         .route("/api/library/scan/status", get(get_scan_status))
         // sources
@@ -648,6 +657,250 @@ async fn get_cover(State(s): State<AppState>, Path(track_id): Path<String>) -> R
         )
             .into_response(),
     }
+}
+
+/// Encodage percent-encoding minimal pour les paramètres de requête.
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// GET HTTP bloquant (6 s max) via le fetcher injecté, ou reqwest par défaut.
+/// Retourne le corps si la réponse est 2xx, sinon None.
+fn http_get(s: &AppState, url: &str) -> Option<String> {
+    if let Some(f) = &s.ext_http {
+        return f(url);
+    }
+    let url = url.to_string();
+    std::thread::spawn(move || {
+        reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(6))
+            .build()
+            .ok()?
+            .get(&url)
+            .send()
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .text()
+            .ok()
+    })
+    .join()
+    .ok()?
+}
+
+/// Version async de `http_get` (ne bloque pas l'executor tokio).
+async fn http_get_async(s: &AppState, url: &str) -> Option<String> {
+    let s = s.clone();
+    let url = url.to_string();
+    tokio::task::spawn_blocking(move || http_get(&s, &url))
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Sonde les métadonnées embarquées d'une piste (probe bloquant délégué).
+async fn probe_track_meta(s: &AppState, t: &Track) -> ApiResult<TrackMeta> {
+    let reader = s.sources.open_uri(&t.uri).await?;
+    let ext = t
+        .uri
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .to_string();
+    tokio::task::spawn_blocking(move || probe_meta(reader, &ext).map(|(m, _, _)| m))
+        .await
+        .map_err(|e| AurisError::other(format!("join sonde: {e}")))?
+        .map_err(ApiError)
+}
+
+/// GET /api/lyrics/{track_id} — paroles d'une piste.
+/// Source 1: tag embarqué (USLT/LYRICS, souvent au format LRC).
+/// Source 2: lrclib.net (correspondance exacte puis recherche).
+/// Réponse: { track_id, source: "tag"|"lrclib"|"none", plain, synced: [[secs, ligne], ...] }.
+async fn get_lyrics(
+    State(s): State<AppState>,
+    Path(track_id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let t = s
+        .library
+        .track(&track_id)
+        .ok_or_else(|| AurisError::TrackNotFound(track_id.clone()))?;
+    let meta = probe_track_meta(&s, &t).await?;
+    if let Some(raw) = meta.lyrics.filter(|l| !l.trim().is_empty()) {
+        return Ok(Json(serde_json::json!({
+            "track_id": track_id,
+            "source": "tag",
+            "plain": lyrics::plain_text(&raw),
+            "synced": lyrics::parse_lrc(&raw),
+        })));
+    }
+    let title = meta
+        .title
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| t.title.clone());
+    let artist = meta
+        .artist
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| t.artist.clone());
+    let album = meta
+        .album
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| t.album.clone());
+    let duration = meta
+        .duration_secs
+        .or(t.duration_secs)
+        .map(|d| d.round() as u64)
+        .unwrap_or(0);
+    // 1) correspondance exacte lrclib
+    let url = format!(
+        "https://lrclib.net/api/get?artist_name={}&track_name={}&album_name={}&duration={}",
+        urlencode(&artist),
+        urlencode(&title),
+        urlencode(&album),
+        duration
+    );
+    let pick = |v: &serde_json::Value| -> Option<(Option<String>, Option<String>)> {
+        let synced = v.get("syncedLyrics").and_then(|x| x.as_str());
+        let plain = v.get("plainLyrics").and_then(|x| x.as_str());
+        if synced.map(|x| !x.is_empty()).unwrap_or(false)
+            || plain.map(|x| !x.is_empty()).unwrap_or(false)
+        {
+            Some((
+                synced.filter(|x| !x.is_empty()).map(str::to_string),
+                plain.filter(|x| !x.is_empty()).map(str::to_string),
+            ))
+        } else {
+            None
+        }
+    };
+    let mut hit = http_get_async(&s, &url)
+        .await
+        .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
+        .and_then(|v| pick(&v));
+    // 2) recherche lrclib
+    if hit.is_none() {
+        let url = format!(
+            "https://lrclib.net/api/search?track_name={}&artist_name={}",
+            urlencode(&title),
+            urlencode(&artist)
+        );
+        hit = http_get_async(&s, &url)
+            .await
+            .and_then(|body| serde_json::from_str::<Vec<serde_json::Value>>(&body).ok())
+            .and_then(|arr| arr.iter().find_map(pick));
+    }
+    let Some((synced_raw, plain_raw)) = hit else {
+        return Ok(Json(serde_json::json!({
+            "track_id": track_id,
+            "source": "none",
+            "plain": serde_json::Value::Null,
+            "synced": Vec::<serde_json::Value>::new(),
+        })));
+    };
+    let plain = plain_raw
+        .filter(|p| !p.trim().is_empty())
+        .or_else(|| synced_raw.as_deref().map(lyrics::plain_text))
+        .unwrap_or_default();
+    let synced = synced_raw
+        .as_deref()
+        .map(lyrics::parse_lrc)
+        .unwrap_or_default();
+    Ok(Json(serde_json::json!({
+        "track_id": track_id,
+        "source": "lrclib",
+        "plain": plain,
+        "synced": synced,
+    })))
+}
+
+/// GET /api/infos/{track_id} — infos de la lecture en cours: métadonnées de la
+/// piste, album, commentaire embarqué et bio Wikipedia de l'artiste (cache sled).
+async fn get_infos(
+    State(s): State<AppState>,
+    Path(track_id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let t = s
+        .library
+        .track(&track_id)
+        .ok_or_else(|| AurisError::TrackNotFound(track_id.clone()))?;
+    let meta = probe_track_meta(&s, &t).await?;
+    let album =
+        s.library.albums().into_iter().find(|a| {
+            format!("{}|{}", a.artist.to_lowercase(), a.title.to_lowercase()) == t.album_key
+        });
+    let artist_name = meta
+        .album_artist
+        .clone()
+        .filter(|v| !v.is_empty())
+        .or_else(|| meta.artist.clone().filter(|v| !v.is_empty()))
+        .filter(|v| v != "Artiste inconnu")
+        .unwrap_or_else(|| t.album_artist.clone());
+    // bio Wikipedia: cache sled d'abord, sinon fr puis en
+    let (bio, bio_source) = match s.library.bio_get(&t.artist_key) {
+        Some(b) => (Some(b), "cache"),
+        None => {
+            let enc = urlencode(&artist_name);
+            let mut found = None;
+            for lang in ["fr", "en"] {
+                let url = format!("https://{lang}.wikipedia.org/api/rest_v1/page/summary/{enc}");
+                if let Some(extract) = http_get_async(&s, &url)
+                    .await
+                    .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
+                    .and_then(|v| {
+                        v.get("extract")
+                            .and_then(|x| x.as_str())
+                            .map(str::to_string)
+                    })
+                    .filter(|x| !x.trim().is_empty())
+                {
+                    let _ = s.library.bio_set(&t.artist_key, &extract);
+                    found = Some(extract);
+                    break;
+                }
+            }
+            match found {
+                Some(b) => (Some(b), "wikipedia"),
+                None => (None, "none"),
+            }
+        }
+    };
+    Ok(Json(serde_json::json!({
+        "track_id": track_id,
+        "title": t.title,
+        "artist": t.artist,
+        "album": t.album,
+        "album_artist": artist_name,
+        "track_number": t.track_number,
+        "disc_number": t.disc_number,
+        "year": t.year,
+        "genre": t.genre,
+        "duration_secs": t.duration_secs,
+        "format": t.format,
+        "comment": meta.comment,
+        "album_info": album.as_ref().map(|a| serde_json::json!({
+            "id": a.id,
+            "title": a.title,
+            "artist": a.artist,
+            "year": a.year,
+            "track_count": a.track_count,
+            "duration_secs": a.duration_secs,
+            "cover_url": a.cover_track_id.as_ref().map(|c| format!("/api/library/cover/{c}")),
+        })),
+        "bio": bio,
+        "bio_source": bio_source,
+    })))
 }
 async fn post_scan(
     State(s): State<AppState>,

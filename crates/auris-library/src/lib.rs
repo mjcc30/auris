@@ -34,6 +34,7 @@ const TREE_ARTIST_BY_KEY: &str = "artist_by_key";
 
 const TREE_PLAYLISTS: &str = "playlists";
 const TREE_SHARES: &str = "shares";
+const TREE_BIOS: &str = "bios";
 
 pub struct Library {
     db: sled::Db,
@@ -67,6 +68,7 @@ impl Library {
             TREE_ARTIST_BY_KEY,
             TREE_PLAYLISTS,
             TREE_SHARES,
+            TREE_BIOS,
         ] {
             db.open_tree(t)
                 .map_err(|e| AurisError::Storage(e.to_string()))?;
@@ -332,6 +334,22 @@ impl Library {
                 ))
         });
         Some(tracks)
+    }
+
+    /// Biographie mise en cache pour une cle d'artiste (None = non cachee).
+    pub fn bio_get(&self, artist_key: &str) -> Option<String> {
+        self.tree(TREE_BIOS)
+            .get(artist_key.as_bytes())
+            .ok()?
+            .and_then(|v| String::from_utf8(v.to_vec()).ok())
+    }
+
+    /// Met en cache la biographie d'une cle d'artiste.
+    pub fn bio_set(&self, artist_key: &str, text: &str) -> Result<()> {
+        self.tree(TREE_BIOS)
+            .insert(artist_key.as_bytes(), text.as_bytes())
+            .map_err(se)?;
+        Ok(())
     }
 
     pub fn cover(&self, track_id: &str) -> Option<Vec<u8>> {

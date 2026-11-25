@@ -77,6 +77,13 @@ kanban avec critères d'acceptation (voir [USER_STORIES.md](USER_STORIES.md)).
       lecture), compte à rebours exposé via `GET /api/alarms` et badge dans le lecteur ;
       EQ 10 bandes ISO (31 Hz – 16 kHz, ±20 dB) en biquads RBJ appliqués à chaud dans le
       callback audio (DAC local et « Jouer ici »), sliders dans Réglages > Égaliseur
+- [x] **Panneau « lecture en cours »** (style Volumio Nova) : clic sur la pochette de la
+      barre de lecture → panneau latéral à 3 onglets — **Pochette** (grande pochette,
+      artiste, album, format/année/genre), **Infos** (bio Wikipedia de l'artiste mise en
+      cache dans sled, infos de l'album, commentaire embarqué du fichier), **Paroles**
+      (paroles synchronisées LRC avec ligne active suivie en temps réel ; source : tag
+      USLT/LYRICS embarqué d'abord, repli [lrclib.net](https://lrclib.net) via
+      `GET /api/lyrics/{track_id}` et `GET /api/infos/{track_id}`)
 
 ## Should have — v1.0.0 (stable)
 

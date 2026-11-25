@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, fmtBytes, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type MountInfo, type PlaylistDetail, type PlayerState, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, fmtBytes, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type InfosResponse, type LyricsResponse, type MountInfo, type PlaylistDetail, type PlayerState, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 
 type View = "home" | "library" | "browse" | "queue" | "playlists" | "sources" | "settings";
 type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http";
+/** Onglets du panneau lecture en cours (style Volumio: Pochette / Infos / Paroles). */
+type NpTab = "cover" | "infos" | "lyrics";
 
 function kindIconName(kind: string): string {
   switch (kind) {
@@ -80,6 +82,9 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [searchNonce, setSearchNonce] = useState(0);
   const [searchQ, setSearchQ] = useState("");
+  // Panneau « lecture en cours » (Pochette / Infos / Paroles) à droite de la vue.
+  const [npOpen, setNpOpen] = useState(false);
+  const [npTab, setNpTab] = useState<NpTab>("cover");
   const toastTimer = useRef<number | null>(null);
   const browserAudio = useRef(new BrowserAudio());
 
@@ -181,8 +186,17 @@ export default function App() {
           {view === "sources" && <Sources sources={sources} refresh={refresh} say={say} />}
           {view === "settings" && <SettingsView settings={settings} updateSettings={updateSettings} say={say} refresh={refresh} />}
         </main>
+        {npOpen && state?.current && (
+          <NowPlayingPanel
+            track={state.current}
+            pos={state.position_secs}
+            tab={npTab}
+            setTab={setNpTab}
+            onClose={() => setNpOpen(false)}
+          />
+        )}
       </div>
-      <PlayerBar state={state} devices={devices} act={act} say={say} alarms={alarms} refreshDevices={refreshDevices} />
+      <PlayerBar state={state} devices={devices} act={act} say={say} alarms={alarms} refreshDevices={refreshDevices} npOpen={npOpen} onToggleNp={() => setNpOpen((v) => !v)} />
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
@@ -1212,7 +1226,7 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
 
 // ---------- Barre de lecture ----------
 
-function PlayerBar({ state, devices, act, say, alarms, refreshDevices }: { state: PlayerState | null; devices: AudioDevice[]; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; alarms: AlarmsInfo | null; refreshDevices: () => Promise<void> }) {
+function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, onToggleNp }: { state: PlayerState | null; devices: AudioDevice[]; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; alarms: AlarmsInfo | null; refreshDevices: () => Promise<void>; npOpen: boolean; onToggleNp: () => void }) {
   const playing = state?.status === "playing";
   const [menuOpen, setMenuOpen] = useState(false);
   const cur = state?.current;
@@ -1222,7 +1236,7 @@ function PlayerBar({ state, devices, act, say, alarms, refreshDevices }: { state
   return (
     <footer className="player">
       <div className="now">
-        {cur ? (<><div className="cover">{cur.has_cover ? <img src={api.coverUrl(cur.id)} alt="" /> : <Icon name="note" size={22} />}</div>
+        {cur ? (<><div className={`cover ${npOpen ? "active" : ""}`} title={npOpen ? "Fermer le panneau lecture en cours" : "Pochette / Infos / Paroles de la lecture en cours"} onClick={onToggleNp}>{cur.has_cover ? <img src={api.coverUrl(cur.id)} alt="" /> : <Icon name="note" size={22} />}</div>
           <div className="meta"><div className="title">{cur.title}</div><div className="artist">{cur.artist}</div></div></>) : <div className="meta"><div className="title">Aucune lecture</div></div>}
       </div>
       <div className="center">
@@ -1304,5 +1318,122 @@ function PlayerBar({ state, devices, act, say, alarms, refreshDevices }: { state
           </>)}
       </div>
     </footer>
+  );
+}
+
+/// Panneau latéral « lecture en cours » (style Volumio) : onglets Pochette / Infos / Paroles.
+/// Paroles synchronisées (LRC) avec ligne active suivie pendant la lecture.
+function NowPlayingPanel({ track, pos, tab, setTab, onClose }: {
+  track: Track; pos: number; tab: NpTab; setTab: (t: NpTab) => void; onClose: () => void;
+}) {
+  const [lyrics, setLyrics] = useState<LyricsResponse | null>(null);
+  const [infos, setInfos] = useState<InfosResponse | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const activeRef = useRef<HTMLDivElement | null>(null);
+
+  // Recharge les paroles + infos à chaque changement de piste.
+  useEffect(() => {
+    setLyrics(null);
+    setInfos(null);
+    setErr(null);
+    let dead = false;
+    api.lyrics(track.id)
+      .then((l) => { if (!dead) setLyrics(l); })
+      .catch((e) => { if (!dead) setErr(e instanceof Error ? e.message : String(e)); });
+    api.infos(track.id)
+      .then((i) => { if (!dead) setInfos(i); })
+      .catch(() => { /* les infos sont best-effort */ });
+    return () => { dead = true; };
+  }, [track.id]);
+
+  const synced = lyrics?.synced ?? [];
+  // Dernière ligne dont le timestamp est <= la position courante.
+  let activeIdx = -1;
+  for (let i = 0; i < synced.length; i++) {
+    if (synced[i][0] <= pos + 0.05) activeIdx = i;
+    else break;
+  }
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: "center" });
+  }, [activeIdx]);
+
+  const tabs: [NpTab, string][] = [["cover", "Pochette"], ["infos", "Infos"], ["lyrics", "Paroles"]];
+  return (
+    <aside className="np-panel">
+      <div className="np-tabs">
+        {tabs.map(([t, label]) => (
+          <button key={t} className={`np-tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{label}</button>
+        ))}
+        <button className="np-close" title="Fermer" onClick={onClose}><Icon name="close" size={18} /></button>
+      </div>
+      <div className="np-body">
+        {tab === "cover" && (
+          <div className="np-cover-wrap">
+            <div className="np-cover">
+              {track.has_cover ? <img src={api.coverUrl(track.id)} alt="" /> : <Icon name="note" size={64} />}
+            </div>
+            <div className="np-title">{track.title}</div>
+            <div className="np-artist">{track.artist}</div>
+            <div className="np-album">{track.album}</div>
+            <div className="np-badges">
+              {track.format && <span className="badge">{fmtFormat(track.format)}</span>}
+              {track.year != null && <span className="badge">{track.year}</span>}
+              {track.genre && <span className="badge">{track.genre}</span>}
+            </div>
+          </div>
+        )}
+        {tab === "infos" && (
+          <div className="np-infos">
+            {!infos && !err && <div className="np-muted">Chargement…</div>}
+            {err && <div className="np-muted">{err}</div>}
+            {infos && (<>
+              {infos.bio && (<>
+                <div className="np-h">{infos.album_artist}</div>
+                <p className="np-text">{infos.bio}</p>
+              </>)}
+              {infos.album_info && (<>
+                <div className="np-h">L'album</div>
+                <p className="np-text">
+                  {infos.album_info.title} — {infos.album_info.artist}
+                  {infos.album_info.year != null ? `, ${infos.album_info.year}` : ""}
+                  {` · ${infos.album_info.track_count} pistes · ${fmtTime(infos.album_info.duration_secs)}`}
+                </p>
+              </>)}
+              <div className="np-h">Cette piste</div>
+              <p className="np-text">
+                {track.title}
+                {track.track_number != null ? ` · piste ${track.track_number}${track.disc_number != null ? ` (disque ${track.disc_number})` : ""}` : ""}
+                {track.duration_secs != null ? ` · ${fmtTime(track.duration_secs)}` : ""}
+                {track.format ? ` · ${fmtFormat(track.format)}` : ""}
+              </p>
+              {infos.comment && (<>
+                <div className="np-h">Commentaire</div>
+                <p className="np-text">{infos.comment}</p>
+              </>)}
+            </>)}
+          </div>
+        )}
+        {tab === "lyrics" && (
+          <div className="np-lyrics">
+            {!lyrics && !err && <div className="np-muted">Chargement…</div>}
+            {err && <div className="np-muted">{err}</div>}
+            {lyrics && synced.length > 0 && synced.map(([ts, line], i) => (
+              <div
+                key={`${ts}-${i}`}
+                ref={i === activeIdx ? activeRef : undefined}
+                className={`line ${i === activeIdx ? "active" : ""}`}
+              >{line}</div>
+            ))}
+            {lyrics && synced.length === 0 && lyrics.plain && (
+              <p className="np-text">{lyrics.plain}</p>
+            )}
+            {lyrics && synced.length === 0 && !lyrics.plain && (
+              <div className="np-muted">Aucune parole trouvée pour cette piste.</div>
+            )}
+            {lyrics && <div className="np-muted np-src">source : {lyrics.source === "tag" ? "tag embarqué" : lyrics.source === "lrclib" ? "lrclib.net" : "aucune"}</div>}
+          </div>
+        )}
+      </div>
+    </aside>
   );
 }

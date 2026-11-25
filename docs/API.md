@@ -51,6 +51,8 @@ Base : `http://<hôte>:3000`. Toutes les réponses sont en JSON. Les erreurs :
 | GET | `/api/library/artists/{id}` | `{artist, albums, tracks, cover_url}` — page artiste complète |
 | GET | `/api/library/search?q=...` | recherche plein texte (titre/artiste/album/genre) sur les pistes |
 | GET | `/api/library/cover/{track_id}` | image (JPEG/PNG) |
+| GET | `/api/lyrics/{track_id}` | paroles : `{source: "tag"|"lrclib"|"none", plain, synced: [[secs, ligne], ...]}` — tag USLT/LYRICS embarqué (LRC) d'abord, repli [lrclib.net](https://lrclib.net) ; piste inconnue → 400 |
+| GET | `/api/infos/{track_id}` | infos lecture en cours : métadonnées, `album_info`, `comment` (tag COMM) et `bio` Wikipedia de l'artiste (`bio_source`: `cache` sled / `wikipedia` / `none`) ; piste inconnue → 400 |
 | GET | `/api/library/albums/{id}/export` | exporte l'album en ZIP (pistes + pochettes) |
 | POST | `/api/library/scan` | `{source_id?}` lance un scan (toutes sources si omis) |
 | GET | `/api/library/scan/status` | progression du scan |
