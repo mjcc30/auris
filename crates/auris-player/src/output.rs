@@ -107,6 +107,36 @@ fn dev_name(d: &Device) -> Option<String> {
     d.description().ok().map(|desc| desc.name().to_string())
 }
 
+/// Valide le nom de peripherique demande contre la liste des peripheriques
+/// visibles (`AudioOutput::devices`).
+///
+/// - `None` ou chaîne vide -> `Ok(None)` = peripherique par defaut.
+/// - `Some(n)` present dans la liste -> `Ok(Some(n))`.
+/// - sinon -> `Err(DeviceNotFound)` avec la liste des noms disponibles, pour
+///   eviter d'ecrire un nom invalide dans la config persistee.
+pub fn resolve_device_name(
+    available: &[AudioDeviceInfo],
+    want: Option<&str>,
+) -> Result<Option<String>> {
+    match want.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(n) => {
+            if available.iter().any(|d| d.name == n) {
+                Ok(Some(n.to_string()))
+            } else {
+                let list = available
+                    .iter()
+                    .map(|d| d.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Err(AurisError::DeviceNotFound(format!(
+                    "{n} (disponibles: {list})"
+                )))
+            }
+        }
+    }
+}
+
 /// Reste d'un chunk non encore consomme (le buffer cpal peut etre plus petit qu'un chunk).
 enum Stash {
     F32(Vec<f32>, usize),
@@ -181,20 +211,44 @@ impl AudioOutput {
     }
 
     pub fn new(device_name: Option<&str>) -> Result<Self> {
-        let host = cpal::default_host();
-        let device = match device_name {
+        // Valide le nom demande contre la liste visible (tous hosts), puis
+        // retrouve le Device cpal correspondant dans n'importe quel host :
+        // un DAC liste ne doit jamais etre "introuvable" a l'ouverture.
+        let wanted = resolve_device_name(&Self::devices(), device_name)?;
+        let device = match &wanted {
             Some(n) => {
-                let devices = host
-                    .output_devices()
-                    .map_err(|e| AurisError::Output(e.to_string()))?;
-                devices
-                    .into_iter()
-                    .find(|d| dev_name(d).map(|x| x == n).unwrap_or(false))
-                    .ok_or_else(|| AurisError::DeviceNotFound(n.to_string()))?
+                let mut found = None;
+                for host_id in cpal::ALL_HOSTS {
+                    let Ok(host) = cpal::host_from_id(*host_id) else {
+                        continue;
+                    };
+                    let Ok(devices) = host.output_devices() else {
+                        continue;
+                    };
+                    if let Some(d) = devices
+                        .into_iter()
+                        .find(|d| dev_name(d).map(|x| &x == n).unwrap_or(false))
+                    {
+                        found = Some(d);
+                        break;
+                    }
+                }
+                found.ok_or_else(|| AurisError::DeviceNotFound(n.clone()))?
             }
-            None => host
-                .default_output_device()
-                .ok_or(AurisError::NoOutputDevice)?,
+            None => {
+                // peripherique par defaut du premier host qui en a un
+                let mut def = None;
+                for host_id in cpal::ALL_HOSTS {
+                    let Ok(host) = cpal::host_from_id(*host_id) else {
+                        continue;
+                    };
+                    if let Some(d) = host.default_output_device() {
+                        def = Some(d);
+                        break;
+                    }
+                }
+                def.ok_or(AurisError::NoOutputDevice)?
+            }
         };
         let name = dev_name(&device).unwrap_or_else(|| "default".into());
         Ok(AudioOutput {
@@ -620,8 +674,46 @@ pub fn compute_gain(volume: u8, max_volume: u8, curve: u8, vol_mode: u8, muted: 
 
 #[cfg(test)]
 mod tests {
-    use super::compute_gain;
+    use super::{compute_gain, resolve_device_name, AudioDeviceInfo};
     use ringbuf::traits::Producer;
+
+    fn dev(name: &str, is_default: bool) -> AudioDeviceInfo {
+        AudioDeviceInfo {
+            name: name.to_string(),
+            is_default,
+            sample_rates: vec![44100, 48000],
+            supports_i24: false,
+            supports_f32: true,
+            max_channels: 2,
+        }
+    }
+
+    #[test]
+    fn resolve_device_none_ou_vide_demande_le_defaut() {
+        let list = vec![dev("DAC USB", true), dev("Haut-parleurs", false)];
+        assert_eq!(resolve_device_name(&list, None).unwrap(), None);
+        assert_eq!(resolve_device_name(&list, Some("")).unwrap(), None);
+        assert_eq!(resolve_device_name(&list, Some("   ")).unwrap(), None);
+    }
+
+    #[test]
+    fn resolve_device_nom_connu_dans_la_liste() {
+        let list = vec![dev("DAC USB", true), dev("Haut-parleurs", false)];
+        assert_eq!(
+            resolve_device_name(&list, Some("Haut-parleurs")).unwrap(),
+            Some("Haut-parleurs".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_device_nom_inconnu_refuse_avec_la_liste() {
+        let list = vec![dev("DAC USB", true)];
+        let err = resolve_device_name(&list, Some("iBasso"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("iBasso"));
+        assert!(err.contains("DAC USB")); // la liste des noms disponibles est fournie
+    }
 
     #[test]
     fn logiciel_log_par_defaut() {

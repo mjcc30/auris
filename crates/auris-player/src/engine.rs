@@ -552,7 +552,14 @@ impl Engine {
                             .as_ref()
                             .map(|t| t.uri.clone());
                         self.device_name = name.clone();
-                        self.state.write().unwrap().audio_device = name.clone();
+                        {
+                            let mut st = self.state.write().unwrap();
+                            st.audio_device = name.clone();
+                            // Choisir un DAC = jouer dessus en local, meme si
+                            // le mode « Jouer ici » etait actif.
+                            st.output_mode = OutputMode::Local;
+                        }
+                        self.out_mode.store(0, Ordering::SeqCst);
                         if let Some(uri) = uri {
                             if self.state.read().unwrap().status != PlayStatus::Stopped {
                                 self.output = Some(out);
@@ -607,8 +614,29 @@ impl Engine {
                                 self.output =
                                     Some(AudioOutput::browser_only("Navigateur (Jouer ici)"));
                             } else {
-                                self.publish_msg("error", &format!("sortie audio: {e}"));
-                                return;
+                                // DAC choisi indisponible au demarrage (debranche) :
+                                // on retombe sur la sortie par defaut de l'OS avec un
+                                // avertissement publie, plutot que de rester muet.
+                                match AudioOutput::new(None) {
+                                    Ok(o) => {
+                                        self.publish_msg(
+                                            "warning",
+                                            &format!(
+                                                "sortie audio: {e} — bascule sur « {} » (defaut)",
+                                                o.name()
+                                            ),
+                                        );
+                                        self.device_name = Some(o.name().to_string());
+                                        self.output = Some(o);
+                                    }
+                                    Err(e2) => {
+                                        self.publish_msg(
+                                            "error",
+                                            &format!("sortie audio: {e} / defaut: {e2}"),
+                                        );
+                                        return;
+                                    }
+                                }
                             }
                         }
                     }
@@ -748,6 +776,7 @@ impl PlayerEngine {
         let (events, _) = broadcast::channel::<WsEvent>(256);
         let state = Arc::new(RwLock::new(PlayerState::default()));
         state.write().unwrap().volume = initial_volume.min(100);
+        state.write().unwrap().audio_device = device.clone();
         let volume = Arc::new(AtomicU8::new(initial_volume.min(100)));
         let max_volume = Arc::new(AtomicU8::new(100));
         let curve = Arc::new(AtomicU8::new(0)); // logarithmique par défaut

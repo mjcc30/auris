@@ -13,7 +13,9 @@ kanban avec critères d'acceptation (voir [USER_STORIES.md](USER_STORIES.md)).
 - [ ] File d'attente, lecture/pause/stop, suivant/précédent, seek, volume, muet,
       répétition (off/all/one), aléatoire
 - [x] Sélection du périphérique de sortie (DAC) depuis l'UI — liste de **tous** les hôtes audio, re-scan à chaud (bouton actualiser), étoile sur le défaut
-- [ ] CLI : `serve`, `version`, `audio-devices`, `update`
+- [x] **Sortie audio persistante** : le DAC choisi et le mode (`local`/`browser`) sont écrits dans `config.toml` et repris au démarrage — la sortie ne suit plus le périphérique par défaut de Windows quand on le change ; choisir un DAC repasse la lecture en local même en mode « Jouer ici » ; nom inconnu → 400 avec la liste ; DAC débranché au démarrage → repli sur la sortie par défaut avec avertissement
+- [x] **Lancement sans friction** (double-clic du .exe) : ouverture automatique du navigateur sur l'UI (`--no-open` / `AURIS_NO_OPEN` pour désactiver), **instance unique** (un second lancement ouvre juste le navigateur sur l'instance existante), `auris shortcut` installe un raccourci Bureau + un lancement au démarrage de Windows
+- [ ] CLI : `serve`, `version`, `audio-devices`, `usb-devices`, `shortcut`, `update`
 - [ ] CI : fmt, clippy, tests, couverture, commits conventionnels
 
 ## Should have — v0.2.0 (NAS & bibliothèque)

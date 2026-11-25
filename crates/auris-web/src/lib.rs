@@ -35,6 +35,12 @@ struct UiAssets;
 /// Sink de persistance des réglages (config.toml).
 pub type SettingsSink = Arc<dyn Fn(&Settings) + Send + Sync>;
 
+/// Sink de persistance de la sortie audio (DAC + mode) dans config.toml.
+pub type PlayerSink = Arc<dyn Fn(Option<String>, OutputMode) + Send + Sync>;
+
+/// Liste les périphériques audio disponibles (injectable pour les tests).
+pub type DeviceLister = Arc<dyn Fn() -> Vec<auris_core::AudioDeviceInfo> + Send + Sync>;
+
 /// Etat partagé de l'application web.
 #[derive(Clone)]
 pub struct AppState {
@@ -50,6 +56,11 @@ pub struct AppState {
     pub settings: Arc<RwLock<Settings>>,
     /// Persiste les réglages dans config.toml. `None` = pas de persistance (tests).
     pub settings_sink: Option<SettingsSink>,
+    /// Persiste le périphérique audio choisi + le mode de sortie (config.toml).
+    /// `None` = pas de persistance (tests).
+    pub player_sink: Option<PlayerSink>,
+    /// Liste les périphériques audio (par défaut `AudioOutput::devices`).
+    pub device_lister: Option<DeviceLister>,
     /// Répertoire de données (stockage, logs, reset usine).
     pub data_dir: PathBuf,
     /// Autorise redémarrer/éteindre depuis l'UI (config `power_control`).
@@ -87,6 +98,8 @@ impl AppState {
             sources_sink: None,
             settings: Arc::new(RwLock::new(Settings::default())),
             settings_sink: None,
+            player_sink: None,
+            device_lister: None,
             data_dir,
             power_control: false,
             power_ops: None,
@@ -104,6 +117,19 @@ impl AppState {
     fn persist_settings(&self) {
         if let Some(sink) = &self.settings_sink {
             sink(&self.settings.read().unwrap());
+        }
+    }
+
+    fn list_devices(&self) -> Vec<auris_core::AudioDeviceInfo> {
+        match &self.device_lister {
+            Some(l) => l(),
+            None => AudioOutput::devices(),
+        }
+    }
+
+    fn persist_player(&self, device: Option<String>, mode: OutputMode) {
+        if let Some(sink) = &self.player_sink {
+            sink(device, mode);
         }
     }
 }
@@ -1277,15 +1303,22 @@ async fn post_playlist_play(
     Ok(Json(s.engine.state()))
 }
 
-async fn get_devices() -> Json<Vec<auris_core::AudioDeviceInfo>> {
-    Json(AudioOutput::devices())
+async fn get_devices(State(s): State<AppState>) -> Json<Vec<auris_core::AudioDeviceInfo>> {
+    Json(s.list_devices())
 }
 async fn post_device(
     State(s): State<AppState>,
     Json(b): Json<DeviceBody>,
-) -> Json<auris_core::PlayerState> {
-    s.engine.select_device(b.name);
-    Json(s.engine.state())
+) -> ApiResult<Json<auris_core::PlayerState>> {
+    // Valide le nom contre la liste reelle des peripheriques : un nom inconnu
+    // (DAC debranche, faute de frappe) -> 400 avec la liste des noms connus.
+    let resolved = auris_player::resolve_device_name(&s.list_devices(), b.name.as_deref())
+        .map_err(ApiError)?;
+    s.engine.select_device(resolved.clone());
+    // Choisir un DAC = lecture locale dessus ; on persiste pour le prochain
+    // demarrage (sinon la sortie suivrait le defaut Windows au redemarrage).
+    s.persist_player(resolved, OutputMode::Local);
+    Ok(Json(s.engine.state()))
 }
 
 async fn get_system_info(State(s): State<AppState>) -> Json<SystemInfo> {
@@ -1548,6 +1581,8 @@ async fn post_output(
     Json(b): Json<OutputBody>,
 ) -> Json<auris_core::PlayerState> {
     s.engine.set_output_mode(b.mode);
+    let device = s.engine.state().audio_device;
+    s.persist_player(device, b.mode);
     Json(s.engine.state())
 }
 

@@ -21,6 +21,8 @@ pub enum Command {
     AudioDevices,
     /// Liste les disques amovibles (cles USB, disques externes) detectes.
     UsbDevices,
+    /// Installe un raccourci Bureau + un lancement au demarrage de Windows.
+    Shortcut,
     /// Affiche la version.
     Version,
 }
@@ -45,4 +47,7 @@ pub struct ServeArgs {
     /// Desactive la mise a jour automatique [env: AURIS_AUTO_UPDATE=]
     #[arg(long, env = "AURIS_AUTO_UPDATE")]
     pub no_auto_update: bool,
+    /// N'ouvre pas le navigateur automatiquement au demarrage [env: AURIS_NO_OPEN=]
+    #[arg(long, env = "AURIS_NO_OPEN")]
+    pub no_open: bool,
 }

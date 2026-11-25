@@ -16,6 +16,8 @@ pub struct AppConfig {
     pub data_dir: Option<PathBuf>,
     /// DAC a utiliser (nom exact depuis /api/audio/devices). None = defaut.
     pub audio_device: Option<String>,
+    /// Mode de sortie persistant : "local" (DAC) ou "browser" (« Jouer ici »).
+    pub output_mode: Option<String>,
     /// Volume initial (0-100).
     pub volume: u8,
     /// Verification/mise a jour automatique depuis GitHub.
@@ -37,6 +39,7 @@ impl Default for AppConfig {
             host: "0.0.0.0".into(),
             data_dir: None,
             audio_device: None,
+            output_mode: None,
             volume: 80,
             auto_update: true,
             repo_owner: "mjcc30".into(),
@@ -170,12 +173,19 @@ mod tests {
         };
         c.sources
             .push(auris_core::Source::new_local("nas", "/mnt/nas"));
+        c.audio_device = Some("Casque (iBasso DC03 Pro)".to_string());
+        c.output_mode = Some("local".to_string());
         c.save().unwrap();
         assert!(dir.join("config.toml").exists());
 
         let loaded = AppConfig::load(Some(dir.clone()));
         assert_eq!(loaded.port, 8080);
         assert_eq!(loaded.sources.len(), 1);
+        assert_eq!(
+            loaded.audio_device.as_deref(),
+            Some("Casque (iBasso DC03 Pro)")
+        );
+        assert_eq!(loaded.output_mode.as_deref(), Some("local"));
         assert!(matches!(
             &loaded.sources[0].kind,
             auris_core::SourceKind::Local { path } if path == "/mnt/nas"

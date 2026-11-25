@@ -10,4 +10,4 @@ pub mod output;
 pub use decoder::{open_decoder, probe_meta, Chunk, ChunkData, Decoder, OutputSpec, TrackMeta};
 pub use engine::{Command, PlayerEngine, WorkerMsg};
 pub use eq::{Biquad, EqBandParams, EqChain, EqConfig, EqProcessor};
-pub use output::AudioOutput;
+pub use output::{resolve_device_name, AudioOutput};

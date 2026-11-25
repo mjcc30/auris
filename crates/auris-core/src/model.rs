@@ -324,6 +324,23 @@ pub enum OutputMode {
     Browser,
 }
 
+impl OutputMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OutputMode::Local => "local",
+            OutputMode::Browser => "browser",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "local" => Some(OutputMode::Local),
+            "browser" => Some(OutputMode::Browser),
+            _ => None,
+        }
+    }
+}
+
 /// Trame envoyée aux clients du flux navigateur (`/ws/audio`).
 #[derive(Debug, Clone)]
 pub enum BrowserFrame {

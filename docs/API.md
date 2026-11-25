@@ -101,7 +101,7 @@ percent (`%20`) ou les espaces bruts dans le chemin.)
 | Méthode | Route | Description |
 |---|---|---|
 | GET | `/api/audio/devices` | DAC détectés sur **tous** les hôtes audio (WASAPI/ALSA/CoreAudio…), dédupliqués : un DAC branché à chaud apparaît sans redémarrer (capacités, taux, `is_default`) |
-| POST | `/api/audio/device` | `{name?}` sélectionne le DAC |
+| POST | `/api/audio/device` | `{name?}` sélectionne le DAC — nom validé contre la liste réelle (400 + liste des noms si inconnu), bascule la lecture en mode `local` et **persiste** `audio_device` + `output_mode` dans `config.toml` (`null` = sortie par défaut de l'OS) |
 | GET | `/api/system/info` | version, OS, uptime, counts |
 | GET | `/api/system/update` | dernière vérification de mise à jour |
 | POST | `/api/system/update` | applique la mise à jour (redémarrage requis) |
@@ -141,7 +141,7 @@ sur le DAC local comme en « Jouer ici », et se met à jour à chaud sans coupu
 
 | Méthode | Route | Description |
 |---|---|---|
-| POST | `/api/player/output` | `{ "mode": "local" \| "browser" }` — « Jouer ici » : le navigateur courant devient la sortie audio |
+| POST | `/api/player/output` | `{ "mode": "local" \| "browser" }` — « Jouer ici » : le navigateur courant devient la sortie audio ; le mode est **persistant** (`output_mode` dans `config.toml`) |
 | WS | `/ws/audio` | flux binaire : trame texte `audio_spec` (JSON) puis PCM f32 LE entrelacé, post-gain (volume UI actif) |
 
 `PlayerState.output_mode` = `"local"` ou `"browser"`.

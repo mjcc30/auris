@@ -62,6 +62,7 @@ fn init_logging(cli: &Cli) {
             device: None,
             volume: None,
             no_auto_update: false,
+            no_open: false,
         }),
         _ => None,
     };
@@ -107,6 +108,7 @@ async fn main() -> anyhow::Result<()> {
             app::list_usb_devices();
             Ok(())
         }
+        Some(Command::Shortcut) => app::install_shortcut(),
         Some(Command::Version) => {
             println!("auris {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -119,6 +121,7 @@ async fn main() -> anyhow::Result<()> {
                 device: None,
                 volume: None,
                 no_auto_update: false,
+                no_open: false,
             })
             .await
         }

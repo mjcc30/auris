@@ -35,6 +35,17 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         config.auto_update = false;
     }
 
+    // Instance unique : si un Auris tourne deja sur ce port, on ouvre juste
+    // le navigateur dessus au lieu de demarrer un second serveur.
+    let url = local_url(&config.host, config.port);
+    if already_running(config.port) {
+        println!("Auris est déjà en cours d'exécution : {url}");
+        if !args.no_open {
+            open_browser(&url);
+        }
+        return Ok(());
+    }
+
     let data_dir = config.resolve_data_dir();
     std::fs::create_dir_all(&data_dir).context("création du data-dir")?;
     if !config.config_path().exists() {
@@ -59,6 +70,15 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
 
     let engine = PlayerEngine::start(sources.clone(), config.audio_device.clone(), config.volume);
     engine.apply_playback(&config.settings.playback);
+    // Mode de sortie persistant (« local » / « browser ») : repris tel quel au
+    // demarrage pour ne pas retomber sur le defaut Windows.
+    if let Some(mode_str) = &config.output_mode {
+        if let Some(m) = auris_core::OutputMode::parse(mode_str) {
+            engine.set_output_mode(m);
+        } else {
+            tracing::warn!("output_mode inconnu dans config.toml: {mode_str}");
+        }
+    }
 
     let updater = Arc::new(Updater::new(UpdaterConfig {
         repo_owner: config.repo_owner.clone(),
@@ -89,6 +109,20 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         }
     });
 
+    // persistance du DAC choisi + du mode de sortie dans config.toml, pour que
+    // la sortie ne suive pas le peripherique par defaut de Windows au redemarrage
+    let sink_data_dir3 = data_dir.clone();
+    let player_sink = Arc::new(
+        move |device: Option<String>, mode: auris_core::OutputMode| {
+            let mut cfg = AppConfig::load(Some(sink_data_dir3.clone()));
+            cfg.audio_device = device;
+            cfg.output_mode = Some(mode.as_str().to_string());
+            if let Err(e) = cfg.save() {
+                tracing::warn!("persistance de la sortie audio: {e}");
+            }
+        },
+    );
+
     let state = AppState {
         engine,
         library,
@@ -98,6 +132,8 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         sources_sink: Some(sources_sink),
         settings: Arc::new(RwLock::new(config.settings.clone())),
         settings_sink: Some(settings_sink),
+        player_sink: Some(player_sink),
+        device_lister: None,
         data_dir: data_dir.clone(),
         power_control: config.power_control,
         power_ops: None,
@@ -108,6 +144,21 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)
         .parse()
         .context("adresse d'écoute invalide (host:port)")?;
+
+    // Ouverture automatique du navigateur une fois le serveur prêt.
+    if !args.no_open {
+        let u = url.clone();
+        let port = config.port;
+        std::thread::spawn(move || {
+            for _ in 0..150 {
+                if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                    open_browser(&u);
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        });
+    }
 
     let shutdown = async {
         let _ = tokio::signal::ctrl_c().await;
@@ -178,4 +229,173 @@ pub fn run_update(auto: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+// ---------- lancement facilite (double-clic, instance unique) ----------
+
+/// URL locale joignable depuis la machine hôte (0.0.0.0 -> 127.0.0.1).
+pub fn local_url(host: &str, port: u16) -> String {
+    let h = match host {
+        "" | "0.0.0.0" | "::" | "[::]" => "127.0.0.1",
+        other => other,
+    };
+    format!("http://{h}:{port}/")
+}
+
+/// `true` si un serveur Auris repond deja sur 127.0.0.1:port.
+pub fn already_running(port: u16) -> bool {
+    use std::io::{Read, Write};
+    let mut stream = match std::net::TcpStream::connect(("127.0.0.1", port)) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(800)));
+    let req = b"GET /api/system/info HTTP/1.0\r\nHost: localhost\r\n\r\n";
+    if stream.write_all(req).is_err() {
+        return false;
+    }
+    let mut buf = Vec::new();
+    let _ = stream.read_to_end(&mut buf);
+    let text = String::from_utf8_lossy(&buf);
+    text.contains("Auris")
+}
+
+/// (programme, arguments) pour ouvrir une URL dans le navigateur par defaut.
+pub fn browser_cmd(url: &str) -> (String, Vec<String>) {
+    if cfg!(target_os = "windows") {
+        (
+            "cmd".into(),
+            vec!["/C".into(), "start".into(), "".into(), url.into()],
+        )
+    } else if cfg!(target_os = "macos") {
+        ("open".into(), vec![url.into()])
+    } else {
+        ("xdg-open".into(), vec![url.into()])
+    }
+}
+
+/// Ouvre l'interface web dans le navigateur par defaut (sans bloquer).
+pub fn open_browser(url: &str) {
+    let (prog, args) = browser_cmd(url);
+    let _ = std::process::Command::new(prog).args(args).spawn();
+}
+
+/// Contenu du .vbs de demarrage automatique (fenetre cachee).
+pub fn vbs_content(exe: &str) -> String {
+    format!("CreateObject(\"Wscript.Shell\").Run \"\"\"{exe}\"\" serve\", 0, False\r\n")
+}
+
+/// Script PowerShell creant le raccourci Bureau (.lnk).
+pub fn ps_lnk_script(exe: &str, lnk: &str) -> String {
+    format!(
+        "$s = New-Object -ComObject WScript.Shell; \
+         $l = $s.CreateShortcut('{lnk}'); \
+         $l.TargetPath = '{exe}'; \
+         $l.Arguments = 'serve'; \
+         $l.WorkingDirectory = '{work}'; \
+         $l.Save()",
+        work = std::path::Path::new(exe)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    )
+}
+
+/// Installe un raccourci Bureau + un lancement au demarrage (Windows).
+/// Sur les autres OS, affiche la procedure manuelle.
+pub fn install_shortcut() -> Result<()> {
+    let exe = std::env::current_exe().context("chemin du binaire courant")?;
+    let exe_s = exe.to_string_lossy().into_owned();
+    if cfg!(target_os = "windows") {
+        let appdata = std::env::var("APPDATA").context("variable APPDATA introuvable")?;
+        let startup = std::path::Path::new(&appdata)
+            .join("Microsoft/Windows/Start Menu/Programs/Startup/Auris.vbs");
+        std::fs::write(&startup, vbs_content(&exe_s)).context("ecriture du .vbs de demarrage")?;
+        let lnk = std::env::var("USERPROFILE")
+            .map(|p| format!("{p}/Desktop/Auris.lnk"))
+            .unwrap_or_else(|_| "Auris.lnk".to_string());
+        let ps = ps_lnk_script(&exe_s, &lnk);
+        let status = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &ps])
+            .status()
+            .context("lancement de PowerShell")?;
+        if status.success() {
+            println!("Raccourci Bureau cree: {lnk}");
+        } else {
+            println!("Raccourci Bureau non cree (PowerShell a echoue) — script:\n{ps}");
+        }
+        println!(
+            "Lancement au demarrage de Windows installe: {}",
+            startup.display()
+        );
+        println!("Double-cliquez sur le raccourci Bureau : le navigateur s'ouvre automatiquement.");
+    } else {
+        println!("Raccourci automatique non supporte sur cet OS. Procedure manuelle:");
+        println!("  - lancez `{exe_s} serve` (le navigateur s'ouvre tout seul),");
+        println!(
+            "  - creez un raccourci vers ce binaire dans votre session (systemd, .desktop, etc.)."
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    #[test]
+    fn local_url_remplace_wildcard_par_loopback() {
+        assert_eq!(local_url("0.0.0.0", 3000), "http://127.0.0.1:3000/");
+        assert_eq!(local_url("::", 8080), "http://127.0.0.1:8080/");
+        assert_eq!(local_url("192.168.1.10", 3000), "http://192.168.1.10:3000/");
+    }
+
+    #[test]
+    fn already_running_detecte_auris_ou_pas() {
+        // port ferme -> false
+        assert!(!already_running(1));
+        // serveur HTTP qui repond "Auris" -> true
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut s in listener.incoming().flatten() {
+                let mut buf = [0u8; 512];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(
+                    b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{\"name\":\"Auris\"}"
+                );
+            }
+        });
+        assert!(already_running(port));
+        // serveur HTTP qui ne repond pas "Auris" -> false
+        let listener2 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port2 = listener2.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut s in listener2.incoming().flatten() {
+                let mut buf = [0u8; 512];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(b"HTTP/1.0 200 OK\r\n\r\n{\"name\":\"autre\"}");
+            }
+        });
+        assert!(!already_running(port2));
+    }
+
+    #[test]
+    fn browser_cmd_contient_l_url() {
+        let (prog, args) = browser_cmd("http://127.0.0.1:3000/");
+        assert!(!prog.is_empty());
+        assert!(args.contains(&"http://127.0.0.1:3000/".to_string()));
+    }
+
+    #[test]
+    fn vbs_et_lnk_contiennent_le_chemin_exe() {
+        let vbs = vbs_content("C:\\apps\\auris.exe");
+        assert!(vbs.contains("C:\\apps\\auris.exe"));
+        assert!(vbs.contains("serve"));
+        let ps = ps_lnk_script("C:\\apps\\auris.exe", "C:\\Users\\x\\Desktop\\Auris.lnk");
+        assert!(ps.contains("TargetPath = 'C:\\apps\\auris.exe'"));
+        assert!(ps.contains("Auris.lnk"));
+        assert!(ps.contains("serve"));
+    }
 }
