@@ -170,16 +170,19 @@ fn dop_packing_marqueurs() {
             let low = (s & 0xFFFF) as u16;
             let marker = s >> 16;
             assert_eq!(low, 0xABAB, "16 bits DSD dans les bits bas (trame {f})");
-            let attendu = if f % 16 == 0 {
-                if (f / 16) % 2 == 0 {
-                    0x05
-                } else {
-                    0xFA
-                }
-            } else {
-                0x00
-            };
+            let attendu = if f % 2 == 0 { 0x05 } else { 0xFA };
             assert_eq!(marker, attendu, "marqueur DoP trame {f}");
+        }
+    }
+    // condition de verrouillage du DAC: 32 trames consecutives, chacune avec
+    // un marqueur valide 0x05/0xFA sur chaque canal (jamais 0x00)
+    for f in 0..32usize {
+        for c in 0..2 {
+            let m = v[f * 2 + c] >> 16;
+            assert!(
+                m == 0x05 || m == 0xFA,
+                "marqueur absent trame {f} canal {c}"
+            );
         }
     }
     // fin de piste ensuite
@@ -192,7 +195,7 @@ fn dop_seek_reprend_marqueur() {
     let data = vec![0xCDu8; 4096 * 2];
     let dsf = make_dsf(2_822_400, 2, 4096, 16 * frames, &data);
     let mut dec = DsdDecoder::new(Box::new(Cursor::new(dsf)), TrackMeta::default()).unwrap();
-    // seek a la trame 32 : samples = 32*16, marqueur attendu 0x05 (32/16 pair)
+    // seek a la trame 32 : samples = 32*16, trame paire -> marqueur 0x05
     dec.seek(32.0 * 16.0 / 2_822_400.0).unwrap();
     let chunk = dec.next_chunk(1).unwrap().unwrap();
     let ChunkData::I24Dop(v) = chunk else {

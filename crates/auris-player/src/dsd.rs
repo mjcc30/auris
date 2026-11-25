@@ -2,7 +2,7 @@
 //!
 //! Le DoP transporte le flux DSD natif dans des trames PCM 24 bits:
 //! - 16 bits DSD par trame et par canal (2 octets bas)
-//! - octet de marqueur 0x05 / 0xFA (alterne tous les 16 trames) dans l'octet haut
+//! - octet de marqueur 0x05 / 0xFA (alterne a chaque trame) dans l'octet haut
 //! - cadence = rate_dsd / 16 : DSD64 -> 176.4 kHz, DSD128 -> 352.8 kHz, DSD256 -> 705.6 kHz
 //!
 //! C'est la methode standard pour delivrer le DSD natif en USB sur les DAC
@@ -15,16 +15,14 @@ use auris_sources::SeekRead;
 
 use crate::decoder::{ChunkData, Decoder, OutputSpec, TrackMeta};
 
-/// Marqueur DoP: 0x05 / 0xFA toutes les 16 trames, en alternance.
+/// Marqueur DoP (DoP Open Standard v1.1): 0x05 / 0xFA en alternance a chaque
+/// trame, identique sur tous les canaux d'une trame. Le DAC exige 32 octets
+/// marqueurs consecutifs par canal pour verrouiller le mode DoP.
 fn dop_marker(global_frame: u64) -> i32 {
-    if global_frame.is_multiple_of(16) {
-        if (global_frame / 16).is_multiple_of(2) {
-            0x05
-        } else {
-            0xFA
-        }
+    if global_frame.is_multiple_of(2) {
+        0x05
     } else {
-        0x00
+        0xFA
     }
 }
 
