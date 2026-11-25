@@ -24,6 +24,7 @@ nav:
   - Installer: install.md
   - Guide:
       - Spécifications: SPECIFICATIONS.md
+      - Parité Volumio 4: SPEC_VOLUMIO.md
       - Fonctionnalités: FEATURES.md
       - Sources & import/export: SOURCES.md
       - User stories: USER_STORIES.md
