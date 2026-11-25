@@ -146,6 +146,16 @@ export interface UpdateInfo {
 
 // ---------- Réglages (équivalent menu « Réglages » de Volumio Nova) ----------
 
+export interface EqBand {
+  freq_hz: number;
+  gain_db: number;
+}
+
+export interface EqSettings {
+  enabled: boolean;
+  bands: EqBand[];
+}
+
 export interface PlaybackSettings {
   volume_curve: "logarithmic" | "linear";
   max_volume: number;
@@ -153,6 +163,18 @@ export interface PlaybackSettings {
   gapless: boolean;
   resampling: boolean;
   dsd_mode: "dop" | "pcm";
+  /** Minuterie de sommeil en minutes (null = désactivée, one-shot). */
+  sleep_timer: number | null;
+  /** Heure de réveil "HH:MM" (heure locale, null = désactivé). */
+  wake_time: string | null;
+  /** Égaliseur paramétrique 10 bandes. */
+  eq: EqSettings;
+}
+
+export interface AlarmsInfo {
+  sleep_timer: number | null;
+  sleep_remaining_secs: number | null;
+  wake_time: string | null;
 }
 
 export interface AppearanceSettings {
@@ -267,6 +289,7 @@ export const api = {
   system: () => req<SystemInfo>("/api/system/info"),
   updateCheck: () => req<UpdateInfo>("/api/system/update"),
   settings: () => req<Settings>("/api/settings"),
+  alarms: () => req<AlarmsInfo>("/api/alarms"),
   updateSettings: (s: Settings) =>
     req<Settings>("/api/settings", {
       method: "PUT",

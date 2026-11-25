@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, fmtBytes, fmtTime, makeSource, type Album, type AppearanceSettings, type AudioDevice, type BrowseEntry, type CopyReport, type MountInfo, type PlaylistDetail, type PlayerState, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, fmtBytes, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type AudioDevice, type BrowseEntry, type CopyReport, type MountInfo, type PlaylistDetail, type PlayerState, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 
@@ -75,6 +75,7 @@ export default function App() {
   const [devices, setDevices] = useState<AudioDevice[]>([]);
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [alarms, setAlarms] = useState<AlarmsInfo | null>(null);
   const [browseSrc, setBrowseSrc] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [searchNonce, setSearchNonce] = useState(0);
@@ -125,6 +126,15 @@ export default function App() {
     else browserAudio.current.stop();
   }, [state?.output_mode]);
 
+  // Minuterie de sommeil / réveil : sondage doux (5 s) pour le badge du lecteur.
+  useEffect(() => {
+    let dead = false;
+    const load = async () => { try { const a = await api.alarms(); if (!dead) setAlarms(a); } catch { /* ignore */ } };
+    load();
+    const iv = setInterval(load, 5000);
+    return () => { dead = true; clearInterval(iv); };
+  }, []);
+
   const act = useCallback(async (fn: () => Promise<unknown>, okMsg?: string) => {
     try { await fn(); if (okMsg) say(okMsg); await refresh(); }
     catch (e) { say(e instanceof Error ? e.message : String(e)); }
@@ -168,7 +178,7 @@ export default function App() {
           {view === "settings" && <SettingsView settings={settings} updateSettings={updateSettings} say={say} refresh={refresh} />}
         </main>
       </div>
-      <PlayerBar state={state} devices={devices} act={act} say={say} />
+      <PlayerBar state={state} devices={devices} act={act} say={say} alarms={alarms} />
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
@@ -909,6 +919,47 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
             </select>
           </SetRow>
         ),
+        show("Minuterie de sommeil", "Pause automatique après N minutes de lecture (one-shot)") && (
+          <SetRow key="sleep" label="Minuterie de sommeil" desc="Pause automatique après N minutes (one-shot, réarmable)">
+            <select value={p.sleep_timer?.toString() ?? ""} onChange={(e) => setPlayback("sleep_timer", e.target.value === "" ? null : Number(e.target.value))}>
+              <option value="">Désactivée</option>
+              {[15, 30, 45, 60, 90, 120].map((m) => <option key={m} value={m}>{m} min</option>)}
+            </select>
+          </SetRow>
+        ),
+        show("Réveil", "Relance la lecture à une heure donnée (heure locale)") && (
+          <SetRow key="wake" label="Réveil" desc="Relance la lecture à l'heure indiquée (heure locale)">
+            <input type="time" value={p.wake_time ?? ""} style={{ width: 130 }}
+              onChange={(e) => setPlayback("wake_time", e.target.value || null)} />
+          </SetRow>
+        ),
+      ].filter(Boolean) as React.ReactNode[],
+    },
+    {
+      title: "Égaliseur",
+      rows: [
+        show("Égaliseur paramétrique", "10 bandes, ±20 dB, appliqué en temps réel (DAC et « Jouer ici »)") && (
+          <SetRow key="eq" label="Égaliseur paramétrique" desc="10 bandes ISO (31 Hz – 16 kHz), ±20 dB, appliqué à chaud sur le flux PCM">
+            <Switch checked={p.eq.enabled} label="égaliseur" onChange={(v) => setPlayback("eq", { ...p.eq, enabled: v })} />
+          </SetRow>
+        ),
+        p.eq.enabled && show("Bandes de l'égaliseur", "Gain de chaque bande en dB") && (
+          <div key="eqbands" className="eq-grid">
+            {p.eq.bands.map((b, i) => (
+              <div key={b.freq_hz} className="eq-band">
+                <input type="range" min={-20} max={20} step={0.5} value={b.gain_db} aria-label={`Bande ${b.freq_hz} Hz`}
+                  onChange={(e) => {
+                    const gain = Number(e.target.value);
+                    const bands = p.eq.bands.map((x, j) => (j === i ? { ...x, gain_db: gain } : x));
+                    setPlayback("eq", { ...p.eq, bands });
+                  }} />
+                <span className="eq-gain">{b.gain_db > 0 ? `+${b.gain_db}` : `${b.gain_db}`} dB</span>
+                <span className="eq-freq">{b.freq_hz >= 1000 ? `${b.freq_hz / 1000}k` : b.freq_hz}</span>
+              </div>
+            ))}
+            <button className="btn ghost sm" onClick={() => setPlayback("eq", { ...p.eq, bands: p.eq.bands.map((b) => ({ ...b, gain_db: 0 })) })}>Tout remettre à plat</button>
+          </div>
+        ),
       ].filter(Boolean) as React.ReactNode[],
     },
     {
@@ -1064,12 +1115,13 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
 
 // ---------- Barre de lecture ----------
 
-function PlayerBar({ state, devices, act, say }: { state: PlayerState | null; devices: AudioDevice[]; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void }) {
+function PlayerBar({ state, devices, act, say, alarms }: { state: PlayerState | null; devices: AudioDevice[]; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; alarms: AlarmsInfo | null }) {
   const playing = state?.status === "playing";
   const [menuOpen, setMenuOpen] = useState(false);
   const cur = state?.current;
   const pos = state?.position_secs ?? 0;
   const dur = state?.duration_secs ?? cur?.duration_secs ?? 0;
+  const sleepLeft = alarms?.sleep_remaining_secs ?? null;
   return (
     <footer className="player">
       <div className="now">
@@ -1094,6 +1146,12 @@ function PlayerBar({ state, devices, act, say }: { state: PlayerState | null; de
       </div>
       <div className="right">
         {state?.output_mode === "browser" && <span className="badge" title="Le son sort dans ce navigateur"><Icon name="speaker" size={12} /> Navigateur</span>}
+        {sleepLeft != null && <span className="badge" title={`Minuterie de sommeil : pause automatique dans ${fmtTime(sleepLeft)}`}>
+          <Icon name="moon" size={12} /> {fmtTime(sleepLeft)}
+        </span>}
+        {alarms?.wake_time && <span className="badge" title={`Réveil programmé à ${alarms.wake_time} (heure locale)`}>
+          <Icon name="alarm" size={12} /> {alarms.wake_time}
+        </span>}
         {cur && <button className="icon-btn-out" title="Partager un lien public de la piste en cours" onClick={async () => {
           try {
             const sh = await api.createShare("track", cur.id);

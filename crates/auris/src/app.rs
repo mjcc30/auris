@@ -102,6 +102,7 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         power_control: config.power_control,
         power_ops: None,
         log_path: Some(data_dir.join("logs").join("auris.log")),
+        alarms: Arc::new(std::sync::Mutex::new(auris_core::AlarmState::default())),
     };
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)

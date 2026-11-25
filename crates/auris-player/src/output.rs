@@ -20,6 +20,7 @@ use ringbuf::{HeapCons, HeapProd, HeapRb};
 use tokio::sync::broadcast;
 
 use crate::decoder::{Chunk, ChunkData, OutputSpec};
+use crate::eq::{EqConfig, EqProcessor};
 
 pub type SharedRb = Arc<HeapRb<Chunk>>;
 pub type Prod = HeapProd<Chunk>;
@@ -202,6 +203,8 @@ impl AudioOutput {
         // 0 = DAC local, 1 = « Jouer ici » (PCM vers le navigateur, DAC muet).
         out_mode: Arc<AtomicU8>,
         browser_tx: broadcast::Sender<BrowserFrame>,
+        // égaliseur paramétrique (config poussée à chaud, reconstruit si version change)
+        eq: Arc<std::sync::RwLock<EqConfig>>,
     ) -> Result<()> {
         self.stream = None; // stoppe l'ancien flux
         let configs: Vec<SupportedStreamConfigRange> = self
@@ -261,6 +264,8 @@ impl AudioOutput {
             buffer_size: BufferSize::Default,
         };
         let src_channels = spec.channels as usize;
+        // cadence copiée pour le callback 'static (l'EQ dépend de la cadence)
+        let eq_rate = spec.rate;
         // Le flux navigateur ne transporte que du PCM f32 (pas de trames DoP).
         let forward_browser = !spec.is_dsd_dop;
 
@@ -275,14 +280,18 @@ impl AudioOutput {
                 let vol_mode = vol_mode.clone();
                 let out_mode = out_mode.clone();
                 let browser_tx = browser_tx.clone();
+                let eq = eq.clone();
                 // stash persistant entre les appels du callback: un chunk plus gros
                 // que le buffer cpal est consomme sur plusieurs appels.
                 let mut stash: Option<Stash> = None;
+                // EQ paramétrique : la chaîne est reconstruite à chaud si la config change.
+                let mut eq_proc = EqProcessor::new();
                 let stream = self
                     .device
                     .build_output_stream::<$t, _, _>(
                         stream_config.clone(),
                         move |data: &mut [$t], _info| {
+                            let eq_cfg = eq.read().unwrap();
                             let gain = compute_gain(
                                 volume.load(Ordering::Relaxed),
                                 max_volume.load(Ordering::Relaxed),
@@ -324,8 +333,15 @@ impl AudioOutput {
                                                     break;
                                                 }
                                                 let ic = oc.min(src_channels - 1);
-                                                data[i] =
-                                                    <$t>::from_f32(v[f * src_channels + ic], gain);
+                                                // EQ paramétrique avant le gain de volume
+                                                let s = eq_proc.process(
+                                                    &eq_cfg,
+                                                    eq_rate,
+                                                    src_channels,
+                                                    ic,
+                                                    v[f * src_channels + ic],
+                                                );
+                                                data[i] = <$t>::from_f32(s, gain);
                                                 i += 1;
                                             }
                                             *off += src_channels;

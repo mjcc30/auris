@@ -117,10 +117,23 @@ percent (`%20`) ou les espaces bruts dans le chemin.)
 | PUT | `/api/settings` | remplace les réglages (validés, 400 si invalide), appliqués à chaud au moteur |
 
 Sections : `playback` (courbe de volume, `max_volume`, `volume_mode` software/disabled,
-gapless, resampling, `dsd_mode`), `appearance` (thème dark/light/system, `accent`
-`#RRGGBB`, `background`), `system` (`device_name`, `timezone`), `network` (`hostname`),
+gapless, resampling, `dsd_mode`, `sleep_timer` en minutes (one-shot, null = off),
+`wake_time` « HH:MM » heure locale (null = off), `eq` : égaliseur paramétrique
+`{enabled, bands: [{freq_hz, gain_db}]}` 10 bandes ISO 31 Hz – 16 kHz, ±20 dB),
+`appearance` (thème dark/light/system, `accent` `#RRGGBB`, `background`),
+`system` (`device_name`, `timezone`), `network` (`hostname`),
 `sources` (`metadata_discovery`). `PlayerState` expose aussi `max_volume` et
 `volume_mode` pour que l'UI masque le volume en mode bit-perfect.
+
+| Méthode | Route | Description |
+|---|---|---|
+| GET | `/api/alarms` | état des alarmes : `{sleep_timer, sleep_remaining_secs, wake_time}` |
+
+Une tâche de fond (1 tick/s) applique les alarmes : à l'expiration de la minuterie de
+sommeil, la lecture passe en pause (one-shot) ; à l'heure de réveil, la lecture reprend
+(pause → resume, arrêté → rejoue la file). Les deux envoient un événement WS `alarm`.
+L'égaliseur est appliqué dans le callback audio (biquads RBJ, avant le gain de volume),
+sur le DAC local comme en « Jouer ici », et se met à jour à chaud sans coupure.
 
 ## « Jouer ici » (sortie navigateur)
 

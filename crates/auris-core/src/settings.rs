@@ -49,8 +49,60 @@ pub enum DsdMode {
     Pcm,
 }
 
+/// Fréquences des bandes de l'égaliseur paramétrique (octaves ISO, 10 bandes).
+pub const EQ_BAND_FREQS: [u32; 10] = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+
+/// Borne du gain d'une bande d'EQ (±20 dB).
+pub const EQ_MAX_GAIN_DB: f32 = 20.0;
+
+/// Une bande de l'égaliseur paramétrique.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct EqBand {
+    pub freq_hz: u32,
+    /// Gain en dB, entre -20 et +20.
+    pub gain_db: f32,
+}
+
+/// Réglages de l'égaliseur paramétrique (10 bandes par défaut, gain 0 = plat).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EqSettings {
+    pub enabled: bool,
+    pub bands: Vec<EqBand>,
+}
+
+impl Default for EqSettings {
+    fn default() -> Self {
+        EqSettings {
+            enabled: false,
+            bands: EQ_BAND_FREQS
+                .iter()
+                .map(|&freq_hz| EqBand {
+                    freq_hz,
+                    gain_db: 0.0,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Analyse une heure « HH:MM » (24 h). Retourne (heure, minute) ou None si invalide.
+pub fn parse_hhmm(s: &str) -> Option<(u8, u8)> {
+    let (hs, ms) = s.trim().split_once(':')?;
+    if hs.is_empty() || hs.len() > 2 || ms.is_empty() || ms.len() > 2 {
+        return None;
+    }
+    let h: u8 = hs.parse().ok()?;
+    let m: u8 = ms.parse().ok()?;
+    if h < 24 && m < 60 {
+        Some((h, m))
+    } else {
+        None
+    }
+}
+
 /// Réglages de lecture.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PlaybackSettings {
     pub volume_curve: VolumeCurve,
@@ -62,6 +114,13 @@ pub struct PlaybackSettings {
     /// Rééchantillonnage autorisé (false = bit-perfect, aucun resample).
     pub resampling: bool,
     pub dsd_mode: DsdMode,
+    /// Minuterie de sommeil : après N minutes de lecture, pause automatique.
+    /// `None` = désactivée (one-shot : à refaire à chaque utilisation).
+    pub sleep_timer: Option<u32>,
+    /// Heure de réveil « HH:MM » (heure locale) : relance la lecture. `None` = désactivé.
+    pub wake_time: Option<String>,
+    /// Égaliseur paramétrique appliqué au flux PCM (DAC local et « Jouer ici »).
+    pub eq: EqSettings,
 }
 
 impl Default for PlaybackSettings {
@@ -73,6 +132,9 @@ impl Default for PlaybackSettings {
             gapless: true,
             resampling: false,
             dsd_mode: DsdMode::Dop,
+            sleep_timer: None,
+            wake_time: None,
+            eq: EqSettings::default(),
         }
     }
 }
@@ -142,7 +204,7 @@ impl Default for SourcesSettings {
 }
 
 /// Tous les réglages, racine de la section `[settings]` de config.toml.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Settings {
     pub playback: PlaybackSettings,
@@ -170,6 +232,36 @@ impl Settings {
         if name.is_empty() || name.len() > 64 {
             return Err("device_name doit faire entre 1 et 64 caractères".into());
         }
+        if let Some(m) = self.playback.sleep_timer {
+            if m == 0 || m > 480 {
+                return Err("sleep_timer doit être entre 1 et 480 minutes".into());
+            }
+        }
+        if let Some(w) = &self.playback.wake_time {
+            if parse_hhmm(w).is_none() {
+                return Err(format!(
+                    "wake_time doit être au format HH:MM 24 h (reçu: `{w}`)"
+                ));
+            }
+        }
+        let eq = &self.playback.eq;
+        if eq.bands.len() > 32 {
+            return Err("l'égaliseur accepte au plus 32 bandes".into());
+        }
+        for b in &eq.bands {
+            if b.freq_hz < 20 || b.freq_hz > 20000 {
+                return Err(format!(
+                    "fréquence de bande EQ hors plage 20-20000 Hz: {}",
+                    b.freq_hz
+                ));
+            }
+            if !b.gain_db.is_finite() || b.gain_db.abs() > EQ_MAX_GAIN_DB {
+                return Err(format!(
+                    "gain de bande EQ hors plage ±{EQ_MAX_GAIN_DB} dB: {}",
+                    b.gain_db
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -186,11 +278,75 @@ mod tests {
         assert_eq!(s.playback.volume_mode, VolumeMode::Software);
         assert!(s.playback.gapless);
         assert!(!s.playback.resampling);
+        assert_eq!(s.playback.dsd_mode, DsdMode::Dop);
+        assert_eq!(s.playback.sleep_timer, None);
+        assert_eq!(s.playback.wake_time, None);
+        assert!(!s.playback.eq.enabled);
+        assert_eq!(s.playback.eq.bands.len(), EQ_BAND_FREQS.len());
+        assert!(s.playback.eq.bands.iter().all(|b| b.gain_db == 0.0));
         assert_eq!(s.appearance.theme, Theme::Dark);
         assert_eq!(s.appearance.accent, "#1ED760");
         assert_eq!(s.system.device_name, "auris");
         assert!(s.sources.metadata_discovery);
         s.validate().unwrap();
+    }
+
+    #[test]
+    fn parse_hhmm_valide_et_invalide() {
+        assert_eq!(parse_hhmm("07:30"), Some((7, 30)));
+        assert_eq!(parse_hhmm("23:59"), Some((23, 59)));
+        assert_eq!(parse_hhmm("00:00"), Some((0, 0)));
+        assert_eq!(parse_hhmm("7:05"), Some((7, 5)));
+        for bad in ["", "7", "24:00", "12:60", "ab:cd", "1:2:3", "-1:00"] {
+            assert!(parse_hhmm(bad).is_none(), "{bad:?} devrait être refusé");
+        }
+    }
+
+    #[test]
+    fn validation_sleep_timer() {
+        let mut s = Settings::default();
+        s.playback.sleep_timer = Some(0);
+        assert!(s.validate().is_err());
+        s.playback.sleep_timer = Some(481);
+        assert!(s.validate().is_err());
+        s.playback.sleep_timer = Some(60);
+        s.validate().unwrap();
+        s.playback.sleep_timer = None;
+        s.validate().unwrap();
+    }
+
+    #[test]
+    fn validation_wake_time() {
+        let mut s = Settings::default();
+        s.playback.wake_time = Some("25:00".into());
+        assert!(s.validate().is_err());
+        s.playback.wake_time = Some("matin".into());
+        assert!(s.validate().is_err());
+        s.playback.wake_time = Some("06:45".into());
+        s.validate().unwrap();
+    }
+
+    #[test]
+    fn validation_eq() {
+        let mut s = Settings::default();
+        s.playback.eq.enabled = true;
+        s.playback.eq.bands[5].gain_db = 6.0;
+        s.validate().unwrap();
+        s.playback.eq.bands[5].gain_db = 21.0;
+        assert!(s.validate().is_err());
+        s.playback.eq.bands[5].gain_db = f32::NAN;
+        assert!(s.validate().is_err());
+        s.playback.eq.bands[5].gain_db = 0.0;
+        s.playback.eq.bands[0].freq_hz = 10;
+        assert!(s.validate().is_err());
+        s.playback.eq.bands[0].freq_hz = 31;
+        s.playback.eq.bands = (0..33)
+            .map(|i| EqBand {
+                freq_hz: 1000 + i as u32,
+                gain_db: 0.0,
+            })
+            .collect();
+        assert!(s.validate().is_err());
     }
 
     #[test]

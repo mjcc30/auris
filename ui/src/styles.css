@@ -562,3 +562,10 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-w
 .share-row:last-child { border-bottom: none; }
 .share-title { font-weight: 600; font-size: 14px; }
 .share-url { flex: 1; min-width: 0; color: var(--text-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Égaliseur paramétrique (Réglages > Égaliseur) */
+.eq-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; padding: 10px 0 14px; }
+.eq-band { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.eq-band input[type="range"] { width: 100%; }
+.eq-gain { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.eq-freq { font-size: 12px; font-weight: 600; }

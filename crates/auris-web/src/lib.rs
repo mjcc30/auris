@@ -5,7 +5,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use axum::{
     extract::{Path, Query, State, WebSocketUpgrade},
@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 
 use auris_core::{
-    AurisError, BrowseEntry, OutputMode, Playlist, RepeatMode, Settings, ShareKind, ShareLink,
-    Source, Track, WsEvent, ZipWriter,
+    Alarm, AlarmState, AurisError, BrowseEntry, OutputMode, PlayStatus, Playlist, RepeatMode,
+    Settings, ShareKind, ShareLink, Source, Track, WsEvent, ZipWriter,
 };
 use auris_library::Library;
 use auris_player::{AudioOutput, PlayerEngine};
@@ -58,6 +58,8 @@ pub struct AppState {
     pub power_ops: Option<Arc<dyn Fn(PowerAction) + Send + Sync>>,
     /// Fichier de logs si la journalisation fichier est active.
     pub log_path: Option<PathBuf>,
+    /// État de la minuterie de sommeil / du réveil (tick 1x/s dans `serve`).
+    pub alarms: Arc<Mutex<AlarmState>>,
 }
 
 /// Action d'alimentation (redémarrer / éteindre la machine hôte).
@@ -89,6 +91,7 @@ impl AppState {
             power_control: false,
             power_ops: None,
             log_path: None,
+            alarms: Arc::new(Mutex::new(AlarmState::default())),
         }
     }
 
@@ -320,6 +323,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/system/shutdown", post(post_shutdown))
         // réglages (menu Réglages façon Volumio Nova)
         .route("/api/settings", get(get_settings).put(put_settings))
+        .route("/api/alarms", get(get_alarms))
         .route("/api/shares", get(get_shares).post(post_share))
         .route("/api/shares/{token}", delete(delete_share))
         .route("/api/public/shares/{token}", get(public_share))
@@ -340,7 +344,54 @@ pub fn router(state: AppState) -> Router {
 }
 
 pub async fn serve(state: AppState, addr: SocketAddr) -> anyhow::Result<()> {
-    let app = router(state);
+    let app = router(state.clone());
+    // tâche de fond : minuterie de sommeil + réveil (vérification 1x/s)
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let now = chrono::Utc::now().timestamp();
+            let offset = chrono::Local::now().offset().local_minus_utc();
+            let (sleep, wake) = {
+                let r = state.settings.read().unwrap();
+                (r.playback.sleep_timer, r.playback.wake_time.clone())
+            };
+            let events = {
+                let mut a = state.alarms.lock().unwrap();
+                auris_core::tick(now, offset, sleep, wake.as_deref(), &mut a)
+            };
+            for ev in events {
+                match ev {
+                    Alarm::Sleep => {
+                        tracing::info!("minuterie de sommeil expirée: pause");
+                        state.engine.pause();
+                        let _ = state.engine.events.send(WsEvent::message(
+                            "alarm",
+                            "Minuterie de sommeil terminée : lecture en pause",
+                        ));
+                    }
+                    Alarm::Wake => {
+                        tracing::info!(
+                            "réveil {}: relance de la lecture",
+                            wake.as_deref().unwrap_or("")
+                        );
+                        let st = state.engine.state();
+                        match st.status {
+                            PlayStatus::Paused => state.engine.resume(),
+                            PlayStatus::Stopped if !st.queue.is_empty() => {
+                                let idx = st.queue_index.unwrap_or(0).min(st.queue.len() - 1);
+                                state.engine.play_queue(st.queue.clone(), idx);
+                            }
+                            _ => {}
+                        }
+                        let _ = state
+                            .engine
+                            .events
+                            .send(WsEvent::message("alarm", "Réveil : lecture relancée"));
+                    }
+                }
+            }
+        }
+    });
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("interface web: http://{addr}");
     axum::serve(listener, app).await?;
@@ -1172,6 +1223,36 @@ async fn post_update(State(s): State<AppState>) -> Json<serde_json::Value> {
 
 async fn get_settings(State(s): State<AppState>) -> Json<Settings> {
     Json(s.settings.read().unwrap().clone())
+}
+
+/// État des alarmes (minuterie de sommeil / réveil) pour l'UI.
+#[derive(Serialize)]
+struct AlarmsInfo {
+    /// Réglage courant de la minuterie (minutes), si active.
+    sleep_timer: Option<u32>,
+    /// Secondes restantes avant la pause automatique, si armée.
+    sleep_remaining_secs: Option<i64>,
+    /// Heure de réveil « HH:MM », si active.
+    wake_time: Option<String>,
+}
+
+async fn get_alarms(State(s): State<AppState>) -> Json<AlarmsInfo> {
+    let (timer, wake) = {
+        let r = s.settings.read().unwrap();
+        (r.playback.sleep_timer, r.playback.wake_time.clone())
+    };
+    let now = chrono::Utc::now().timestamp();
+    let remaining = s
+        .alarms
+        .lock()
+        .unwrap()
+        .sleep_deadline()
+        .map(|d| (d - now).max(0));
+    Json(AlarmsInfo {
+        sleep_timer: timer,
+        sleep_remaining_secs: remaining,
+        wake_time: wake,
+    })
 }
 
 async fn put_settings(

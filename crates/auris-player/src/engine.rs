@@ -15,6 +15,7 @@ use ringbuf::traits::{Observer, Producer};
 use tokio::sync::broadcast;
 
 use crate::decoder::{open_decoder, Chunk, Decoder, OutputSpec, TrackMeta};
+use crate::eq::{EqBandParams, EqConfig};
 use crate::output::{make_ring, AudioOutput, Cons, Prod};
 
 const RING_CHUNKS: usize = 96;
@@ -265,6 +266,8 @@ struct Engine {
     out_mode: Arc<AtomicU8>,
     browser_tx: broadcast::Sender<BrowserFrame>,
     browser_spec: Arc<RwLock<Option<(u32, u16)>>>,
+    /// Config de l'égaliseur paramétrique, poussée à chaud (versionnée).
+    eq: Arc<RwLock<EqConfig>>,
     worker: Option<WorkerHandle>,
     cur_spec: Option<OutputSpec>,
     pending_uri: Option<String>,
@@ -485,6 +488,20 @@ impl Engine {
                 st.volume = v;
                 drop(st);
                 self.volume.store(v, Ordering::SeqCst);
+                // EQ paramétrique : maj à chaud (bump de version -> chaîne reconstruite)
+                {
+                    let mut eq = self.eq.write().unwrap();
+                    eq.enabled = p.eq.enabled;
+                    eq.bands =
+                        p.eq.bands
+                            .iter()
+                            .map(|b| EqBandParams {
+                                freq_hz: b.freq_hz,
+                                gain_db: b.gain_db,
+                            })
+                            .collect();
+                    eq.version += 1;
+                }
                 self.publish();
             }
             Command::SetMuted(m) => {
@@ -601,6 +618,7 @@ impl Engine {
                     self.vol_mode.clone(),
                     self.out_mode.clone(),
                     self.browser_tx.clone(),
+                    self.eq.clone(),
                 ) {
                     self.publish_msg("error", &format!("flux audio: {e}"));
                     return;
@@ -727,6 +745,7 @@ impl PlayerEngine {
         let (browser_tx, _) = broadcast::channel::<BrowserFrame>(128);
         let out_mode = Arc::new(AtomicU8::new(0));
         let browser_spec = Arc::new(RwLock::new(None::<(u32, u16)>));
+        let eq = Arc::new(RwLock::new(EqConfig::default()));
 
         // horloge de position: 2x / seconde
         {
@@ -771,6 +790,7 @@ impl PlayerEngine {
             out_mode: out_mode.clone(),
             browser_tx: browser_tx.clone(),
             browser_spec: browser_spec.clone(),
+            eq,
             worker: None,
             cur_spec: None,
             pending_uri: None,

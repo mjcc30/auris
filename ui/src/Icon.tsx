@@ -40,6 +40,9 @@ export function Icon({ name, size = 24, filled = false, className = "" }: { name
     cast: (<><path d="M2 8.5V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6" /><path d="M2 12a8 8 0 0 1 8 8" /><path d="M2 16a4 4 0 0 1 4 4" /><circle cx="2.5" cy="19.5" r="1" fill="currentColor" stroke="none" /></>),
     group: (<><circle cx="8" cy="9" r="3" /><path d="M2.5 19a5.5 5.5 0 0 1 11 0" /><circle cx="17" cy="10" r="2.4" /><path d="M15.5 19a4.6 4.6 0 0 1 6-4.4" /></>),
     devices: (<><rect x="2" y="5" width="13" height="10" rx="1.5" /><path d="M6 19h6" /><rect x="17" y="9" width="5" height="10" rx="1.2" /></>),
+    moon: <path d="M20 13.5A8 8 0 1 1 10.5 4 6.5 6.5 0 0 0 20 13.5z" />,
+    alarm: (<><circle cx="12" cy="13" r="7.5" /><path d="M12 9.5V13l2.5 2" /><path d="m5 3.5-2.5 2M19 3.5l2.5 2" /></>),
+    sliders: (<><path d="M4 8h10M18 8h2M4 16h4M12 16h8" /><circle cx="16" cy="8" r="2" /><circle cx="10" cy="16" r="2" /></>),
   };
   return (
     <svg

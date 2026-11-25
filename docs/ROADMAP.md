@@ -70,7 +70,10 @@ ouverts ou des intégrations communautaires avec compte utilisateur :
 - « Super search » : recherche simultanée dans toutes les sources + services.
 - Lecture infinie des radios, sauvegarde/restauration de la config (ZIP local ou WebDAV).
 - CD ripping (via `whipper`/AccurateRip sur Linux), crédits/métadonnées (MusicBrainz).
-- Sleep timer / réveil, égaliseur/DSP (biquad interne ou plugin LSP).
+- **Sleep timer / réveil + égaliseur (faits)** : minuterie one-shot (pause auto),
+  réveil « HH:MM » heure locale, `GET /api/alarms` ; EQ 10 bandes biquads RBJ appliqués
+  à chaud (DAC + navigateur), réglages dans `playback.sleep_timer` / `playback.wake_time`
+  / `playback.eq`.
 
 *Sortie : un écosystème de plugins fonctionnel + multiroom de base.*
 

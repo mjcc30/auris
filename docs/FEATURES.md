@@ -68,7 +68,11 @@ kanban avec critères d'acceptation (voir [USER_STORIES.md](USER_STORIES.md)).
 - [ ] AirPlay / Roon Ready (RAAT) / Chromecast (protocoles ouverts)
 - [ ] Spotify Connect via librespot (MIT), Tidal/Qobuz via API communautaires
 - [ ] Last.fm (scrobble) + métadonnées MusicBrainz, rip CD (whipper/AccurateRip)
-- [ ] Sleep timer / réveil, égaliseur/DSP
+- [x] **Sleep timer / réveil + égaliseur paramétrique** : minuterie de sommeil one-shot
+      (pause auto après N minutes), réveil quotidien « HH:MM » heure locale (relance la
+      lecture), compte à rebours exposé via `GET /api/alarms` et badge dans le lecteur ;
+      EQ 10 bandes ISO (31 Hz – 16 kHz, ±20 dB) en biquads RBJ appliqués à chaud dans le
+      callback audio (DAC local et « Jouer ici »), sliders dans Réglages > Égaliseur
 
 ## Should have — v1.0.0 (stable)
 
