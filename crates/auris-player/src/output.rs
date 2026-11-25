@@ -323,6 +323,33 @@ impl AudioOutput {
             );
         }
         let device = self.device.as_ref().unwrap();
+        // DoP sous Windows: le moteur WASAPI (mode partagé de cpal) ne laisse
+        // passer le flux au DAC que s'il est au « mix format » du device — on
+        // écrit le Default Format en PCM 24 bits à la porteuse DoP (sinon les
+        // marqueurs DoP sont rééchantillonnés et détruits avant le DAC).
+        #[cfg(target_os = "windows")]
+        if spec.is_dsd_dop {
+            match crate::wasapi_dop::ensure_dop_carrier(Some(&self.device_name), spec.rate) {
+                Ok(true) => tracing::warn!(
+                    "DoP: Default Format du device '{}' ecrit en 24 bits / {} Hz — redemarrez le service audio Windows si le DAC ne verrouille pas le DoP",
+                    self.device_name,
+                    spec.rate
+                ),
+                Ok(false) => {
+                    if let Some(mix) = crate::wasapi_dop::device_mix_format(Some(&self.device_name)) {
+                        tracing::info!(
+                            "DoP: mix format du device '{}' = {mix} (porteuse {})",
+                            self.device_name,
+                            spec.rate
+                        );
+                    }
+                }
+                Err(e) => tracing::warn!(
+                    "DoP: impossible de regler le Default Format du device '{}': {e}",
+                    self.device_name
+                ),
+            }
+        }
         let configs: Vec<SupportedStreamConfigRange> = device
             .supported_output_configs()
             .map_err(|e| AurisError::Output(e.to_string()))?

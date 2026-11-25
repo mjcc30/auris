@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 use anyhow::{Context, Result};
 
 use auris_library::Library;
-use auris_player::{AudioOutput, PlayerEngine};
+use auris_player::{all_mix_formats, AudioOutput, PlayerEngine};
 use auris_sources::SourcesManager;
 use auris_updater::{Updater, UpdaterConfig};
 use auris_web::{serve, AppState};
@@ -201,6 +201,16 @@ pub fn list_audio_devices() {
             d.supports_f32,
             d.max_channels
         );
+    }
+    // Sous Windows, le mix format WASAPI de chaque endpoint est ce que le
+    // moteur audio envoie réellement au DAC en mode partagé (cpal) : un flux
+    // DoP doit être à cette cadence pour arriver intact (marqueurs DoP).
+    let mix_formats = all_mix_formats();
+    if !mix_formats.is_empty() {
+        println!("Mix formats WASAPI (Default Format):");
+        for (name, mix) in mix_formats {
+            println!("    {name}: {mix}");
+        }
     }
 }
 
