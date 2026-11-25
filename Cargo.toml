@@ -37,6 +37,8 @@ rust-embed = "8"
 symphonia = { version = "0.6", default-features = false, features = [
   "all-codecs", "all-formats", "all-meta", "opt-simd",
 ] }
+# WavPack (.wv) : demuxer + decodeur purs Rust compatibles symphonia-core 0.6
+symphonia-codec-wavpack = "0.1.1"
 cpal = "0.18"
 ringbuf = "0.4"
 bytemuck = "1"

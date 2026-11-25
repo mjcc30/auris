@@ -6,8 +6,9 @@ use std::io::{Read, Seek, SeekFrom};
 use auris_core::{AudioFormat, AurisError, Result};
 use auris_sources::SeekRead;
 use symphonia::core::codecs::audio::{AudioDecoder as SymDecoder, AudioDecoderOptions};
+use symphonia::core::codecs::registry::CodecRegistry;
 use symphonia::core::errors::Error as SymError;
-use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::probe::{Hint, Probe};
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
 use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::{MetadataOptions, StandardTag};
@@ -82,16 +83,30 @@ pub trait Decoder: Send {
 }
 
 /// Adaptateur SeekRead -> symphonia MediaSource.
-struct MsWrapper<R: SeekRead>(R);
+struct MsWrapper<R: SeekRead> {
+    inner: R,
+    byte_len: Option<u64>,
+}
+
+impl<R: SeekRead> MsWrapper<R> {
+    fn new(mut inner: R) -> Self {
+        // Taille du flux via seek end (certains demuxers, ex. CAF, en ont besoin).
+        let byte_len = inner
+            .seek(SeekFrom::End(0))
+            .ok()
+            .filter(|&end| inner.seek(SeekFrom::Start(0)).ok() == Some(0) && end > 0);
+        MsWrapper { inner, byte_len }
+    }
+}
 
 impl<R: SeekRead> Read for MsWrapper<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.0.read(buf)
+        self.inner.read(buf)
     }
 }
 impl<R: SeekRead> Seek for MsWrapper<R> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        self.0.seek(pos)
+        self.inner.seek(pos)
     }
 }
 impl<R: SeekRead> MediaSource for MsWrapper<R> {
@@ -99,8 +114,7 @@ impl<R: SeekRead> MediaSource for MsWrapper<R> {
         true
     }
     fn byte_len(&self) -> Option<u64> {
-        // SeekRead n'expose pas la taille; on tente via seek end (le reader la supporte).
-        None
+        self.byte_len
     }
 }
 
@@ -116,14 +130,22 @@ pub struct PcmDecoder {
 
 impl PcmDecoder {
     pub fn new(reader: Box<dyn SeekRead>, ext: &str) -> Result<Self> {
-        let mss = MediaSourceStream::new(Box::new(MsWrapper(reader)), Default::default());
+        let mss = MediaSourceStream::new(Box::new(MsWrapper::new(reader)), Default::default());
         let mut hint = Hint::new();
         if !ext.is_empty() {
             hint.with_extension(ext);
         }
         let fmt_opts: FormatOptions = Default::default();
         let meta_opts: MetadataOptions = Default::default();
-        let mut format = symphonia::default::get_probe()
+        // Registres maison : formats/codecs symphonia par defaut + WavPack (.wv),
+        // absent des features "all-*" de symphonia 0.6 (crate externe compatible 0.6).
+        let mut probe = Probe::default();
+        symphonia::default::register_enabled_formats(&mut probe);
+        probe.register_format::<symphonia_codec_wavpack::WavPackReader>();
+        let mut codecs = CodecRegistry::default();
+        symphonia::default::register_enabled_codecs(&mut codecs);
+        codecs.register_audio_decoder::<symphonia_codec_wavpack::WavPackDecoder>();
+        let mut format = probe
             .probe(&hint, mss, fmt_opts, meta_opts)
             .map_err(|e| AurisError::UnsupportedFormat(format!("{e}")))?;
         let track = format
@@ -135,7 +157,7 @@ impl PcmDecoder {
             .as_ref()
             .and_then(|c| c.audio())
             .ok_or_else(|| AurisError::UnsupportedFormat("codec sans parametres audio".into()))?;
-        let decoder = symphonia::default::get_codecs()
+        let decoder = codecs
             .make_audio_decoder(codec_params, &dec_opts)
             .map_err(|e| AurisError::UnsupportedFormat(format!("codec non supporte: {e}")))?;
         let track_id = track.id;

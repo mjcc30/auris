@@ -6,7 +6,7 @@ kanban avec critères d'acceptation (voir [USER_STORIES.md](USER_STORIES.md)).
 ## Must have — v0.1.0 (MVP)
 
 - [ ] Binaire unique cross-plateforme (Linux x86_64/arm64, macOS, Windows)
-- [ ] Lecture fichiers locaux (FLAC, WAV, MP3, AAC, OGG...) sans ré-échantillonnage
+- [x] Lecture fichiers locaux sans ré-échantillonnage : FLAC, WAV, AIFF, CAF, M4A (AAC/ALAC), MP3, AAC ADTS, OGG Vorbis, WavPack (.wv), DSF/DFF (DSD64/128/256 via DoP)
 - [ ] Sortie DAC USB via cpal (ALSA / CoreAudio / WASAPI)
 - [ ] Interface web embarquée, style Spotify (sombre), responsive
 - [ ] API REST v1 + WebSocket état temps réel

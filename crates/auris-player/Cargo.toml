@@ -9,6 +9,7 @@ description = "Moteur de lecture: decode PCM/DSD (jusqu'au DSD256 via DoP), sort
 auris-core.workspace = true
 auris-sources.workspace = true
 symphonia.workspace = true
+symphonia-codec-wavpack.workspace = true
 cpal.workspace = true
 ringbuf.workspace = true
 bytemuck.workspace = true
