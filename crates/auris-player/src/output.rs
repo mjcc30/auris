@@ -331,7 +331,7 @@ impl AudioOutput {
         if spec.is_dsd_dop {
             match crate::wasapi_dop::ensure_dop_carrier(Some(&self.device_name), spec.rate) {
                 Ok(true) => tracing::warn!(
-                    "DoP: Default Format du device '{}' ecrit en 24 bits / {} Hz — redemarrez le service audio Windows si le DAC ne verrouille pas le DoP",
+                    "DoP: Default Format du device '{}' ecrit en 24 bits / {} Hz — rebranchez le DAC USB ou redemarrez le service audio Windows pour que le moteur adopte ce format, sinon le flux DoP est reechantillonne",
                     self.device_name,
                     spec.rate
                 ),

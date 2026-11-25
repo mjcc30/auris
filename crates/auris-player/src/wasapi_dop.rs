@@ -260,6 +260,68 @@ mod imp {
         out
     }
 
+    /// Écriture directe du registre MMDevices (persiste même si le moteur
+    /// audio tourne, mais exige les droits admin sur HKLM). Best-effort.
+    unsafe fn write_default_format_registry(dev: &IMMDevice, blob: &[u8]) -> bool {
+        use windows::Win32::System::Registry::{
+            RegCloseKey, RegCreateKeyExW, RegQueryValueExW, RegSetValueExW, HKEY_LOCAL_MACHINE,
+            KEY_WRITE, REG_BINARY, REG_OPTION_NON_VOLATILE,
+        };
+        const VALUE_NAME: &str = "{f19f064d-082c-4e27-bc73-6882a1bb8e4c},0";
+        unsafe {
+            let id = match dev.GetId() {
+                Ok(p) => p.to_string().unwrap_or_default(),
+                Err(_) => return false,
+            };
+            // GetId() -> "{0.0.0.00000000}.{357f0e79-...}" ; la clé registre
+            // ne contient que le second GUID.
+            let guid = id.split_once('.').map(|(_, g)| g).unwrap_or(&id);
+            let path = windows::core::HSTRING::from(format!(
+                "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\Render\\{guid}\\Properties"
+            ));
+            let mut hkey = windows::Win32::System::Registry::HKEY::default();
+            if RegCreateKeyExW(
+                HKEY_LOCAL_MACHINE,
+                &path,
+                None,
+                None,
+                REG_OPTION_NON_VOLATILE,
+                KEY_WRITE,
+                None,
+                &mut hkey,
+                None,
+            )
+            .0 != 0
+            {
+                return false; // pas admin: le property store suffit (endpoint au repos)
+            }
+            // réutilise l'en-tête PROPVARIANT (8 octets) de la valeur existante
+            let name = windows::core::HSTRING::from(VALUE_NAME);
+            let mut prefix = [0x41u8, 0, 0, 0, 0, 0, 0, 0];
+            let mut buf = [0u8; 64];
+            let mut len = buf.len() as u32;
+            if RegQueryValueExW(
+                hkey,
+                &name,
+                None,
+                None,
+                Some(buf.as_mut_ptr()),
+                Some(&mut len),
+            )
+            .0 == 0
+                && (len as usize) >= 8
+            {
+                prefix.copy_from_slice(&buf[..8]);
+            }
+            let mut data = Vec::with_capacity(8 + blob.len());
+            data.extend_from_slice(&prefix);
+            data.extend_from_slice(blob);
+            let ok = RegSetValueExW(hkey, &name, None, REG_BINARY, Some(&data)).0 == 0;
+            let _ = RegCloseKey(hkey);
+            ok
+        }
+    }
+
     pub fn ensure_dop_carrier(
         device_name: Option<&str>,
         dop_rate: u32,
@@ -285,6 +347,9 @@ mod imp {
             store
                 .SetValue(&PKEY_AudioEngine_DeviceFormat, &pv)
                 .map_err(|e| format!("SetValue(Default Format {dop_rate} Hz / 24 bits): {e}"))?;
+            // best-effort: le moteur audio révoque la propriété tant qu'un flux
+            // tourne sur l'endpoint; le registre, lui, persiste (si admin).
+            let _ = write_default_format_registry(&dev, &blob);
             Ok(true)
         }
     }
