@@ -599,7 +599,24 @@ impl Engine {
                 cons,
             } => {
                 let uri = self.pending_uri.clone().unwrap_or_default();
-                let track = track_from_uri(&uri, &meta, duration);
+                // Si la piste vient de la file (play_queue / playTrack), on
+                // conserve son vrai Track (id de la bibliothèque) au lieu d'en
+                // resynthétiser un à id aléatoire — sinon « Partager » sur la
+                // piste en cours renvoie « piste introuvable ».
+                let queued = {
+                    let st = self.state.read().unwrap();
+                    st.queue_index
+                        .and_then(|i| st.queue.get(i))
+                        .filter(|t| t.uri == uri)
+                        .cloned()
+                };
+                let mut track = queued.unwrap_or_else(|| track_from_uri(&uri, &meta, duration));
+                if track.duration_secs.is_none() {
+                    track.duration_secs = duration.or(meta.duration_secs);
+                }
+                if meta.format.is_some() {
+                    track.format = meta.format;
+                }
                 if self.output.is_none() {
                     match AudioOutput::new(self.device_name.as_deref()) {
                         Ok(o) => {

@@ -437,13 +437,20 @@ async fn post_play(
 ) -> ApiResult<Json<auris_core::PlayerState>> {
     if let Some(queue) = body.queue {
         let idx = body.index.unwrap_or(0);
+        // Adopte les vrais Tracks de la bibliothèque quand l'uri est scannée :
+        // l'id de la piste en cours doit rester celui de la bibliothèque,
+        // sinon « Partager » renvoie « piste introuvable ».
+        let queue = queue
+            .into_iter()
+            .map(|t| s.library.get_by_uri(&t.uri).unwrap_or(t))
+            .collect::<Vec<_>>();
         s.engine.play_queue(queue, idx);
     } else if let Some(track_id) = body.track_id {
         let t = s
             .library
             .track(&track_id)
             .ok_or_else(|| AurisError::TrackNotFound(track_id.clone()))?;
-        s.engine.play_uri(t.uri);
+        s.engine.play_queue(vec![t], 0);
     } else if let Some(uri) = body.uri {
         // un dossier est joue en "tout lire": file remplie de ses fichiers audio
         if let Ok(entry) = s.sources.stat(&uri).await {
@@ -452,11 +459,20 @@ async fn post_play(
                 if tracks.is_empty() {
                     return Err(AurisError::other("dossier sans fichier audio".to_string()).into());
                 }
+                let tracks = tracks
+                    .into_iter()
+                    .map(|t| s.library.get_by_uri(&t.uri).unwrap_or(t))
+                    .collect::<Vec<_>>();
                 s.engine.play_queue(tracks, 0);
                 return Ok(Json(s.engine.state()));
             }
         }
-        s.engine.play_uri(uri);
+        // fichier: piste de la bibliothèque si scannée, sinon lecture par uri
+        if let Some(t) = s.library.get_by_uri(&uri) {
+            s.engine.play_queue(vec![t], 0);
+        } else {
+            s.engine.play_uri(uri);
+        }
     } else {
         return Err(AurisError::InvalidUri("uri, track_id ou queue requis".into()).into());
     }
