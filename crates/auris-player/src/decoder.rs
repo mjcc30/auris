@@ -352,6 +352,8 @@ pub fn read_metadata(format: &mut dyn FormatReader) -> TrackMeta {
 }
 
 /// Ouvre un decodeur adapte au format (DSD si .dsf/.dff, PCM sinon).
+/// PCM : symphonia d'abord, repli sur un processus ffmpeg si symphonia
+/// ne connait pas le format (Opus, WMA, APE...) et que ffmpeg est disponible.
 pub fn open_decoder(
     reader: Box<dyn SeekRead>,
     ext: &str,
@@ -359,9 +361,27 @@ pub fn open_decoder(
 ) -> Result<Box<dyn Decoder>> {
     let ext = ext.to_ascii_lowercase();
     if ext == "dsf" || ext == "dff" {
-        Ok(Box::new(DsdDecoder::new(reader, meta)?))
+        return Ok(Box::new(DsdDecoder::new(reader, meta)?));
+    }
+    let shared = crate::ffmpeg::SharedReader::new(reader);
+    match PcmDecoder::new(Box::new(shared.clone()), &ext) {
+        Ok(d) => Ok(Box::new(d)),
+        Err(e) => match crate::ffmpeg::FfmpegDecoder::new(shared) {
+            Ok(d) => Ok(Box::new(d)),
+            Err(fe) => Err(fallback_error(e, fe)),
+        },
+    }
+}
+
+/// Erreur finale du repli : si ffmpeg est indisponible, on garde l'erreur
+/// symphonia en precisant le repli ; sinon c'est ffmpeg qui a echoue.
+fn fallback_error(sym_err: AurisError, ff_err: AurisError) -> AurisError {
+    if !crate::ffmpeg::ffmpeg_disponible() {
+        AurisError::UnsupportedFormat(format!(
+            "{sym_err} (repli ffmpeg indisponible: ffmpeg introuvable, definir AURIS_FFMPEG ou l'installer)"
+        ))
     } else {
-        Ok(Box::new(PcmDecoder::new(reader, &ext)?))
+        ff_err
     }
 }
 
@@ -383,9 +403,14 @@ pub fn probe_meta(
         });
         return Ok((meta, spec, dur));
     }
-    let pcm = PcmDecoder::new(reader, &ext_l)?;
-    let meta = pcm.meta().clone();
-    let spec = pcm.spec();
-    let dur = pcm.duration_secs();
-    Ok((meta, spec, dur))
+    let shared = crate::ffmpeg::SharedReader::new(reader);
+    match PcmDecoder::new(Box::new(shared.clone()), &ext_l) {
+        Ok(pcm) => {
+            let meta = pcm.meta().clone();
+            let spec = pcm.spec();
+            let dur = pcm.duration_secs();
+            Ok((meta, spec, dur))
+        }
+        Err(e) => crate::ffmpeg::ffmpeg_probe(shared).map_err(|fe| fallback_error(e, fe)),
+    }
 }

@@ -6,7 +6,7 @@ use uuid::Uuid;
 /// Extensions de fichiers audio reconnus (PCM + DSD).
 pub const AUDIO_EXTENSIONS: &[&str] = &[
     "flac", "wav", "aif", "aiff", "alac", "m4a", "mp4", "mp3", "aac", "ogg", "opus", "oga",
-    "vorbis", "wma", "wv", "caf", "dsf", "dff", "iso",
+    "vorbis", "wma", "wv", "caf", "dsf", "dff", "iso", "ape", "mpc", "tta", "tak",
 ];
 
 pub fn is_audio_file(path: &str) -> bool {

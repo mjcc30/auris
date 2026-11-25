@@ -44,6 +44,12 @@ install -m 755 "$tmp" "$INSTALL_DIR/$BIN_NAME"
 rm -f "$tmp"
 "$INSTALL_DIR/$BIN_NAME" version
 
+# --- ffmpeg (repli de décodage pour Opus/WMA/APE/TTA...) -----------------------
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  log "Installation de ffmpeg (repli pour les formats hors symphonia)…"
+  apt-get update -qq && apt-get install -y -qq ffmpeg
+fi
+
 # --- Utilisateur dédié + répertoires ------------------------------------------
 if ! id "$USER_NAME" >/dev/null 2>&1; then
   log "Création de l'utilisateur système $USER_NAME…"

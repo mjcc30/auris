@@ -52,9 +52,14 @@ fichier (local/SMB/HTTP/UPnP) -> SeekRead -> décodeur -> ringbuf -> callback cp
 
 - **PCM** : FLAC, WAV, AIFF, CAF, ALAC, MP3, AAC/M4A (ISOBMFF + ADTS), OGG Vorbis,
   WavPack (.wv, via `symphonia-codec-wavpack`, lossless ou lossy) — le tout via
-  symphonia. Sortie f32, aucun ré-échantillonnage (le flux est créé à la cadence
-  native du fichier). Non supportés par symphonia 0.6 : Opus, WMA, Monkey's Audio
-  (un repli ffmpeg est envisagé en v1.1).
+  symphonia en premier. Sortie f32, aucun ré-échantillonnage (le flux est créé à
+  la cadence native du fichier).
+- **Repli ffmpeg** : si symphonia ne connait pas le format (Opus, WMA, APE, TTA,
+  Musepack...) et qu'un binaire `ffmpeg` est disponible (env `AURIS_FFMPEG` ou
+  PATH ; installé par `install.sh`), le fichier est piped depuis la source vers
+  `ffprobe` (métadonnées/durée/spec) puis `ffmpeg -f f32le` (décodage). Seek par
+  relance du processus avec `-ss` en sortie (un pipe n'est pas seekable). Si la
+  durée manque (OGG via pipe), elle est mesurée par un décodage rapide complet.
 - **DSD** : DSF et DFF parsés nativement (pas de DoP-in-the-box) ; DSD64/128/256
   encapsulés en **DoP 24 bits** (marqueurs 0x05/0xFA) et envoyés sur un flux cpal
   I24 (ou I32 décalé) à `dsd_rate/16`. Le DAC reçoit du DSD natif.

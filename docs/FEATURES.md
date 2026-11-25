@@ -7,6 +7,7 @@ kanban avec critères d'acceptation (voir [USER_STORIES.md](USER_STORIES.md)).
 
 - [ ] Binaire unique cross-plateforme (Linux x86_64/arm64, macOS, Windows)
 - [x] Lecture fichiers locaux sans ré-échantillonnage : FLAC, WAV, AIFF, CAF, M4A (AAC/ALAC), MP3, AAC ADTS, OGG Vorbis, WavPack (.wv), DSF/DFF (DSD64/128/256 via DoP)
+- [x] Repli ffmpeg pour les formats hors symphonia (Opus, WMA, APE, TTA, Musepack) — binaire détecté via `AURIS_FFMPEG`/PATH, installé par `install.sh`
 - [ ] Sortie DAC USB via cpal (ALSA / CoreAudio / WASAPI)
 - [ ] Interface web embarquée, style Spotify (sombre), responsive
 - [ ] API REST v1 + WebSocket état temps réel
