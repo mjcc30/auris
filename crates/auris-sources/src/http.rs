@@ -115,18 +115,29 @@ fn run_worker(rx: Receiver<Job>) {
                         {
                             return Err(AurisError::Network(format!("GET {url}: HTTP {status}")));
                         }
-                        let size = resp
-                            .headers()
+                        let headers = resp.headers();
+                        let range_total = headers
                             .get(reqwest::header::CONTENT_RANGE)
                             .and_then(|v| v.to_str().ok())
-                            .and_then(|v| v.rsplit('/').next()?.parse::<u64>().ok())
-                            .or_else(|| {
-                                resp.headers()
-                                    .get(reqwest::header::CONTENT_LENGTH)
-                                    .and_then(|v| v.to_str().ok())
-                                    .and_then(|v| v.parse::<u64>().ok())
-                            })
-                            .unwrap_or(0);
+                            .and_then(|v| v.rsplit('/').next()?.parse::<u64>().ok());
+                        let content_length = headers
+                            .get(reqwest::header::CONTENT_LENGTH)
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|v| v.parse::<u64>().ok());
+                        // Flux live (webradio) : en-têtes ICY, ou sentinelle de
+                        // taille inconnue dans Content-Range (2^30-1, convention
+                        // icecast), ou aucune longueur connue. Dans ce cas on
+                        // rapporte size = 0 pour que `open_uri` bascule sur le
+                        // lecteur de flux live (`crate::live`).
+                        let has_icy = headers.keys().any(|k| k.as_str().starts_with("icy-"));
+                        let live = has_icy
+                            || range_total == Some(1_073_741_823)
+                            || (range_total.is_none() && content_length.is_none());
+                        let size = if live {
+                            0
+                        } else {
+                            range_total.or(content_length).unwrap_or(0)
+                        };
                         let id = next_id;
                         next_id += 1;
                         urls.insert(id, url.clone());
@@ -194,6 +205,11 @@ pub struct HttpFile {
 }
 
 impl HttpFile {
+    /// Taille connue du fichier (0 = inconnu, ex. flux live).
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
     fn fill(&mut self) -> std::io::Result<()> {
         if self.pos >= self.size {
             self.buf.clear();

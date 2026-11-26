@@ -61,6 +61,10 @@ export interface PlayerState {
   output_mode: "local" | "browser";
   /** Backend de sortie actif, ex. « cpal » ou « exclusif 176400 Hz, 24 bits PCM, 2 ch ». */
   output_backend: string;
+  /** Flux live (webradio) : durée inconnue, lecture infinie, seek inopérant. */
+  is_live: boolean;
+  /** Morceau en cours sur un flux live (métadonnées ICY StreamTitle). */
+  stream_title: string | null;
 }
 
 export interface Source {
@@ -83,6 +87,19 @@ export interface BrowseEntry {
 export interface MountInfo {
   label: string;
   path: string;
+}
+
+export interface RadioEntry {
+  id: string;
+  name: string;
+  url: string;
+  origin: "builtin" | "favorite" | "source";
+}
+
+export interface RadioList {
+  favorites: RadioEntry[];
+  builtin: RadioEntry[];
+  sources: RadioEntry[];
 }
 
 export interface CopyReport {
@@ -366,6 +383,10 @@ export const api = {
       body: JSON.stringify({ ...s, id }),
     }),
   browse: (uri: string) => req<BrowseEntry[]>(`/api/browse?uri=${encodeURIComponent(uri)}`),
+  radios: () => req<RadioList>("/api/radios"),
+  addRadio: (name: string, url: string) => req<RadioList>("/api/radios", post({ name, url })),
+  deleteRadio: (id: string) => req<RadioList>(`/api/radios/${encodeURIComponent(id)}`, del()),
+  playRadio: (id: string) => req<PlayerState>(`/api/radios/${encodeURIComponent(id)}/play`, post({})),
   browseTree: (uri: string) => req<BrowseEntry[]>(`/api/browse/tree?uri=${encodeURIComponent(uri)}`),
   usbDevices: () => req<MountInfo[]>("/api/usb/devices"),
   copy: (from: string, to: string) => req<CopyReport>("/api/transfer/copy", post({ from, to })),

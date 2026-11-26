@@ -378,6 +378,33 @@ pub struct PlayerState {
     /// (WASAPI exclusif, bit-perfect) ou "navigateur".
     #[serde(default = "default_output_backend")]
     pub output_backend: String,
+    /// Flux live (webradio) : durée inconnue, lecture infinie, seek ignoré.
+    #[serde(default)]
+    pub is_live: bool,
+    /// Morceau en cours sur un flux live (métadonnées ICY `StreamTitle`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_title: Option<String>,
+}
+
+/// Origine d'une radio listée par l'API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RadioOrigin {
+    /// Radio fournie avec Auris.
+    Builtin,
+    /// Favori ajouté par l'utilisateur (persisté dans `<data-dir>/radios.json`).
+    Favorite,
+    /// Source `kind = "radio"` de la configuration.
+    Source,
+}
+
+/// Une radio web (webradio) : nom + URL de flux HTTP(S).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RadioEntry {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub origin: RadioOrigin,
 }
 
 fn default_output_backend() -> String {
@@ -411,6 +438,8 @@ impl Default for PlayerState {
             volume_mode: "software".into(),
             output_mode: OutputMode::Local,
             output_backend: default_output_backend(),
+            is_live: false,
+            stream_title: None,
         }
     }
 }

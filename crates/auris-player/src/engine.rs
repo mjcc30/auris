@@ -299,6 +299,11 @@ impl Engine {
         self.frames_out.store(0, Ordering::SeqCst);
         self.seek_after_ready = seek_after;
         self.pending_uri = Some(uri.clone());
+        {
+            let mut st = self.state.write().unwrap();
+            st.is_live = false;
+            st.stream_title = None;
+        }
         if let Some(w) = self.worker.take() {
             w.stop();
         }
@@ -324,6 +329,8 @@ impl Engine {
         st.status = PlayStatus::Stopped;
         st.position_secs = 0.0;
         st.queue_index = None;
+        st.is_live = false;
+        st.stream_title = None;
         drop(st);
         self.publish();
     }
@@ -462,6 +469,10 @@ impl Engine {
                 }
             }
             Command::Seek(secs) => {
+                // un flux live n'a pas de position fixe : seek ignoré
+                if self.state.read().unwrap().is_live {
+                    return;
+                }
                 let dur = self.state.read().unwrap().duration_secs;
                 let secs = secs.max(0.0).min(if dur > 0.0 { dur } else { f64::MAX });
                 if let Some(w) = &self.worker {
@@ -773,6 +784,9 @@ impl Engine {
                     let mut st = self.state.write().unwrap();
                     st.current = Some(track);
                     st.duration_secs = duration.unwrap_or(0.0);
+                    // durée inconnue = flux live (webradio) : lecture infinie
+                    st.is_live = duration.is_none() && meta.duration_secs.is_none();
+                    st.stream_title = None;
                     st.position_secs = 0.0;
                     st.status = PlayStatus::Playing;
                     st.current_format = meta.format;
@@ -971,7 +985,15 @@ impl PlayerEngine {
     }
 
     pub fn state(&self) -> PlayerState {
-        self.state.read().unwrap().clone()
+        let mut st = self.state.read().unwrap().clone();
+        // Sur un flux live, on injecte le titre ICY courant (StreamTitle) lu
+        // dans le registre des radios, mis à jour en arrière-plan par le flux.
+        if st.is_live {
+            if let Some(c) = &st.current {
+                st.stream_title = auris_sources::radio_title(&c.uri);
+            }
+        }
+        st
     }
     pub fn play_uri(&self, uri: impl Into<String>) {
         self.send(Command::PlayUri(uri.into()));

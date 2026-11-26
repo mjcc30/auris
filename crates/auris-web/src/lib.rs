@@ -30,6 +30,8 @@ use auris_player::{
 use auris_sources::{discover_removable, SourcesManager};
 use auris_updater::Updater;
 
+mod radios;
+
 #[derive(RustEmbed)]
 #[folder = "../../ui/dist/"]
 struct UiAssets;
@@ -360,6 +362,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/browse", get(get_browse))
         .route("/api/browse/tree", get(get_browse_tree))
         .route("/api/browse/cover", get(get_browse_cover))
+        // radios web
+        .route(
+            "/api/radios",
+            get(radios::get_radios).post(radios::post_radio),
+        )
+        .route("/api/radios/{id}", delete(radios::delete_radio))
+        .route("/api/radios/{id}/play", post(radios::post_radio_play))
         .route("/api/upnp/discover", get(get_upnp_discover))
         .route("/api/usb/devices", get(get_usb_devices))
         // import / export
@@ -488,8 +497,12 @@ async fn post_play(
         // Enregistre les pistes jouées dans la bibliothèque: les lookups par
         // id (paroles / infos / partage / pochette) doivent retomber sur la
         // piste, même si elle vient de Parcourir et n'a pas été scannée.
+        // Les URI http(s) (webradios) ne sont PAS enregistrées : ce ne sont
+        // pas des fichiers scannés.
         for t in &queue {
-            let _ = s.library.upsert_track(t);
+            if !auris_sources::is_http_uri(&t.uri) {
+                let _ = s.library.upsert_track(t);
+            }
         }
         s.engine.play_queue(queue, idx);
     } else if let Some(track_id) = body.track_id {
@@ -516,13 +529,29 @@ async fn post_play(
                 .map(|t| s.library.get_by_uri(&t.uri).unwrap_or(t))
                 .collect::<Vec<_>>();
             for t in &tracks {
-                let _ = s.library.upsert_track(t);
+                if !auris_sources::is_http_uri(&t.uri) {
+                    let _ = s.library.upsert_track(t);
+                }
             }
             s.engine.play_queue(tracks, 0);
             return Ok(Json(s.engine.state()));
         }
         // fichier: piste de la bibliothèque si scannée, sinon lecture par uri
         if let Some(t) = s.library.get_by_uri(&uri) {
+            s.engine.play_queue(vec![t], 0);
+        } else if auris_sources::is_http_uri(&uri) {
+            // URL http(s) directe (webradio / fichier distant) : lecture par
+            // uri sans upsert bibliothèque (pas un fichier scanné)
+            let mut t = Track::new(uri.clone(), "http".into());
+            t.title = uri
+                .rsplit('/')
+                .next()
+                .unwrap_or(&uri)
+                .split(['?', '#'])
+                .next()
+                .unwrap_or(&uri)
+                .to_string();
+            t.finalize_keys();
             s.engine.play_queue(vec![t], 0);
         } else {
             // piste non scannée: on la crée et on l'enregistre pour que les
@@ -619,12 +648,17 @@ async fn post_queue_add(
     State(s): State<AppState>,
     Json(b): Json<QueueAddBody>,
 ) -> ApiResult<Json<auris_core::PlayerState>> {
-    let sources = s.sources.clone();
-    let uri_stat = b.uri.clone();
-    let handle = tokio::runtime::Handle::current();
-    let is_dir = offload_io(move || handle.block_on(sources.stat(&uri_stat)).map(|e| e.is_dir))
-        .await
-        .unwrap_or(false);
+    // une URL http(s) n'est jamais un dossier : on saute le stat réseau
+    let is_dir = if auris_sources::is_http_uri(&b.uri) {
+        false
+    } else {
+        let sources = s.sources.clone();
+        let uri_stat = b.uri.clone();
+        let handle = tokio::runtime::Handle::current();
+        offload_io(move || handle.block_on(sources.stat(&uri_stat)).map(|e| e.is_dir))
+            .await
+            .unwrap_or(false)
+    };
     if is_dir {
         for t in browse_tracks_offload(&s.sources, &b.uri).await? {
             s.engine.enqueue(t);
@@ -647,16 +681,23 @@ async fn post_queue_add_next(
     State(s): State<AppState>,
     Json(b): Json<QueueAddBody>,
 ) -> ApiResult<Json<auris_core::PlayerState>> {
-    let sources = s.sources.clone();
-    let uri_stat = b.uri.clone();
-    let handle = tokio::runtime::Handle::current();
-    let is_dir = offload_io(move || handle.block_on(sources.stat(&uri_stat)).map(|e| e.is_dir))
-        .await
-        .unwrap_or(false);
+    // une URL http(s) n'est jamais un dossier : on saute le stat réseau
+    let is_dir = if auris_sources::is_http_uri(&b.uri) {
+        false
+    } else {
+        let sources = s.sources.clone();
+        let uri_stat = b.uri.clone();
+        let handle = tokio::runtime::Handle::current();
+        offload_io(move || handle.block_on(sources.stat(&uri_stat)).map(|e| e.is_dir))
+            .await
+            .unwrap_or(false)
+    };
     if is_dir {
         let tracks = browse_tracks_offload(&s.sources, &b.uri).await?;
         for t in &tracks {
-            let _ = s.library.upsert_track(t);
+            if !auris_sources::is_http_uri(&t.uri) {
+                let _ = s.library.upsert_track(t);
+            }
         }
         s.engine.enqueue_next(tracks);
         return Ok(Json(s.engine.state()));
@@ -667,7 +708,9 @@ async fn post_queue_add_next(
     let mut t = Track::new(b.uri.clone(), source_id);
     t.title = b.uri.rsplit('/').next().unwrap_or(&b.uri).to_string();
     t.finalize_keys();
-    let _ = s.library.upsert_track(&t);
+    if !auris_sources::is_http_uri(&t.uri) {
+        let _ = s.library.upsert_track(&t);
+    }
     s.engine.enqueue_next(vec![t]);
     Ok(Json(s.engine.state()))
 }

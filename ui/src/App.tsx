@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type InfosResponse, type LyricsResponse, type MountInfo, type Playlist, type PlaylistDetail, type PlayerState, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type InfosResponse, type LyricsResponse, type MountInfo, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 
-type View = "home" | "library" | "browse" | "queue" | "playlists" | "sources" | "settings";
+type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "sources" | "settings";
 type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http";
 /** Onglets du panneau lecture en cours (style Volumio: Pochette / Infos / Paroles). */
 type NpTab = "cover" | "infos" | "lyrics";
@@ -185,7 +185,7 @@ export default function App() {
         <Sidebar view={view} setView={setView} sources={sources} browseSrc={browseSrc} openSource={openSource} system={system} />
         <main className="content">
           <div className="topbar">
-            <div className="topbar-title">{view === "home" ? "Accueil" : view === "library" ? "Bibliothèque" : view === "browse" ? "Parcourir" : view === "queue" ? "File d'attente" : view === "playlists" ? "Listes de lecture" : view === "sources" ? "Sources" : "Réglages"}</div>
+            <div className="topbar-title">{view === "home" ? "Accueil" : view === "library" ? "Bibliothèque" : view === "browse" ? "Parcourir" : view === "radios" ? "Radios" : view === "queue" ? "File d'attente" : view === "playlists" ? "Listes de lecture" : view === "sources" ? "Sources" : "Réglages"}</div>
             <div className="topbar-search">
               <Icon name="search" size={18} />
               <input type="text" placeholder="Rechercher un titre, un artiste…" value={searchQ}
@@ -196,6 +196,7 @@ export default function App() {
           {view === "home" && <Home state={state} sources={sources} playTrack={playTrack} playAll={playAll} openSource={openSource} />}
           {view === "library" && <Library playTrack={playTrack} playAll={playAll} say={say} refresh={refresh} searchNonce={searchNonce} searchQ={searchQ} />}
           {view === "browse" && <Browse sources={sources} src={browseSrc} playUri={playUri} act={act} say={say} />}
+          {view === "radios" && <Radios state={state} act={act} say={say} />}
           {view === "queue" && <Queue state={state} act={act} say={say} playAll={playAll} />}
           {view === "playlists" && <Playlists act={act} say={say} playAll={playAll} playTrack={playTrack} />}
           {view === "sources" && <Sources sources={sources} refresh={refresh} say={say} />}
@@ -229,6 +230,7 @@ function Sidebar({ view, setView, sources, browseSrc, openSource, system }: {
     ["home", "Accueil", "home"],
     ["library", "Bibliothèque", "note"],
     ["browse", "Parcourir", "folder"],
+    ["radios", "Radios", "radio"],
     ["queue", "File d'attente", "queue"],
     ["playlists", "Listes de lecture", "playlist"],
     ["sources", "Sources", "server"],
@@ -722,6 +724,113 @@ function CopyModal({ entry, sources, currentSrcId, onClose, say }: { entry: Brow
           <button className="btn" disabled={busy || !dest} onClick={submit}>{busy ? "Copie…" : "Copier"}</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------- Radios web ----------
+
+type RadioMenuState = { x: number; y: number; radio: RadioEntry } | null;
+
+function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void }) {
+  const [list, setList] = useState<RadioList | null>(null);
+  const [menu, setMenu] = useState<RadioMenuState>(null);
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  const reload = useCallback(async () => {
+    try { setList(await api.radios()); }
+    catch (e) { say(e instanceof Error ? e.message : String(e)); }
+  }, [say]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const submit = async () => {
+    if (!name.trim() || !url.trim() || adding) return;
+    setAdding(true);
+    try {
+      setList(await api.addRadio(name.trim(), url.trim()));
+      say(`Radio « ${name.trim()} » ajoutée aux favoris`);
+      setName(""); setUrl("");
+    } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+    finally { setAdding(false); }
+  };
+
+  const play = (r: RadioEntry) => act(() => api.playRadio(r.id), `Lecture de « ${r.name} »`);
+  const isFav = (r: RadioEntry) => list?.favorites.some((f) => f.url === r.url) ?? false;
+  const addFav = async (r: RadioEntry) => {
+    try { setList(await api.addRadio(r.name, r.url)); say(`« ${r.name} » ajouté aux favoris`); }
+    catch (e) { say(e instanceof Error ? e.message : String(e)); }
+  };
+  const delFav = (r: RadioEntry) => act(async () => { setList(await api.deleteRadio(r.id)); }, `« ${r.name} » retirée des favoris`);
+
+  const openMenu = (e: React.MouseEvent, r: RadioEntry) => {
+    e.preventDefault(); e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY, radio: r });
+  };
+  const closeMenu = () => setMenu(null);
+
+  const row = (r: RadioEntry) => {
+    const current = state?.current?.uri === r.url;
+    const liveTitle = current && state?.is_live ? state.stream_title : null;
+    return (
+      <div key={r.id} className={`browse-row ${current ? "playing" : ""}`} onClick={() => play(r)}
+        onContextMenu={(ev) => openMenu(ev, r)} title={r.url}>
+        <span className="row-ico"><Icon name="radio" size={20} /></span>
+        <span className="name">{r.name}</span>
+        <span className="meta">{liveTitle ?? (current ? "en direct" : r.url)}</span>
+        <button className="icon-btn" title="Options" onClick={(ev) => openMenu(ev, r)}><Icon name="dots" size={18} /></button>
+      </div>
+    );
+  };
+
+  const section = (title: string, radios: RadioEntry[]) => radios.length === 0 ? null : (
+    <div key={title}>
+      <h2>{title}</h2>
+      {radios.map(row)}
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="toolbar">
+        <input type="text" placeholder="Nom de la radio" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 180 }}
+          onKeyDown={(e) => e.key === "Enter" && submit()} />
+        <input type="text" placeholder="URL du flux (http://… / https://…)" value={url} onChange={(e) => setUrl(e.target.value)} style={{ width: 340 }}
+          onKeyDown={(e) => e.key === "Enter" && submit()} />
+        <button className="btn sm" disabled={adding || !name.trim() || !url.trim()} onClick={submit}>
+          <Icon name="plus" size={14} /> {adding ? "Ajout…" : "Ajouter"}
+        </button>
+      </div>
+      {!list && <div className="empty">Chargement…</div>}
+      {list && (
+        <>
+          {section("Mes radios", list.favorites)}
+          {section("Radios par défaut", list.builtin)}
+          {section("Sources radio", list.sources)}
+          {list.favorites.length === 0 && list.builtin.length === 0 && list.sources.length === 0 &&
+            <div className="empty">Aucune radio — ajoutez une URL de flux ci-dessus.</div>}
+        </>
+      )}
+
+      {menu && (
+        <>
+          <div className="menu-overlay" onClick={closeMenu} onContextMenu={(e) => { e.preventDefault(); closeMenu(); }} />
+          <div className="ctx-menu" style={{ left: menu.x, top: menu.y }}>
+            <div className="ctx-title">{menu.radio.name}</div>
+            <div className="ctx-item" onClick={() => { play(menu.radio); closeMenu(); }}><Icon name="play" size={16} filled /> Lire maintenant</div>
+            <div className="ctx-item" onClick={() => { act(() => api.queueAddNext(menu.radio.url), " lira juste après la piste en cours"); closeMenu(); }}><Icon name="next" size={16} /> Lire ensuite</div>
+            <div className="ctx-item" onClick={() => { act(() => api.queueAdd(menu.radio.url), "Ajouté à la file d'attente"); closeMenu(); }}><Icon name="plus" size={16} /> Ajouter à la file d'attente</div>
+            {!isFav(menu.radio) && (
+              <div className="ctx-item" onClick={() => { addFav(menu.radio); closeMenu(); }}><Icon name="heart" size={16} /> Ajouter aux favoris</div>
+            )}
+            {menu.radio.origin === "favorite" && (
+              <div className="ctx-item" onClick={() => { delFav(menu.radio); closeMenu(); }}><Icon name="trash" size={16} /> Supprimer des favoris</div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1413,12 +1522,14 @@ function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, o
   const cur = state?.current;
   const pos = state?.position_secs ?? 0;
   const dur = state?.duration_secs ?? cur?.duration_secs ?? 0;
+  // flux live (webradio) : pas de durée ni de seek, badge « EN DIRECT » + titre ICY
+  const live = state?.is_live ?? false;
   const sleepLeft = alarms?.sleep_remaining_secs ?? null;
   return (
     <footer className="player">
       <div className="now">
-        {cur ? (<><div className={`cover ${npOpen ? "active" : ""}`} title={npOpen ? "Fermer le panneau lecture en cours" : "Pochette / Infos / Paroles de la lecture en cours"} onClick={onToggleNp}>{cur.has_cover ? <img src={api.coverUrl(cur.id)} alt="" /> : <Icon name="note" size={22} />}</div>
-          <div className="meta"><div className="title">{cur.title}</div><div className="artist">{cur.artist}</div></div></>) : <div className="meta"><div className="title">Aucune lecture</div></div>}
+        {cur ? (<><div className={`cover ${npOpen ? "active" : ""}`} title={npOpen ? "Fermer le panneau lecture en cours" : "Pochette / Infos / Paroles de la lecture en cours"} onClick={onToggleNp}>{cur.has_cover ? <img src={api.coverUrl(cur.id)} alt="" /> : <Icon name={live ? "radio" : "note"} size={22} />}</div>
+          <div className="meta"><div className="title">{cur.title}</div><div className="artist">{live && state?.stream_title ? state.stream_title : cur.artist}</div></div></>) : <div className="meta"><div className="title">Aucune lecture</div></div>}
       </div>
       <div className="center">
         <div className="controls">
@@ -1430,10 +1541,19 @@ function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, o
           <button className={state?.repeat !== "off" ? "active" : ""} title="Répéter" onClick={() => act(() => api.repeat(state?.repeat === "off" ? "all" : state?.repeat === "all" ? "one" : "off"))}><Icon name="repeat" size={20} /></button>
         </div>
         <div className="seek">
-          <span>{fmtTime(pos)}</span>
-          <input type="range" min={0} max={dur || 0} step={0.1} value={Math.min(pos, dur || 0)} aria-label="Progression"
-            onChange={(e) => act(() => api.seek(Number(e.target.value)))} />
-          <span>{fmtTime(dur)}</span>
+          {live ? (
+            <>
+              <span className="badge live">En direct</span>
+              <span className="num-time" title="Temps écoulé depuis le début du flux">{fmtTime(pos)}</span>
+            </>
+          ) : (
+            <>
+              <span>{fmtTime(pos)}</span>
+              <input type="range" min={0} max={dur || 0} step={0.1} value={Math.min(pos, dur || 0)} aria-label="Progression"
+                onChange={(e) => act(() => api.seek(Number(e.target.value)))} />
+              <span>{fmtTime(dur)}</span>
+            </>
+          )}
         </div>
       </div>
       <div className="right">

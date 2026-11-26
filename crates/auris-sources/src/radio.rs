@@ -43,8 +43,8 @@ impl SourceBackend for RadioSource {
     }
 
     async fn open(&self, _rel_path: &str) -> Result<Box<dyn SeekRead>> {
-        Err(AurisError::other(
-            "webradio: lecture en streaming via l'URL directe, pas d'ouverture seekable",
-        ))
+        // flux live (ICY) : lecture infinie via l'URL du flux (thread dédié,
+        // le client bloquant reqwest ne supporte pas le contexte async ici)
+        Ok(Box::new(crate::live::open_live_offthread(&self.url)?))
     }
 }

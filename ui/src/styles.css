@@ -228,6 +228,10 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-w
 }
 .pill.ok { background: rgba(30, 215, 96, 0.15); color: var(--accent); }
 .pill.warn { background: rgba(235, 160, 30, 0.18); color: #eba01e; }
+.badge.live { background: rgba(255, 90, 90, 0.16); color: #ff6b6b; }
+.badge.live::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #ff5252; margin-right: 6px; animation: live-pulse 1.4s ease-in-out infinite; }
+@keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.browse-row.playing .name { color: var(--accent); }
 
 /* Bannière DoP au-dessus de la barre de lecture (piste DSD + DAC non réglé). */
 .dop-banner {

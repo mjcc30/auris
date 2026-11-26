@@ -14,7 +14,7 @@ tracing.workspace = true
 thiserror.workspace = true
 async-trait = "0.1"
 smb2.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
 futures-util.workspace = true
 bytes = "1"
 url = "2"

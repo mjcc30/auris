@@ -2,6 +2,7 @@
 
 pub mod http;
 pub mod http_raw;
+pub mod live;
 pub mod local;
 pub mod manager;
 pub mod radio;
@@ -10,6 +11,7 @@ pub mod transfer;
 pub mod upnp;
 pub mod usb;
 
+pub use live::{open_live, radio_title, LiveStream};
 pub use manager::SourcesManager;
 pub use transfer::CopyReport;
 pub use usb::{discover_removable, MountInfo};

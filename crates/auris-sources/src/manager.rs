@@ -154,7 +154,19 @@ impl SourcesManager {
                     .ok_or_else(|| AurisError::SourceNotFound(source_id.clone()))?;
                 b.open(&path).await
             }
-            UriRef::Http(url) => Ok(Box::new(self.http.open_url(&url)?)),
+            UriRef::Http(url) => {
+                let f = self.http.open_url(&url)?;
+                if f.size() == 0 {
+                    // pas de Content-Length : flux live (webradio), pas un
+                    // fichier — on bascule sur le lecteur de flux infini
+                    // (dans un thread dédié : le client bloquant reqwest ne
+                    // supporte pas d'être créé/détruit dans ce contexte async)
+                    drop(f);
+                    Ok(Box::new(crate::live::open_live_offthread(&url)?))
+                } else {
+                    Ok(Box::new(f))
+                }
+            }
         }
     }
 
