@@ -163,3 +163,89 @@ async fn radios_crud_favoris_persistes() {
     let body: serde_json::Value = play.json().await.unwrap();
     assert!(body["error"].as_str().unwrap().contains("introuvable"));
 }
+
+#[tokio::test]
+async fn radios_play_url_validation_et_reponse() {
+    let (base, _root) = spawn_server().await;
+    let http = reqwest::Client::new();
+
+    // URL non http(s) refusée
+    let bad = http
+        .post(format!("{base}/api/radios/play-url"))
+        .json(&serde_json::json!({ "name": "X", "url": "ftp://x/stream" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(!bad.status().is_success());
+
+    // nom vide refusé
+    let noname = http
+        .post(format!("{base}/api/radios/play-url"))
+        .json(&serde_json::json!({ "name": "  ", "url": "https://ice.test/stream" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(!noname.status().is_success());
+
+    // URL valide : 200 + la piste radio finit dans la file (moteur async -> polling)
+    let ok = http
+        .post(format!("{base}/api/radios/play-url"))
+        .json(&serde_json::json!({ "name": "Radio Test", "url": "https://ice.test/stream" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(ok.status().is_success());
+    // la piste est dans la file (moteur async -> polling) ; `current` n'est
+    // renseigné qu'après ouverture du flux, impossible ici sans réseau.
+    let mut st: serde_json::Value = serde_json::Value::Null;
+    for _ in 0..40 {
+        st = http
+            .get(format!("{base}/api/state"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if st["queue"]
+            .as_array()
+            .map(|q| q.len() == 1)
+            .unwrap_or(false)
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let q = st["queue"].as_array().unwrap();
+    assert_eq!(q.len(), 1);
+    assert_eq!(q[0]["title"], "Radio Test");
+    assert_eq!(q[0]["uri"], "https://ice.test/stream");
+}
+
+#[tokio::test]
+async fn radios_dir_stations_kind_inconnu_refuse() {
+    let (base, _root) = spawn_server().await;
+    let http = reqwest::Client::new();
+
+    // kind inconnu -> 400 (pas d'appel réseau à l'annuaire)
+    let bad = http
+        .get(format!("{base}/api/radios/dir/stations?kind=bogus"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status().as_u16(), 400);
+
+    // genre/pays/recherche sans value -> 400
+    for kind in ["genre", "country", "search"] {
+        let r = http
+            .get(format!("{base}/api/radios/dir/stations?kind={kind}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            r.status().as_u16(),
+            400,
+            "kind={kind} sans value doit échouer"
+        );
+    }
+}

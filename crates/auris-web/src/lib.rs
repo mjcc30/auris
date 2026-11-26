@@ -367,6 +367,10 @@ pub fn router(state: AppState) -> Router {
             "/api/radios",
             get(radios::get_radios).post(radios::post_radio),
         )
+        .route("/api/radios/dir/genres", get(radios::get_dir_genres))
+        .route("/api/radios/dir/countries", get(radios::get_dir_countries))
+        .route("/api/radios/dir/stations", get(radios::get_dir_stations))
+        .route("/api/radios/play-url", post(radios::post_play_url))
         .route("/api/radios/{id}", delete(radios::delete_radio))
         .route("/api/radios/{id}/play", post(radios::post_radio_play))
         .route("/api/upnp/discover", get(get_upnp_discover))

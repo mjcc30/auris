@@ -7,11 +7,14 @@
 //! `is_live` (durée inconnue, lecture infinie, métadonnées ICY `StreamTitle`).
 
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
-    extract::{Path as AxumPath, State},
+    extract::{Path as AxumPath, Query, State},
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -191,6 +194,20 @@ pub async fn delete_radio(
     Ok(Json(list_radios(&s)))
 }
 
+/// Construit la piste « radio » pour une URL de flux (pas d'upsert bibliothèque).
+fn radio_track(name: &str, url: &str) -> Track {
+    let source_id = auris_sources::parse_src_uri(url)
+        .map(|(id, _)| id)
+        .unwrap_or_else(|| "radio".to_string());
+    let mut t = Track::new(url.to_string(), source_id);
+    t.title = name.to_string();
+    t.artist = "Radio web".into();
+    t.album = name.to_string();
+    t.album_artist = "Radio web".into();
+    t.finalize_keys();
+    t
+}
+
 /// Lance la lecture d'une radio (remplace la file par cette seule piste).
 pub async fn post_radio_play(
     State(s): State<AppState>,
@@ -198,16 +215,290 @@ pub async fn post_radio_play(
 ) -> ApiResult<Json<PlayerState>> {
     let r = find_radio(&s, &id)
         .ok_or_else(|| AurisError::other(format!("radio introuvable : {id}")))?;
-    let source_id = auris_sources::parse_src_uri(&r.url)
-        .map(|(id, _)| id)
-        .unwrap_or_else(|| "radio".to_string());
-    let mut t = Track::new(r.url.clone(), source_id);
-    t.title = r.name.clone();
-    t.artist = "Radio web".into();
-    t.album = r.name;
-    t.album_artist = "Radio web".into();
-    t.finalize_keys();
-    // pas d'upsert bibliothèque : une radio n'est pas un fichier scanné
+    let t = radio_track(&r.name, &r.url);
+    s.engine.play_queue(vec![t], 0);
+    Ok(Json(s.engine.state()))
+}
+
+// ---------- annuaire radio-browser.info ----------
+
+/// Serveur de l'annuaire public radio-browser.info (miroir de1).
+const DIR_BASE: &str = "https://de1.api.radio-browser.info/json";
+
+/// Entrées de l'annuaire exposées à l'UI.
+#[derive(Debug, Serialize)]
+pub struct DirTag {
+    pub name: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DirCountry {
+    pub name: String,
+    pub code: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DirStation {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub favicon: String,
+    pub bitrate: i64,
+    pub codec: String,
+    pub tags: String,
+    pub country: String,
+    pub votes: i64,
+}
+
+// formes brutes de l'API radio-browser (champs optionnels -> default)
+#[derive(Debug, Deserialize)]
+struct RawTag {
+    name: String,
+    #[serde(default)]
+    stationcount: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawCountry {
+    name: String,
+    #[serde(default)]
+    iso_3166_1: String,
+    #[serde(default)]
+    stationcount: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawStation {
+    #[serde(default)]
+    stationuuid: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    url_resolved: String,
+    #[serde(default)]
+    favicon: String,
+    #[serde(default)]
+    bitrate: i64,
+    #[serde(default)]
+    codec: String,
+    #[serde(default)]
+    tags: String,
+    #[serde(default)]
+    country: String,
+    #[serde(default)]
+    votes: i64,
+}
+
+/// Cache mémoire des réponses de l'annuaire : chemin -> (timestamp, corps).
+static DIR_CACHE: LazyLock<Mutex<HashMap<String, (i64, String)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Percent-encoding minimal pour les valeurs dans les query strings.
+fn pct(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// Requête GET bloquante sur l'annuaire (à appeler via `crate::offload_io`).
+fn dir_fetch(path: &str) -> auris_core::Result<String> {
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(15))
+        .user_agent(concat!(
+            "auris/",
+            env!("CARGO_PKG_VERSION"),
+            " (radio-browser.info)"
+        ))
+        .build()
+        .map_err(|e| AurisError::other(format!("client radio-browser: {e}")))?;
+    let url = format!("{DIR_BASE}{path}");
+    let resp = client
+        .get(&url)
+        .send()
+        .map_err(|e| AurisError::other(format!("radio-browser {path}: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(AurisError::other(format!(
+            "radio-browser {path}: HTTP {}",
+            resp.status()
+        )));
+    }
+    resp.text()
+        .map_err(|e| AurisError::other(format!("radio-browser {path}: {e}")))
+}
+
+/// GET sur l'annuaire avec cache mémoire (TTL en secondes).
+async fn dir_get(path: &str, ttl: i64) -> ApiResult<String> {
+    if let Some((ts, body)) = DIR_CACHE.lock().unwrap().get(path) {
+        if now_secs() - *ts < ttl {
+            return Ok(body.clone());
+        }
+    }
+    let p = path.to_string();
+    let body = crate::offload_io(move || dir_fetch(&p)).await?;
+    DIR_CACHE
+        .lock()
+        .unwrap()
+        .insert(path.to_string(), (now_secs(), body.clone()));
+    Ok(body)
+}
+
+/// `GET /api/radios/dir/genres` — tags triés par nombre de stations.
+pub async fn get_dir_genres() -> ApiResult<Json<Vec<DirTag>>> {
+    let body = dir_get("/tags?order=stationcount&reverse=true&limit=150", 900).await?;
+    let raw: Vec<RawTag> = serde_json::from_str(&body)
+        .map_err(|e| AurisError::other(format!("radio-browser tags: {e}")))?;
+    Ok(Json(
+        raw.into_iter()
+            .filter(|t| !t.name.trim().is_empty())
+            .map(|t| DirTag {
+                name: t.name,
+                count: t.stationcount,
+            })
+            .collect(),
+    ))
+}
+
+/// `GET /api/radios/dir/countries` — pays triés par nombre de stations.
+pub async fn get_dir_countries() -> ApiResult<Json<Vec<DirCountry>>> {
+    let body = dir_get("/countries?order=stationcount&reverse=true&limit=250", 900).await?;
+    let raw: Vec<RawCountry> = serde_json::from_str(&body)
+        .map_err(|e| AurisError::other(format!("radio-browser countries: {e}")))?;
+    Ok(Json(
+        raw.into_iter()
+            .filter(|c| !c.iso_3166_1.trim().is_empty())
+            .map(|c| DirCountry {
+                name: c.name,
+                code: c.iso_3166_1,
+                count: c.stationcount,
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DirStationsQuery {
+    kind: String,
+    #[serde(default)]
+    value: String,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+/// `GET /api/radios/dir/stations?kind=top|popular|genre|country|search&value=…&limit=…`
+pub async fn get_dir_stations(
+    Query(q): Query<DirStationsQuery>,
+) -> ApiResult<Json<Vec<DirStation>>> {
+    let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    let v = q.value.trim();
+    let path = match q.kind.as_str() {
+        "top" => format!("/stations/topvote/{limit}?hidebroken=true&order=votes&reverse=true"),
+        "popular" => {
+            format!("/stations/search?hidebroken=true&order=clickcount&reverse=true&limit={limit}")
+        }
+        "genre" => {
+            if v.is_empty() {
+                return Err(AurisError::InvalidUri("value (genre) requis".into()).into());
+            }
+            format!(
+                "/stations/bytagexact/{}?hidebroken=true&order=clickcount&reverse=true&limit={limit}",
+                pct(v)
+            )
+        }
+        "country" => {
+            if v.is_empty() {
+                return Err(AurisError::InvalidUri("value (code pays) requis".into()).into());
+            }
+            format!(
+                "/stations/search?countrycode={}&hidebroken=true&order=clickcount&reverse=true&limit={limit}",
+                pct(v)
+            )
+        }
+        "search" => {
+            if v.is_empty() {
+                return Err(AurisError::InvalidUri("value (recherche) requis".into()).into());
+            }
+            format!(
+                "/stations/search?name={}&hidebroken=true&order=clickcount&reverse=true&limit={limit}",
+                pct(v)
+            )
+        }
+        other => {
+            return Err(AurisError::InvalidUri(format!(
+                "kind inconnu (top|popular|genre|country|search) : {other}"
+            ))
+            .into());
+        }
+    };
+    let body = dir_get(&path, 300).await?;
+    let raw: Vec<RawStation> = serde_json::from_str(&body)
+        .map_err(|e| AurisError::other(format!("radio-browser stations: {e}")))?;
+    Ok(Json(
+        raw.into_iter()
+            .filter_map(|s| {
+                let url = if s.url_resolved.trim().is_empty() {
+                    s.url
+                } else {
+                    s.url_resolved
+                };
+                if s.name.trim().is_empty() || url.trim().is_empty() {
+                    return None;
+                }
+                Some(DirStation {
+                    id: s.stationuuid,
+                    name: s.name,
+                    url,
+                    favicon: s.favicon,
+                    bitrate: s.bitrate,
+                    codec: s.codec,
+                    tags: s.tags,
+                    country: s.country,
+                    votes: s.votes,
+                })
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PlayUrlBody {
+    pub name: String,
+    pub url: String,
+}
+
+/// `POST /api/radios/play-url` — lance directement une URL de flux (annuaire…).
+pub async fn post_play_url(
+    State(s): State<AppState>,
+    Json(b): Json<PlayUrlBody>,
+) -> ApiResult<Json<PlayerState>> {
+    let name = b.name.trim().to_string();
+    let url = b.url.trim().to_string();
+    if name.is_empty() {
+        return Err(AurisError::InvalidUri("nom de la radio requis".into()).into());
+    }
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(
+            AurisError::InvalidUri(format!("URL invalide (http(s) attendu) : {url}")).into(),
+        );
+    }
+    let t = radio_track(&name, &url);
     s.engine.play_queue(vec![t], 0);
     Ok(Json(s.engine.state()))
 }

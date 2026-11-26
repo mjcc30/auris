@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type InfosResponse, type LyricsResponse, type MountInfo, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type InfosResponse, type LyricsResponse, type MountInfo, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 
@@ -730,14 +730,24 @@ function CopyModal({ entry, sources, currentSrcId, onClose, say }: { entry: Brow
 
 // ---------- Radios web ----------
 
-type RadioMenuState = { x: number; y: number; radio: RadioEntry } | null;
+type MenuTarget =
+  | { kind: "entry"; entry: RadioEntry }
+  | { kind: "station"; station: DirStation };
+type RadioMenuState = { x: number; y: number; target: MenuTarget } | null;
+
+type DirData = DirTag[] | DirCountry[] | DirStation[];
 
 function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void }) {
   const [list, setList] = useState<RadioList | null>(null);
   const [menu, setMenu] = useState<RadioMenuState>(null);
+  const [view, setView] = useState("root");
+  const [dir, setDir] = useState<{ view: string; data: DirData } | null>(null);
+  const [dirLoading, setDirLoading] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [adding, setAdding] = useState(false);
+  const [brokenFav, setBrokenFav] = useState<Set<string>>(new Set());
 
   const reload = useCallback(async () => {
     try { setList(await api.radios()); }
@@ -746,28 +756,59 @@ function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () =
 
   useEffect(() => { reload(); }, [reload]);
 
+  // chargement de la sous-vue annuaire (top/popular/genres/pays/recherche…)
+  useEffect(() => {
+    if (view === "root" || view === "fav" || view === "builtin" || view === "sources") return;
+    let cancelled = false;
+    setDirLoading(true);
+    const load = async () => {
+      try {
+        let data: DirData;
+        if (view === "genres") data = await api.radiosDirGenres();
+        else if (view === "countries") data = await api.radiosDirCountries();
+        else if (view === "top") data = await api.radiosDirStations("top");
+        else if (view === "popular") data = await api.radiosDirStations("popular");
+        else if (view.startsWith("genre:")) data = await api.radiosDirStations("genre", view.slice(6));
+        else if (view.startsWith("country:")) data = await api.radiosDirStations("country", view.slice(8));
+        else if (view.startsWith("search:")) data = await api.radiosDirStations("search", view.slice(7));
+        else return;
+        if (!cancelled) setDir({ view, data });
+      } catch (e) {
+        if (!cancelled) say(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setDirLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [view, say]);
+
   const submit = async () => {
     if (!name.trim() || !url.trim() || adding) return;
     setAdding(true);
     try {
       setList(await api.addRadio(name.trim(), url.trim()));
       say(`Radio « ${name.trim()} » ajoutée aux favoris`);
-      setName(""); setUrl("");
+      setName(""); setUrl(""); setShowAdd(false);
     } catch (e) { say(e instanceof Error ? e.message : String(e)); }
     finally { setAdding(false); }
   };
 
   const play = (r: RadioEntry) => act(() => api.playRadio(r.id), `Lecture de « ${r.name} »`);
-  const isFav = (r: RadioEntry) => list?.favorites.some((f) => f.url === r.url) ?? false;
-  const addFav = async (r: RadioEntry) => {
-    try { setList(await api.addRadio(r.name, r.url)); say(`« ${r.name} » ajouté aux favoris`); }
+  const playStation = (st: DirStation) => act(() => api.playRadioUrl(st.name, st.url), `Lecture de « ${st.name} »`);
+  const targetUrl = (t: MenuTarget) => (t.kind === "entry" ? t.entry.url : t.station.url);
+  const targetName = (t: MenuTarget) => (t.kind === "entry" ? t.entry.name : t.station.name);
+  const playTarget = (t: MenuTarget) => (t.kind === "entry" ? play(t.entry) : playStation(t.station));
+  const isFavUrl = (u: string) => list?.favorites.some((f) => f.url === u) ?? false;
+  const addFav = async (t: MenuTarget) => {
+    try { setList(await api.addRadio(targetName(t), targetUrl(t))); say(`« ${targetName(t)} » ajouté aux favoris`); }
     catch (e) { say(e instanceof Error ? e.message : String(e)); }
   };
   const delFav = (r: RadioEntry) => act(async () => { setList(await api.deleteRadio(r.id)); }, `« ${r.name} » retirée des favoris`);
 
-  const openMenu = (e: React.MouseEvent, r: RadioEntry) => {
+  const openMenu = (e: React.MouseEvent, target: MenuTarget) => {
     e.preventDefault(); e.stopPropagation();
-    setMenu({ x: e.clientX, y: e.clientY, radio: r });
+    setMenu({ x: e.clientX, y: e.clientY, target });
   };
   const closeMenu = () => setMenu(null);
 
@@ -776,61 +817,166 @@ function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () =
     const liveTitle = current && state?.is_live ? state.stream_title : null;
     return (
       <div key={r.id} className={`browse-row ${current ? "playing" : ""}`} onClick={() => play(r)}
-        onContextMenu={(ev) => openMenu(ev, r)} title={r.url}>
+        onContextMenu={(ev) => openMenu(ev, { kind: "entry", entry: r })} title={r.url}>
         <span className="row-ico"><Icon name="radio" size={20} /></span>
         <span className="name">{r.name}</span>
         <span className="meta">{liveTitle ?? (current ? "en direct" : r.url)}</span>
-        <button className="icon-btn" title="Options" onClick={(ev) => openMenu(ev, r)}><Icon name="dots" size={18} /></button>
+        <button className="icon-btn" title="Options" onClick={(ev) => openMenu(ev, { kind: "entry", entry: r })}><Icon name="dots" size={18} /></button>
       </div>
     );
   };
 
-  const section = (title: string, radios: RadioEntry[]) => radios.length === 0 ? null : (
-    <div key={title}>
-      <h2>{title}</h2>
-      {radios.map(row)}
+  const stationRow = (st: DirStation) => {
+    const current = state?.current?.uri === st.url;
+    const liveTitle = current && state?.is_live ? state.stream_title : null;
+    const parts = [
+      st.codec ? `${st.codec.toUpperCase()}${st.bitrate > 0 ? ` ${st.bitrate}k` : ""}` : "",
+      st.country,
+      st.tags.split(",").map((t) => t.trim()).filter(Boolean).slice(0, 3).join(", "),
+    ].filter(Boolean);
+    const favBroken = st.favicon !== "" && brokenFav.has(st.favicon);
+    return (
+      <div key={st.id || st.url} className={`browse-row ${current ? "playing" : ""}`} onClick={() => playStation(st)}
+        onContextMenu={(ev) => openMenu(ev, { kind: "station", station: st })} title={st.url}>
+        <span className="row-ico">
+          {st.favicon && !favBroken
+            ? <img src={st.favicon} alt="" style={{ width: 20, height: 20, borderRadius: 4, objectFit: "cover" }}
+                onError={() => setBrokenFav((s) => new Set(s).add(st.favicon))} />
+            : <Icon name="radio" size={20} />}
+        </span>
+        <span className="name">{st.name}</span>
+        <span className="meta">{liveTitle ?? (current ? "en direct" : parts.join(" · "))}</span>
+        <button className="icon-btn" title="Options" onClick={(ev) => openMenu(ev, { kind: "station", station: st })}><Icon name="dots" size={18} /></button>
+      </div>
+    );
+  };
+
+  const tagRow = (t: DirTag) => (
+    <div key={t.name} className="browse-row" onClick={() => setView(`genre:${t.name}`)} title={t.name}>
+      <span className="row-ico"><Icon name="note" size={20} /></span>
+      <span className="name">{t.name}</span>
+      <span className="meta">{t.count} radio(s)</span>
     </div>
   );
 
+  const countryRow = (c: DirCountry) => (
+    <div key={c.code} className="browse-row" onClick={() => setView(`country:${c.code}`)} title={c.name}>
+      <span className="row-ico"><Icon name="globe" size={20} /></span>
+      <span className="name">{c.name}</span>
+      <span className="meta">{c.code} · {c.count} radio(s)</span>
+    </div>
+  );
+
+  const viewTitle = () => {
+    if (view === "fav") return "Mes radios";
+    if (view === "builtin") return "Radios par défaut";
+    if (view === "sources") return "Sources radio";
+    if (view === "top") return "Top radios";
+    if (view === "popular") return "Radios populaires";
+    if (view === "genres") return "Par genre";
+    if (view === "countries") return "Par pays";
+    if (view.startsWith("genre:")) return `Genre : ${view.slice(6)}`;
+    if (view.startsWith("country:")) return `Pays : ${view.slice(8)}`;
+    if (view.startsWith("search:")) return `Recherche : ${view.slice(7)}`;
+    return "Radios";
+  };
+
+  const tiles = [
+    { id: "fav", icon: "heart", label: "Mes radios", sub: `${list?.favorites.length ?? 0} radio(s)` },
+    { id: "builtin", icon: "radio", label: "Radios par défaut", sub: `${list?.builtin.length ?? 0} radio(s)` },
+    { id: "sources", icon: "server", label: "Sources radio", sub: `${list?.sources.length ?? 0} source(s)` },
+    { id: "top", icon: "star", label: "Top radios", sub: "les mieux notées" },
+    { id: "popular", icon: "flame", label: "Radios populaires", sub: "les plus écoutées" },
+    { id: "genres", icon: "note", label: "Par genre", sub: "rock, jazz, classique…" },
+    { id: "countries", icon: "globe", label: "Par pays", sub: "du monde entier" },
+    { id: "__search", icon: "search", label: "Rechercher", sub: "par nom de radio" },
+    { id: "__add", icon: "plus", label: "Ajouter une radio", sub: "URL de flux personnalisée" },
+  ];
+
+  const onTile = (id: string) => {
+    if (id === "__search") {
+      const q = window.prompt("Rechercher une radio (nom) :");
+      if (q && q.trim()) setView(`search:${q.trim()}`);
+    } else if (id === "__add") {
+      setShowAdd((v) => !v);
+    } else {
+      setView(id);
+    }
+  };
+
+  const subView = () => {
+    if (!list) return <div className="empty">Chargement…</div>;
+    if (view === "fav") return list.favorites.length ? list.favorites.map(row) : <div className="empty">Aucune radio favorite — ajoutez-en via « Ajouter une radio » ou le menu ⋮ d'une radio.</div>;
+    if (view === "builtin") return list.builtin.map(row);
+    if (view === "sources") return list.sources.length ? list.sources.map(row) : <div className="empty">Aucune source radio configurée.</div>;
+    // ne rend les données de l'annuaire que si elles correspondent à la vue courante
+    const data = dir && dir.view === view ? dir.data : null;
+    if (dirLoading || !data) return <div className="empty">Chargement de l'annuaire…</div>;
+    if (view === "genres") return (data as DirTag[]).map(tagRow);
+    if (view === "countries") return (data as DirCountry[]).map(countryRow);
+    const stations = data as DirStation[];
+    return stations.length ? stations.map(stationRow) : <div className="empty">Aucune radio trouvée.</div>;
+  };
+
   return (
     <div>
-      <div className="toolbar">
-        <input type="text" placeholder="Nom de la radio" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 180 }}
-          onKeyDown={(e) => e.key === "Enter" && submit()} />
-        <input type="text" placeholder="URL du flux (http://… / https://…)" value={url} onChange={(e) => setUrl(e.target.value)} style={{ width: 340 }}
-          onKeyDown={(e) => e.key === "Enter" && submit()} />
-        <button className="btn sm" disabled={adding || !name.trim() || !url.trim()} onClick={submit}>
-          <Icon name="plus" size={14} /> {adding ? "Ajout…" : "Ajouter"}
-        </button>
-      </div>
-      {!list && <div className="empty">Chargement…</div>}
-      {list && (
+      {view !== "root" && (
+        <div className="toolbar">
+          <button className="icon-btn" title="Retour" onClick={() => setView("root")}><Icon name="back" size={18} /></button>
+          <h2 style={{ margin: 0 }}>{viewTitle()}</h2>
+        </div>
+      )}
+
+      {view === "root" && (
         <>
-          {section("Mes radios", list.favorites)}
-          {section("Radios par défaut", list.builtin)}
-          {section("Sources radio", list.sources)}
-          {list.favorites.length === 0 && list.builtin.length === 0 && list.sources.length === 0 &&
-            <div className="empty">Aucune radio — ajoutez une URL de flux ci-dessus.</div>}
+          {!list && <div className="empty">Chargement…</div>}
+          {list && (
+            <div className="grid">
+              {tiles.map((t) => (
+                <div key={t.id} className="card" onClick={() => onTile(t.id)}>
+                  <div className="cover"><Icon name={t.icon} size={44} /></div>
+                  <div className="t">{t.label}</div>
+                  <div className="s">{t.sub}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {showAdd && (
+            <div className="toolbar" style={{ marginTop: 16 }}>
+              <input type="text" placeholder="Nom de la radio" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 180 }}
+                onKeyDown={(e) => e.key === "Enter" && submit()} />
+              <input type="text" placeholder="URL du flux (http://… / https://…)" value={url} onChange={(e) => setUrl(e.target.value)} style={{ width: 340 }}
+                onKeyDown={(e) => e.key === "Enter" && submit()} />
+              <button className="btn sm" disabled={adding || !name.trim() || !url.trim()} onClick={submit}>
+                <Icon name="plus" size={14} /> {adding ? "Ajout…" : "Ajouter"}
+              </button>
+            </div>
+          )}
         </>
       )}
 
-      {menu && (
-        <>
-          <div className="menu-overlay" onClick={closeMenu} onContextMenu={(e) => { e.preventDefault(); closeMenu(); }} />
-          <div className="ctx-menu" style={{ left: menu.x, top: menu.y }}>
-            <div className="ctx-title">{menu.radio.name}</div>
-            <div className="ctx-item" onClick={() => { play(menu.radio); closeMenu(); }}><Icon name="play" size={16} filled /> Lire maintenant</div>
-            <div className="ctx-item" onClick={() => { act(() => api.queueAddNext(menu.radio.url), " lira juste après la piste en cours"); closeMenu(); }}><Icon name="next" size={16} /> Lire ensuite</div>
-            <div className="ctx-item" onClick={() => { act(() => api.queueAdd(menu.radio.url), "Ajouté à la file d'attente"); closeMenu(); }}><Icon name="plus" size={16} /> Ajouter à la file d'attente</div>
-            {!isFav(menu.radio) && (
-              <div className="ctx-item" onClick={() => { addFav(menu.radio); closeMenu(); }}><Icon name="heart" size={16} /> Ajouter aux favoris</div>
-            )}
-            {menu.radio.origin === "favorite" && (
-              <div className="ctx-item" onClick={() => { delFav(menu.radio); closeMenu(); }}><Icon name="trash" size={16} /> Supprimer des favoris</div>
-            )}
-          </div>
-        </>
-      )}
+      {view !== "root" && subView()}
+
+      {menu && (() => {
+        const t = menu.target;
+        return (
+          <>
+            <div className="menu-overlay" onClick={closeMenu} onContextMenu={(e) => { e.preventDefault(); closeMenu(); }} />
+            <div className="ctx-menu" style={{ left: menu.x, top: menu.y }}>
+              <div className="ctx-title">{targetName(t)}</div>
+              <div className="ctx-item" onClick={() => { playTarget(t); closeMenu(); }}><Icon name="play" size={16} filled /> Lire maintenant</div>
+              <div className="ctx-item" onClick={() => { act(() => api.queueAddNext(targetUrl(t)), " lira juste après la piste en cours"); closeMenu(); }}><Icon name="next" size={16} /> Lire ensuite</div>
+              <div className="ctx-item" onClick={() => { act(() => api.queueAdd(targetUrl(t)), "Ajouté à la file d'attente"); closeMenu(); }}><Icon name="plus" size={16} /> Ajouter à la file d'attente</div>
+              {!isFavUrl(targetUrl(t)) && (
+                <div className="ctx-item" onClick={() => { addFav(t); closeMenu(); }}><Icon name="heart" size={16} /> Ajouter aux favoris</div>
+              )}
+              {t.kind === "entry" && t.entry.origin === "favorite" && (
+                <div className="ctx-item" onClick={() => { delFav(t.entry); closeMenu(); }}><Icon name="trash" size={16} /> Supprimer des favoris</div>
+              )}
+            </div>
+          </>
+        );
+      })()}
     </div>
   );
 }

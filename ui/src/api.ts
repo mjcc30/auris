@@ -102,6 +102,29 @@ export interface RadioList {
   sources: RadioEntry[];
 }
 
+export interface DirTag {
+  name: string;
+  count: number;
+}
+
+export interface DirCountry {
+  name: string;
+  code: string;
+  count: number;
+}
+
+export interface DirStation {
+  id: string;
+  name: string;
+  url: string;
+  favicon: string;
+  bitrate: number;
+  codec: string;
+  tags: string;
+  country: string;
+  votes: number;
+}
+
 export interface CopyReport {
   files: number;
   bytes: number;
@@ -387,6 +410,11 @@ export const api = {
   addRadio: (name: string, url: string) => req<RadioList>("/api/radios", post({ name, url })),
   deleteRadio: (id: string) => req<RadioList>(`/api/radios/${encodeURIComponent(id)}`, del()),
   playRadio: (id: string) => req<PlayerState>(`/api/radios/${encodeURIComponent(id)}/play`, post({})),
+  playRadioUrl: (name: string, url: string) => req<PlayerState>("/api/radios/play-url", post({ name, url })),
+  radiosDirGenres: () => req<DirTag[]>("/api/radios/dir/genres"),
+  radiosDirCountries: () => req<DirCountry[]>("/api/radios/dir/countries"),
+  radiosDirStations: (kind: string, value = "", limit = 100) =>
+    req<DirStation[]>(`/api/radios/dir/stations?kind=${encodeURIComponent(kind)}&value=${encodeURIComponent(value)}&limit=${limit}`),
   browseTree: (uri: string) => req<BrowseEntry[]>(`/api/browse/tree?uri=${encodeURIComponent(uri)}`),
   usbDevices: () => req<MountInfo[]>("/api/usb/devices"),
   copy: (from: string, to: string) => req<CopyReport>("/api/transfer/copy", post({ from, to })),
