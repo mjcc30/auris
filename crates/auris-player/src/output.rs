@@ -494,6 +494,10 @@ impl AudioOutput {
         eq: Arc<std::sync::RwLock<EqConfig>>,
     ) -> Result<()> {
         self.stream = None; // stoppe l'ancien flux
+                            // Libère aussi l'ancien flux WASAPI exclusif : tant qu'il tourne, il
+                            // tient l'endpoint en EXCLUSIF et le nouveau Initialize échouerait
+                            // (AUDCLNT_E_DEVICE_IN_USE). Drop -> Stop + join du worker.
+        self.exclusive_stream = None;
         self.stop_drain();
         if self.device.is_none() {
             // Pas de peripherique cpal: flux « Jouer ici » vers le navigateur.

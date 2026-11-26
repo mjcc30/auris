@@ -10,7 +10,11 @@
 //! - `candidates()` choisit le format du device le plus fidèle à la piste
 //!   (conteneur = bits de la source quand le DAC l'accepte en exclusif).
 //! - `ExclusiveStream` ouvre l'endpoint en EXCLUSIF au format retenu et
-//!   pousse les chunks décodés via un thread event-driven (IAudioRenderClient).
+//!   pousse les chunks décodés via un thread `IAudioRenderClient`. Deux modes
+//!   d'initialisation sont essayés : **polling** (`hnsBufferDuration =
+//!   hnsPeriodicity = période du device`, sans `EVENTCALLBACK` — seule forme
+//!   acceptée par certains DAC USB comme l'iBasso DC03-Pro) puis
+//!   **event-driven** (`EVENTCALLBACK` + `SetEventHandle`, la forme standard).
 //! - Si aucun format n'est accepté en exclusif -> `Err` : l'appelant retombe
 //!   sur le chemin cpal partagé (voir `output.rs`).
 //!
@@ -109,6 +113,15 @@ pub fn candidates(spec: &OutputSpec) -> Vec<(DeviceFormat, u32, u16)> {
         }
     }
     v
+}
+
+/// Nombre de trames correspondant à une période en hns (100 ns) à `rate` Hz.
+/// Pure : testable hors Windows.
+pub fn period_frames(period_hns: i64, rate: u32) -> u32 {
+    if period_hns <= 0 || rate == 0 {
+        return 1;
+    }
+    ((period_hns as u128 * rate as u128) / 10_000_000).max(1) as u32
 }
 
 /// Construit les octets WAVEFORMATEX (ou WAVEFORMATEXTENSIBLE) d'un candidat.
@@ -334,9 +347,28 @@ mod imp {
             Err(e) => fail!(format!("Activate: {e}")),
         };
 
-        // Essaie chaque candidat en EXCLUSIF : IsFormatSupported puis Initialize.
-        let mut opened: Option<(DeviceFormat, u32, u16)> = None;
-        for (fmt, rate, ch) in candidates(spec) {
+        // Périodes du device (hns, 100 ns) : le mode polling exige
+        // hnsBufferDuration == hnsPeriodicity ; on essaie la période par
+        // défaut (10 ms) puis la période min, certaines cartes USB n'acceptent
+        // que l'une des deux.
+        let mut def_period: i64 = 0;
+        let mut min_period: i64 = 0;
+        let _ = unsafe { client.GetDevicePeriod(Some(&mut def_period), Some(&mut min_period)) };
+        let mut periods: Vec<i64> = Vec::new();
+        for p in [def_period, min_period, def_period / 2] {
+            if p > 0 && !periods.contains(&p) {
+                periods.push(p);
+            }
+        }
+        if periods.is_empty() {
+            periods.push(100_000); // 10 ms par défaut
+        }
+
+        // Essaie chaque candidat en EXCLUSIF : IsFormatSupported puis Initialize,
+        // d'abord en mode POLLING (iBasso DC03-Pro et consorts), puis en mode
+        // EVENTCALLBACK (forme standard des autres DAC).
+        let mut opened: Option<(DeviceFormat, u32, u16, bool, i64)> = None;
+        'cand: for (fmt, rate, ch) in candidates(spec) {
             let (buf, _len) = wfx_ptr(fmt, rate, ch);
             let wfx = unsafe { &*(buf.0.as_ptr() as *const WAVEFORMATEX) };
             // En mode EXCLUSIF, pClosestMatch DOIT etre NULL :
@@ -345,22 +377,34 @@ mod imp {
             if sup.is_err() {
                 continue;
             }
-            let hr = unsafe {
-                client.Initialize(
-                    AUDCLNT_SHAREMODE_EXCLUSIVE,
-                    AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-                    2_000_000, // 200 ms de buffer
-                    0,
-                    wfx,
-                    None,
-                )
-            };
-            if hr.is_ok() {
-                opened = Some((fmt, rate, ch));
-                break;
+            // 1) POLLING : pas de flag EVENTCALLBACK, buffer == périodicité.
+            for &p in &periods {
+                let hr =
+                    unsafe { client.Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE, 0, p, p, wfx, None) };
+                if hr.is_ok() {
+                    opened = Some((fmt, rate, ch, false, p));
+                    break 'cand;
+                }
+            }
+            // 2) EVENTCALLBACK : buffer = 2 périodes, périodicité = 1 période.
+            for &p in &periods {
+                let hr = unsafe {
+                    client.Initialize(
+                        AUDCLNT_SHAREMODE_EXCLUSIVE,
+                        AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                        2 * p,
+                        p,
+                        wfx,
+                        None,
+                    )
+                };
+                if hr.is_ok() {
+                    opened = Some((fmt, rate, ch, true, p));
+                    break 'cand;
+                }
             }
         }
-        let (fmt, rate, ch) = match opened {
+        let (fmt, rate, ch, event_mode, period_hns) = match opened {
             Some(x) => x,
             None => fail!(format!(
                 "aucun format accepté en mode EXCLUSIF sur '{}' pour {} Hz",
@@ -373,18 +417,25 @@ mod imp {
             Ok(n) => n,
             Err(e) => fail!(format!("GetBufferSize: {e}")),
         };
-        let event = match unsafe { CreateEventW(None, false, false, None) } {
-            Ok(h) => h,
-            Err(e) => fail!(format!("CreateEventW: {e}")),
+        // Le handle d'événement n'existe qu'en mode event-driven.
+        let event = if event_mode {
+            match unsafe { CreateEventW(None, false, false, None) } {
+                Ok(h) => Some(h),
+                Err(e) => fail!(format!("CreateEventW: {e}")),
+            }
+        } else {
+            None
         };
         let stop_ev = match unsafe { CreateEventW(None, false, false, None) } {
             Ok(h) => h,
             Err(e) => fail!(format!("CreateEventW(stop): {e}")),
         };
-        if let Err(e) = unsafe { client.SetEventHandle(event) } {
-            let _ = unsafe { CloseHandle(event) };
-            let _ = unsafe { CloseHandle(stop_ev) };
-            fail!(format!("SetEventHandle: {e}"));
+        if let Some(ev) = event {
+            if let Err(e) = unsafe { client.SetEventHandle(ev) } {
+                let _ = unsafe { CloseHandle(ev) };
+                let _ = unsafe { CloseHandle(stop_ev) };
+                fail!(format!("SetEventHandle: {e}"));
+            }
         }
         let render: IAudioRenderClient = match unsafe { client.GetService() } {
             Ok(r) => r,
@@ -413,6 +464,8 @@ mod imp {
                 out_ch,
                 src_ch,
                 dop,
+                event_mode,
+                period_hns,
                 event,
                 stop_ev,
                 cmd_rx,
@@ -431,6 +484,8 @@ mod imp {
                     out_ch,
                     src_ch,
                     dop,
+                    event_mode,
+                    period_hns,
                     event,
                     stop_ev,
                     cmd_rx,
@@ -449,6 +504,8 @@ mod imp {
                 out_ch,
                 src_ch,
                 dop,
+                event_mode,
+                period_hns,
                 event,
                 stop_ev,
                 cmd_rx,
@@ -470,6 +527,8 @@ mod imp {
     }
 
     // Thread worker, générique sur le type d'échantillon du conteneur.
+    // `event_mode` = true -> attente sur handle d'événement WASAPI ;
+    // false -> mode polling (le DAC ne signale rien, on cadence nous-mêmes).
     #[allow(clippy::too_many_arguments)]
     fn start_worker<T: WriteOut>(
         fmt: DeviceFormat,
@@ -480,7 +539,9 @@ mod imp {
         out_ch: usize,
         src_ch: usize,
         dop: bool,
-        event: HANDLE,
+        event_mode: bool,
+        period_hns: i64,
+        event: Option<HANDLE>,
         stop_ev: HANDLE,
         cmd_rx: mpsc::Receiver<Cmd>,
         cons: Cons,
@@ -505,12 +566,21 @@ mod imp {
                 let mut eq_proc = EqProcessor::new();
                 let mut stash: Option<Stash> = None;
                 let mut paused = false;
+                // En mode polling on pousse au plus ~1 période par itération ;
+                // en dessous d'un seuil on dort un quart de période.
+                let period_frames = super::period_frames(period_hns, rate);
+                let nap = std::time::Duration::from_micros(((period_hns as u64) / 40).max(100));
+                let close_event = |ev: Option<HANDLE>| {
+                    if let Some(ev) = ev {
+                        let _ = unsafe { CloseHandle(ev) };
+                    }
+                };
                 loop {
                     while let Ok(c) = cmd_rx.try_recv() {
                         match c {
                             Cmd::Stop => {
                                 let _ = unsafe { client.Stop() };
-                                let _ = unsafe { CloseHandle(event) };
+                                close_event(event);
                                 return;
                             }
                             Cmd::Pause => {
@@ -531,22 +601,42 @@ mod imp {
                         std::thread::sleep(std::time::Duration::from_millis(20));
                         continue;
                     }
-                    let handles = [stop_ev, event];
-                    let w = unsafe { WaitForMultipleObjects(&handles, false, 50) };
-                    if w == WAIT_OBJECT_0 {
-                        let _ = unsafe { client.Stop() };
-                        let _ = unsafe { CloseHandle(event) };
-                        return;
-                    }
-                    if w == WAIT_TIMEOUT {
-                        continue;
+                    if event_mode {
+                        let ev = event.expect("handle événement requis en mode event");
+                        let handles = [stop_ev, ev];
+                        let w = unsafe { WaitForMultipleObjects(&handles, false, 50) };
+                        if w == WAIT_OBJECT_0 {
+                            let _ = unsafe { client.Stop() };
+                            close_event(event);
+                            return;
+                        }
+                        if w == WAIT_TIMEOUT {
+                            continue;
+                        }
+                    } else {
+                        // Mode polling : stop non bloquant, puis cadence.
+                        let w = unsafe {
+                            windows::Win32::System::Threading::WaitForSingleObject(stop_ev, 0)
+                        };
+                        if w == WAIT_OBJECT_0 {
+                            let _ = unsafe { client.Stop() };
+                            return;
+                        }
                     }
                     let padding = unsafe { client.GetCurrentPadding() }.unwrap_or(0);
                     let writable = (buf_frames.saturating_sub(padding)) as usize;
-                    if writable == 0 {
+                    let n = if event_mode {
+                        writable
+                    } else {
+                        writable.min(period_frames as usize)
+                    };
+                    if n == 0 || (!event_mode && n < 32) {
+                        if !event_mode {
+                            std::thread::sleep(nap);
+                        }
                         continue;
                     }
-                    let mut buf = vec![T::zero(); writable * out_ch];
+                    let mut buf = vec![T::zero(); n * out_ch];
                     let gain = compute_gain(
                         params.volume.load(Ordering::Relaxed),
                         params.max_volume.load(Ordering::Relaxed),
@@ -570,16 +660,15 @@ mod imp {
                         &params.browser_tx,
                         &params.frames_out,
                     );
-                    let mut bytes = Vec::with_capacity(writable * frame_bytes);
+                    let mut bytes = Vec::with_capacity(n * frame_bytes);
                     let packed = fmt.packed24();
                     for s in &buf {
                         s.push_le(&mut bytes, packed);
                     }
-                    match unsafe { render.GetBuffer(writable as u32) } {
+                    match unsafe { render.GetBuffer(n as u32) } {
                         Ok(ptr) => {
-                            let dst = unsafe {
-                                std::slice::from_raw_parts_mut(ptr, writable * frame_bytes)
-                            };
+                            let dst =
+                                unsafe { std::slice::from_raw_parts_mut(ptr, n * frame_bytes) };
                             let copy = bytes.len().min(dst.len());
                             dst[..copy].copy_from_slice(&bytes[..copy]);
                             for b in &mut dst[copy..] {
@@ -590,7 +679,7 @@ mod imp {
                             } else {
                                 0
                             };
-                            let _ = unsafe { render.ReleaseBuffer(writable as u32, flags) };
+                            let _ = unsafe { render.ReleaseBuffer(n as u32, flags) };
                         }
                         Err(e) => {
                             tracing::error!("wasapi exclusif: GetBuffer: {e}");
@@ -708,6 +797,15 @@ mod tests {
             &b[24..40],
             &[1, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71]
         ); // KSDATAFORMAT_SUBTYPE_PCM
+    }
+
+    #[test]
+    fn period_frames_conversion_hns() {
+        // 10 ms à 48000 Hz = 480 trames ; 3 ms à 176400 Hz = 529 trames.
+        assert_eq!(period_frames(100_000, 48_000), 480);
+        assert_eq!(period_frames(30_000, 176_400), 529);
+        assert_eq!(period_frames(0, 48_000), 1);
+        assert_eq!(period_frames(100_000, 0), 1);
     }
 
     #[test]
