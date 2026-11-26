@@ -371,11 +371,15 @@ mod imp {
         'cand: for (fmt, rate, ch) in candidates(spec) {
             let (buf, _len) = wfx_ptr(fmt, rate, ch);
             let wfx = unsafe { &*(buf.0.as_ptr() as *const WAVEFORMATEX) };
-            // En mode EXCLUSIF, pClosestMatch DOIT etre NULL :
-            // S_OK = format accepte tel quel, sinon on passe au candidat suivant.
+            // IsFormatSupported est purement consultatif : certains pilotes
+            // (iBasso DC03-Pro) y repondent UNSUPPORTED_FORMAT pour du 24 bits
+            // a 176400 Hz alors que Initialize l'accepte. On tente donc
+            // Initialize quoi qu'il arrive — c'est lui qui fait foi.
             let sup = unsafe { client.IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, wfx, None) };
             if sup.is_err() {
-                continue;
+                tracing::debug!(
+                    "exclusif: IsFormatSupported refuse {fmt:?} {rate} Hz (continue quand meme)"
+                );
             }
             // 1) POLLING : pas de flag EVENTCALLBACK, buffer == périodicité.
             for &p in &periods {
