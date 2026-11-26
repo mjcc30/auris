@@ -147,9 +147,9 @@ fn parse_header_erreurs() {
 
 #[test]
 fn dop_packing_marqueurs() {
-    // 64 trames DoP, 2 canaux. DSF = octets MSB-first : le bit le plus ancien
-    // (bit 7 de chaque octet, ici 0x80) doit tomber dans le bit 0 du champ DoP
-    // (slot t0 = LSB, DoP Open Standard 1.1) -> 0x8080 devient 0x0101.
+    // 64 trames DoP, 2 canaux. DSF = octets LSB-first (spec Sony) : le bit le
+    // plus ancien (bit 0 du 1er octet) doit tomber dans le bit 15 du champ DoP
+    // (slot t0 = MSB du champ) -> reverse_bits(0x8080) = 0x0101.
     let frames = 64u64;
     let data = vec![0x80u8; 4096 * 2];
     let dsf = make_dsf(2_822_400, 2, 4096, 16 * frames, &data);
@@ -173,7 +173,7 @@ fn dop_packing_marqueurs() {
             let marker = s >> 16;
             assert_eq!(
                 low, 0x0101,
-                "bits DSD inverses dans les bits bas (trame {f})"
+                "reverse_bits des 16 bits DSD dans les bits bas (trame {f})"
             );
             let attendu = if f % 2 == 0 { 0x05 } else { 0xFA };
             assert_eq!(marker, attendu, "marqueur DoP trame {f}");
@@ -195,20 +195,26 @@ fn dop_packing_marqueurs() {
 }
 
 #[test]
-fn dop_packing_dff_copie_directe() {
-    // DFF (DSDIFF) = octets LSB-first : copie directe dans le champ DoP.
-    let data = vec![0x80u8; 4096 * 2];
+fn dop_packing_dff_echange_octets() {
+    // DFF (DSDIFF) = octets MSB-first (convention Philips) : le bit 7 du 1er
+    // octet (plus ancien) passe dans le bit 15 du champ DoP par echange des
+    // deux octets. Motif 0x01,0x80 -> raw LE 0x8001 -> champ 0x0180.
+    let mut data = Vec::with_capacity(4096 * 2);
+    for _ in 0..4096 {
+        data.push(0x01u8);
+        data.push(0x80u8);
+    }
     let dff = make_dff(2_822_400, 2, &data);
     let mut dec = DsdDecoder::new(Box::new(Cursor::new(dff)), TrackMeta::default()).unwrap();
-    assert!(!dec.info().msb_first);
+    assert!(!dec.info().lsb_first);
     let chunk = dec.next_chunk(4).unwrap().unwrap();
     let ChunkData::I24Dop(v) = chunk else {
         panic!("attendu I24Dop")
     };
     assert_eq!(
         (v[0] & 0xFFFF) as u16,
-        0x8080,
-        "DFF LSB-first: copie directe"
+        0x0180,
+        "DFF MSB-first: echange des octets (raw 0x8001 -> 0x0180)"
     );
     assert_eq!(v[0] >> 16, 0x05);
 }
@@ -226,6 +232,6 @@ fn dop_seek_reprend_marqueur() {
         panic!("attendu I24Dop")
     };
     assert_eq!(v[0] >> 16, 0x05);
-    // DSF 0xCD (1100 1101) -> champ inverse bit a bit: 0xCDCD -> 0xB3B3
+    // DSF (LSB-first) 0xCDCD -> reverse_bits: 0xCDCD -> 0xB3B3
     assert_eq!((v[0] & 0xFFFF) as u16, 0xB3B3);
 }
