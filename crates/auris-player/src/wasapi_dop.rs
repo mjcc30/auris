@@ -102,6 +102,26 @@ pub fn ensure_dop_carrier(device_name: Option<&str>, dop_rate: u32) -> Result<bo
     imp::ensure_dop_carrier(device_name, dop_rate)
 }
 
+/// Indique si le mix format WASAPI courant est compatible avec un flux DoP à
+/// `carrier` Hz : il faut un PCM entier (pas float) à exactement la porteuse,
+/// sinon le moteur rééchantillonne et détruit les marqueurs DoP (ou le pilote
+/// refuse carrément le flux en mode partagé, ex: Default Format 32 bits/384 kHz
+/// sur certains DAC USB).
+///
+/// Retourne un message d'aide actionnable si incompatible, `None` sinon.
+pub fn dop_mismatch_hint(mix: Option<MixFormat>, carrier: u32) -> Option<String> {
+    let m = mix?;
+    if m.is_float || m.rate != carrier {
+        Some(format!(
+            "DoP: mix format WASAPI actuel {m} incompatible avec la porteuse {carrier} Hz — \
+             lancez `auris audio-dop-setup --rate {carrier}` au repos (aucune lecture en cours), \
+             puis rebranchez le DAC USB ou redemarrez le service Audio Windows pour que le moteur adopte le PCM 24 bits / {carrier} Hz"
+        ))
+    } else {
+        None
+    }
+}
+
 #[cfg(not(target_os = "windows"))]
 mod imp {
     use super::MixFormat;
@@ -385,6 +405,47 @@ mod tests {
                 rate * ch as u32 * 3
             );
         }
+    }
+
+    #[test]
+    fn dop_mismatch_hint_incompatible() {
+        // mix float -> hint
+        let m = MixFormat {
+            rate: 48_000,
+            channels: 2,
+            bits_per_sample: 32,
+            is_float: true,
+        };
+        let h = dop_mismatch_hint(Some(m), 176_400).expect("hint");
+        assert!(h.contains("48000 Hz, 32 bits float"));
+        assert!(h.contains("176400"));
+        assert!(h.contains("audio-dop-setup"));
+        // mix PCM mais mauvaise cadence (ex: Default Format 24/384000) -> hint
+        let m = MixFormat {
+            rate: 384_000,
+            channels: 2,
+            bits_per_sample: 24,
+            is_float: false,
+        };
+        assert!(dop_mismatch_hint(Some(m), 176_400).is_some());
+        // mix = porteuse en PCM 24 bits -> pas de hint
+        let m = MixFormat {
+            rate: 176_400,
+            channels: 2,
+            bits_per_sample: 24,
+            is_float: false,
+        };
+        assert!(dop_mismatch_hint(Some(m), 176_400).is_none());
+        // DSD128
+        let m = MixFormat {
+            rate: 352_800,
+            channels: 2,
+            bits_per_sample: 24,
+            is_float: false,
+        };
+        assert!(dop_mismatch_hint(Some(m), 352_800).is_none());
+        // mix inconnu (hors Windows) -> pas de hint
+        assert!(dop_mismatch_hint(None, 176_400).is_none());
     }
 
     #[test]

@@ -673,7 +673,24 @@ impl Engine {
                     self.browser_tx.clone(),
                     self.eq.clone(),
                 ) {
-                    self.publish_msg("error", &format!("flux audio: {e}"));
+                    // Un flux qui ne s'ouvre pas ne doit pas laisser l'UI sur un
+                    // « playing » fantôme à position 0 : on repasse en Stopped et
+                    // on publie l'erreur. Pour un .dsf, on ajoute l'indice DoP si
+                    // le mix format WASAPI est incompatible avec la porteuse.
+                    let mut msg = format!("flux audio: {e}");
+                    if spec.is_dsd_dop {
+                        let mix = crate::wasapi_dop::device_mix_format(self.device_name.as_deref());
+                        if let Some(hint) = crate::wasapi_dop::dop_mismatch_hint(mix, spec.rate) {
+                            msg.push_str(&format!(" — {hint}"));
+                        }
+                    }
+                    self.publish_msg("error", &msg);
+                    {
+                        let mut st = self.state.write().unwrap();
+                        st.status = PlayStatus::Stopped;
+                        st.position_secs = 0.0;
+                    }
+                    self.publish();
                     return;
                 }
                 self.cur_spec = Some(spec);

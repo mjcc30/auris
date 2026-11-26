@@ -342,11 +342,17 @@ impl AudioOutput {
                 ),
                 Ok(false) => {
                     if let Some(mix) = crate::wasapi_dop::device_mix_format(Some(&self.device_name)) {
-                        tracing::info!(
-                            "DoP: mix format du device '{}' = {mix} (porteuse {})",
-                            self.device_name,
-                            spec.rate
-                        );
+                        if let Some(hint) =
+                            crate::wasapi_dop::dop_mismatch_hint(Some(mix), spec.rate)
+                        {
+                            tracing::warn!("{hint}");
+                        } else {
+                            tracing::info!(
+                                "DoP: mix format du device '{}' = {mix} (porteuse {})",
+                                self.device_name,
+                                spec.rate
+                            );
+                        }
                     }
                 }
                 Err(e) => tracing::warn!(
