@@ -453,6 +453,12 @@ async fn post_play(
             .into_iter()
             .map(|t| s.library.get_by_uri(&t.uri).unwrap_or(t))
             .collect::<Vec<_>>();
+        // Enregistre les pistes jouées dans la bibliothèque: les lookups par
+        // id (paroles / infos / partage / pochette) doivent retomber sur la
+        // piste, même si elle vient de Parcourir et n'a pas été scannée.
+        for t in &queue {
+            let _ = s.library.upsert_track(t);
+        }
         s.engine.play_queue(queue, idx);
     } else if let Some(track_id) = body.track_id {
         let t = s
@@ -472,6 +478,9 @@ async fn post_play(
                     .into_iter()
                     .map(|t| s.library.get_by_uri(&t.uri).unwrap_or(t))
                     .collect::<Vec<_>>();
+                for t in &tracks {
+                    let _ = s.library.upsert_track(t);
+                }
                 s.engine.play_queue(tracks, 0);
                 return Ok(Json(s.engine.state()));
             }
@@ -480,7 +489,15 @@ async fn post_play(
         if let Some(t) = s.library.get_by_uri(&uri) {
             s.engine.play_queue(vec![t], 0);
         } else {
-            s.engine.play_uri(uri);
+            // piste non scannée: on la crée et on l'enregistre pour que les
+            // lookups par id (paroles / infos / partage) fonctionnent ensuite
+            let source_id = auris_sources::parse_src_uri(&uri)
+                .map(|(id, _)| id)
+                .unwrap_or_default();
+            let mut t = Track::new(uri.clone(), source_id);
+            t.finalize_keys();
+            let _ = s.library.upsert_track(&t);
+            s.engine.play_queue(vec![t], 0);
         }
     } else {
         return Err(AurisError::InvalidUri("uri, track_id ou queue requis".into()).into());
