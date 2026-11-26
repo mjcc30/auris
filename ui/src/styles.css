@@ -263,6 +263,8 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-w
   transition: background 150ms var(--ease), color 150ms var(--ease);
 }
 .crumb-btn:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+.crumb-btn:disabled { opacity: 0.35; cursor: default; }
+.crumb-btn:disabled:hover { background: none; color: var(--text-dim); }
 .crumb-sep { color: var(--text-dim); }
 
 /* ---------- Parcourir : lignes ---------- */

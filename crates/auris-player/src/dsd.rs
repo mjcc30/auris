@@ -1,9 +1,16 @@
 //! Decodeur DSD (DSF / DFF non compresse) avec encodage DoP (DSD over PCM).
 //!
 //! Le DoP transporte le flux DSD natif dans des trames PCM 24 bits:
-//! - 16 bits DSD par trame et par canal (2 octets bas)
+//! - 16 bits DSD par trame et par canal (2 octets bas), **le bit le plus
+//!   ancien dans le bit de poids faible (slot t0, DoP Open Standard 1.1)**
 //! - octet de marqueur 0x05 / 0xFA (alterne a chaque trame) dans l'octet haut
 //! - cadence = rate_dsd / 16 : DSD64 -> 176.4 kHz, DSD128 -> 352.8 kHz, DSD256 -> 705.6 kHz
+//!
+//! Ordre des bits dans les fichiers: DSF stocke les bits MSB-first dans chaque
+//! octet, DFF (DSDIFF) LSB-first. Le champ DoP de 16 bits recoit donc les deux
+//! octets **inverses bit a bit** pour un DSF (sinon le DAC verrouille le DoP sur
+//! les marqueurs mais recoit un flux DSD brouille -> bruit blanc), et tels
+//! quels pour un DFF.
 //!
 //! C'est la methode standard pour delivrer le DSD natif en USB sur les DAC
 //! compatibles DoP, sans pilote ASIO specifique.
@@ -33,6 +40,24 @@ pub struct DsdInfo {
     pub samples_per_channel: u64,
     pub data_offset: u64,
     pub block_bytes_per_channel: usize,
+    /// true pour un DSF (bits MSB-first dans chaque octet), false pour un DFF
+    /// (LSB-first). Sert a placer le bit le plus ancien dans le slot t0 (bit 0)
+    /// du champ DoP de 16 bits.
+    pub msb_first: bool,
+}
+
+/// Reordonne les 16 bits DSD d'une trame DoP: le bit le plus ancien du flux
+/// (slot t0) doit tomber dans le bit de poids faible du champ de 16 bits
+/// (DoP Open Standard 1.1). `raw` = les 2 octets DSD lus en little-endian.
+fn dop_bits(raw: u16, msb_first: bool) -> u16 {
+    if msb_first {
+        // DSF: chaque octet est MSB-first -> on inverse bit a bit les 16 bits
+        // (equivalent a reverse_bits des deux octets puis echange des octets).
+        raw.swap_bytes().reverse_bits()
+    } else {
+        // DFF: octets deja LSB-first -> copie directe.
+        raw
+    }
 }
 
 impl DsdInfo {
@@ -141,6 +166,7 @@ fn parse_dsf(head: &[u8]) -> Result<DsdInfo> {
         samples_per_channel: samples,
         data_offset,
         block_bytes_per_channel: if block_bytes > 0 { block_bytes } else { 4096 },
+        msb_first: true, // DSF: bits MSB-first dans chaque octet
     })
 }
 
@@ -232,6 +258,7 @@ fn parse_dff(reader: &mut dyn SeekRead, head: &[u8]) -> Result<DsdInfo> {
         samples_per_channel: samples,
         data_offset,
         block_bytes_per_channel: 4096,
+        msb_first: false, // DFF (DSDIFF): bits LSB-first dans chaque octet
     })
 }
 
@@ -345,8 +372,8 @@ impl Decoder for DsdDecoder {
                 let marker = dop_marker(global_frame);
                 for c in 0..ch {
                     let off = c * bs + (self.block_pos + i) * 2;
-                    let bits =
-                        u16::from_le_bytes([self.block_buf[off], self.block_buf[off + 1]]) as i32;
+                    let raw = u16::from_le_bytes([self.block_buf[off], self.block_buf[off + 1]]);
+                    let bits = dop_bits(raw, self.info.msb_first) as i32;
                     out.push((marker << 16) | bits);
                 }
             }
@@ -375,5 +402,94 @@ impl Decoder for DsdDecoder {
         self.block_valid = 0;
         self.block_pos = (frame % fpb) as usize;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dop_bits, parse_header, DsdDecoder};
+    use crate::decoder::{Decoder, TrackMeta};
+    use std::io::Cursor;
+
+    /// Construit un DSF minimal en memoire: 2 canaux, bloc de 8 octets/canal,
+    /// 64 echantillons DSD/canal (4 trames DoP), donnees fournies.
+    fn make_dsf(ch0: &[u8; 8], ch1: &[u8; 8]) -> Cursor<Vec<u8>> {
+        let mut b = Vec::new();
+        b.extend_from_slice(b"DSD ");
+        b.extend_from_slice(&28u64.to_le_bytes()); // taille chunk header
+        b.extend_from_slice(&0u64.to_le_bytes()); // taille fichier (ignore)
+        b.extend_from_slice(&80u64.to_le_bytes()); // pointeur chunk data
+                                                   // chunk fmt (52 octets dont 12 d'en-tete)
+        b.extend_from_slice(b"fmt ");
+        b.extend_from_slice(&52u64.to_le_bytes());
+        b.extend_from_slice(&1u32.to_le_bytes()); // version
+        b.extend_from_slice(&0u32.to_le_bytes()); // format id = DSD brut
+        b.extend_from_slice(&2u32.to_le_bytes()); // type canal = stereo
+        b.extend_from_slice(&2u32.to_le_bytes()); // canaux
+        b.extend_from_slice(&2_822_400u32.to_le_bytes()); // DSD64
+        b.extend_from_slice(&1u32.to_le_bytes()); // bits/sample
+        b.extend_from_slice(&64u64.to_le_bytes()); // echantillons/canal
+        b.extend_from_slice(&8u32.to_le_bytes()); // bloc/canal
+        b.extend_from_slice(&0u32.to_le_bytes()); // reserve
+        assert_eq!(b.len(), 80);
+        // chunk data
+        b.extend_from_slice(b"data");
+        b.extend_from_slice(&((12 + 16) as u64).to_le_bytes());
+        b.extend_from_slice(ch0);
+        b.extend_from_slice(ch1);
+        Cursor::new(b)
+    }
+
+    #[test]
+    fn dop_bits_msb_first_inverse_les_octets() {
+        // DSF: octets MSB-first. Le bit le plus ancien (bit 7 du 1er octet)
+        // doit tomber dans le bit 0 du champ DoP (slot t0 = LSB).
+        assert_eq!(dop_bits(0x0281, true), 0x4081);
+        // octet0 = 0x01 (seul bit0 a 1) -> il devient le bit 7 du champ.
+        assert_eq!(dop_bits(0x0001, true), 0x0080);
+        // octet1 = 0x80 (seul bit7 a 1) -> il devient le bit 8 du champ.
+        assert_eq!(dop_bits(0x8000, true), 0x0100);
+    }
+
+    #[test]
+    fn dop_bits_lsb_first_copie_directe() {
+        // DFF: octets LSB-first -> copie directe.
+        assert_eq!(dop_bits(0x0281, false), 0x0281);
+        assert_eq!(dop_bits(0xFFFF, false), 0xFFFF);
+    }
+
+    #[test]
+    fn dsf_decode_marqueurs_et_ordre_des_bits() {
+        let ch0 = [0x81u8, 0x02, 0xFF, 0x00, 0x55, 0xAA, 0x0F, 0xF0];
+        let ch1 = [0x01u8, 0x80, 0x00, 0xFF, 0x33, 0xCC, 0xF0, 0x0F];
+        let cur = make_dsf(&ch0, &ch1);
+        let mut dec = DsdDecoder::new(Box::new(cur), TrackMeta::default()).unwrap();
+        assert!(dec.info().msb_first);
+        assert_eq!(dec.spec().rate, 176_400);
+        assert_eq!(dec.spec().channels, 2);
+        let chunk = dec.next_chunk(16).unwrap().expect("un chunk");
+        let crate::decoder::ChunkData::I24Dop(v) = chunk else {
+            panic!("attendu I24Dop");
+        };
+        assert_eq!(v.len(), 4 * 2); // 4 trames x 2 canaux
+        for f in 0..4usize {
+            let marker = if f % 2 == 0 { 0x05 } else { 0xFA };
+            for (c, plane) in [(0usize, &ch0), (1usize, &ch1)] {
+                let got = v[f * 2 + c];
+                let raw = u16::from_le_bytes([plane[f * 2], plane[f * 2 + 1]]);
+                let want = (marker << 16) | dop_bits(raw, true) as i32;
+                assert_eq!(got, want, "trame {f} canal {c}");
+            }
+        }
+        // trame 0 canal 0, valeur exacte: raw=0x0281 -> champ 0x4081
+        assert_eq!(v[0], (0x05 << 16) | 0x4081);
+        // trame 1 canal 0: raw=0x00FF -> champ 0x00FF (symetrie de l'inversion)
+        assert_eq!(v[2], (0xFA << 16) | 0x00FF);
+    }
+
+    #[test]
+    fn parse_header_rejette_format_inconnu() {
+        let cur = Cursor::new(vec![0u8; 64]);
+        assert!(parse_header(&mut Box::new(cur) as &mut dyn auris_sources::SeekRead).is_err());
     }
 }

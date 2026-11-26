@@ -603,6 +603,7 @@ function Browse({ sources, src, playUri, act, say }: { sources: Source[]; src: s
     <div>
       <div className="toolbar">
         <div className="crumb">
+          <button className="crumb-btn" onClick={() => setPath(path.slice(0, -1))} disabled={path.length === 0} title="Dossier précédent"><Icon name="back" size={16} /></button>
           <button className="crumb-btn" onClick={() => setPath([])} title="Racine de la source"><Icon name="home" size={16} /></button>
           {path.map((p, i) => (
             <span key={i}>

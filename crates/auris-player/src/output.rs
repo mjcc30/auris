@@ -162,8 +162,10 @@ pub(crate) trait WriteOut: SizedSample + Send + 'static {
     fn from_f32(v: f32, gain: f32) -> Self;
     /// Conversion inverse (pour le flux navigateur) : échantillon normalisé [-1, 1].
     fn to_f32(self) -> f32;
-    /// v = mot 24 bits DoP (marqueur dans l'octet haut). Le gain ne s'applique
-    /// qu'aux 16 bits de donnees, jamais au marqueur.
+    /// v = mot 24 bits DoP (marqueur dans l'octet haut, 16 bits DSD en bas).
+    /// **Bit-perfect** : le gain ne s'applique JAMAIS a un flux DoP (spec DoP:
+    /// rien ne doit alterer les trames en transit) — le mot 24 bits est
+    /// transmis tel quel, quel que soit `gain`.
     fn from_dop24(v: i32, gain: f32) -> Self;
     fn zero() -> Self;
     /// Sérialise l'échantillon en little-endian dans `out`.
@@ -180,6 +182,7 @@ impl WriteOut for f32 {
         self
     }
     fn from_dop24(_v: i32, _gain: f32) -> Self {
+        // un conteneur float ne peut pas porter de DoP : silence
         0.0
     }
     fn zero() -> Self {
@@ -196,9 +199,10 @@ impl WriteOut for i16 {
     fn to_f32(self) -> f32 {
         self as f32 / i16::MAX as f32
     }
-    fn from_dop24(v: i32, gain: f32) -> Self {
-        let bits = ((v & 0xFFFF) as f32 * gain) as i32 & 0xFFFF;
-        (((v & 0xFF0000) | bits) >> 8) as i16
+    fn from_dop24(v: i32, _gain: f32) -> Self {
+        // conteneur 16 bits : le DoP 24 bits n'y tient pas, on garde le motif
+        // (marqueur dans l'octet haut) sans toucher aux donnees.
+        (v >> 8) as i16
     }
     fn zero() -> Self {
         0
@@ -214,9 +218,10 @@ impl WriteOut for i32 {
     fn from_f32(v: f32, gain: f32) -> Self {
         (v * gain * i32::MAX as f32) as i32
     }
-    fn from_dop24(v: i32, gain: f32) -> Self {
-        let bits = ((v & 0xFFFF) as f32 * gain) as i32 & 0xFFFF;
-        ((v & 0xFF0000) | bits) << 8
+    fn from_dop24(v: i32, _gain: f32) -> Self {
+        // 24-in-32 : le mot DoP 24 bits est aligne sur les bits forts du
+        // conteneur 32 bits, tel quel (bit-perfect).
+        v << 8
     }
     fn zero() -> Self {
         0
@@ -238,9 +243,9 @@ impl WriteOut for I24 {
     fn from_f32(v: f32, gain: f32) -> Self {
         I24::new_unchecked((v * gain * 8_388_607.0) as i32)
     }
-    fn from_dop24(v: i32, gain: f32) -> Self {
-        let bits = ((v & 0xFFFF) as f32 * gain) as i32 & 0xFFFF;
-        I24::new_unchecked((v & 0xFF0000) | bits)
+    fn from_dop24(v: i32, _gain: f32) -> Self {
+        // le mot 24 bits DoP tel quel, dans les 24 bits bas du I24
+        I24::new_unchecked(v)
     }
     fn zero() -> Self {
         I24::new_unchecked(0)
@@ -872,6 +877,7 @@ pub fn compute_gain(volume: u8, max_volume: u8, curve: u8, vol_mode: u8, muted: 
 #[cfg(test)]
 mod tests {
     use super::{compute_gain, resolve_device_name, AudioDeviceInfo, WriteOut};
+    use cpal::I24;
     use ringbuf::traits::Producer;
 
     fn dev(name: &str, is_default: bool) -> AudioDeviceInfo {
@@ -1057,6 +1063,32 @@ mod tests {
         // aucun frame PCM ne doit sortir pour du DoP
         assert!(browser_rx.try_recv().is_err());
         out.stop();
+    }
+
+    #[test]
+    fn from_dop24_est_bit_parfait_quel_que_soit_le_gain() {
+        // spec DoP: rien ne doit alterer les trames en transit. Le mot 24 bits
+        // (marqueur + 16 bits DSD) doit sortir identique pour tout gain.
+        for v in [0x05_0000i32, 0xFA_FFFF, 0x05_ABCD, 0xFA_0001, 0x05_4081] {
+            for gain in [0.0f32, 0.5, 0.64, 0.8, 1.0] {
+                // i32 (conteneur 24-in-32 / 32 bits): mot décale de 8 bits
+                assert_eq!(i32::from_dop24(v, gain), v << 8, "i32 v={v:#x} gain={gain}");
+                // I24: mot 24 bits tel quel dans les bits bas
+                assert_eq!(
+                    I24::from_dop24(v, gain).inner(),
+                    v,
+                    "I24 v={v:#x} gain={gain}"
+                );
+            }
+        }
+        // sérialisation packed 24 bits (WASAPI exclusif Pcm24Packed):
+        // octets sur le fil = [bits_lo, bits_hi, marqueur]
+        let mut w = Vec::new();
+        i32::from_dop24(0x05_ABCD, 0.64).push_le(&mut w, true);
+        assert_eq!(w, vec![0xCD, 0xAB, 0x05]);
+        let mut w = Vec::new();
+        i32::from_dop24(0xFA_FFFF, 1.0).push_le(&mut w, true);
+        assert_eq!(w, vec![0xFF, 0xFF, 0xFA]);
     }
 
     #[test]

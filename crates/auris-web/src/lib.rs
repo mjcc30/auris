@@ -166,6 +166,23 @@ impl From<AurisError> for ApiError {
 }
 type ApiResult<T> = Result<T, ApiError>;
 
+/// Exécute une opération d'IO bloquante (listing disque/réseau des sources,
+/// sonde de pochette embarquée...) sur le pool de threads bloquants de tokio
+/// au lieu d'un worker async : l'UI web reste réactive pendant le parcours
+/// des dossiers, même sur une source SMB lente.
+async fn offload_io<T, F>(f: F) -> ApiResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> auris_core::Result<T> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(r) => r.map_err(ApiError::from),
+        Err(e) => Err(ApiError(auris_core::AurisError::other(format!(
+            "tâche d'IO interrompue: {e}"
+        )))),
+    }
+}
+
 // ---------- payloads ----------
 
 #[derive(Deserialize)]
@@ -483,22 +500,26 @@ async fn post_play(
         s.engine.play_queue(vec![t], 0);
     } else if let Some(uri) = body.uri {
         // un dossier est joue en "tout lire": file remplie de ses fichiers audio
-        if let Ok(entry) = s.sources.stat(&uri).await {
-            if entry.is_dir {
-                let tracks = browse_tracks(&s.sources, &uri).await?;
-                if tracks.is_empty() {
-                    return Err(AurisError::other("dossier sans fichier audio".to_string()).into());
-                }
-                let tracks = tracks
-                    .into_iter()
-                    .map(|t| s.library.get_by_uri(&t.uri).unwrap_or(t))
-                    .collect::<Vec<_>>();
-                for t in &tracks {
-                    let _ = s.library.upsert_track(t);
-                }
-                s.engine.play_queue(tracks, 0);
-                return Ok(Json(s.engine.state()));
+        let sources = s.sources.clone();
+        let uri_stat = uri.clone();
+        let handle = tokio::runtime::Handle::current();
+        let is_dir = offload_io(move || handle.block_on(sources.stat(&uri_stat)).map(|e| e.is_dir))
+            .await
+            .unwrap_or(false);
+        if is_dir {
+            let tracks = browse_tracks_offload(&s.sources, &uri).await?;
+            if tracks.is_empty() {
+                return Err(AurisError::other("dossier sans fichier audio".to_string()).into());
             }
+            let tracks = tracks
+                .into_iter()
+                .map(|t| s.library.get_by_uri(&t.uri).unwrap_or(t))
+                .collect::<Vec<_>>();
+            for t in &tracks {
+                let _ = s.library.upsert_track(t);
+            }
+            s.engine.play_queue(tracks, 0);
+            return Ok(Json(s.engine.state()));
         }
         // fichier: piste de la bibliothèque si scannée, sinon lecture par uri
         if let Some(t) = s.library.get_by_uri(&uri) {
@@ -520,21 +541,30 @@ async fn post_play(
     Ok(Json(s.engine.state()))
 }
 
+/// Construit une piste jouable a partir d'une entree de parcours.
+fn track_from_entry(e: BrowseEntry) -> Track {
+    let source_id = auris_sources::parse_src_uri(&e.uri)
+        .map(|(id, _)| id)
+        .unwrap_or_default();
+    let mut t = Track::new(e.uri.clone(), source_id);
+    t.title = e.name.clone();
+    t.size_bytes = e.size;
+    t.finalize_keys();
+    t
+}
+
 /// Construit des pistes jouables a partir des fichiers audio d'un dossier.
-async fn browse_tracks(sources: &SourcesManager, dir_uri: &str) -> ApiResult<Vec<Track>> {
-    let entries = sources.walk_audio(dir_uri).await?;
-    let mut out = Vec::new();
-    for e in entries {
-        let source_id = auris_sources::parse_src_uri(&e.uri)
-            .map(|(id, _)| id)
-            .unwrap_or_default();
-        let mut t = Track::new(e.uri.clone(), source_id);
-        t.title = e.name.clone();
-        t.size_bytes = e.size;
-        t.finalize_keys();
-        out.push(t);
-    }
-    Ok(out)
+/// Le parcours récursif (IO disque/réseau bloquantes, parfois long
+/// sur un NAS) est exécuté hors des workers async pour garder l'UI réactive.
+async fn browse_tracks_offload(
+    sources: &Arc<SourcesManager>,
+    dir_uri: &str,
+) -> ApiResult<Vec<Track>> {
+    let sources = sources.clone();
+    let uri = dir_uri.to_string();
+    let handle = tokio::runtime::Handle::current();
+    let entries = offload_io(move || handle.block_on(sources.walk_audio(&uri))).await?;
+    Ok(entries.into_iter().map(track_from_entry).collect())
 }
 
 async fn post_seek(
@@ -589,13 +619,17 @@ async fn post_queue_add(
     State(s): State<AppState>,
     Json(b): Json<QueueAddBody>,
 ) -> ApiResult<Json<auris_core::PlayerState>> {
-    if let Ok(entry) = s.sources.stat(&b.uri).await {
-        if entry.is_dir {
-            for t in browse_tracks(&s.sources, &b.uri).await? {
-                s.engine.enqueue(t);
-            }
-            return Ok(Json(s.engine.state()));
+    let sources = s.sources.clone();
+    let uri_stat = b.uri.clone();
+    let handle = tokio::runtime::Handle::current();
+    let is_dir = offload_io(move || handle.block_on(sources.stat(&uri_stat)).map(|e| e.is_dir))
+        .await
+        .unwrap_or(false);
+    if is_dir {
+        for t in browse_tracks_offload(&s.sources, &b.uri).await? {
+            s.engine.enqueue(t);
         }
+        return Ok(Json(s.engine.state()));
     }
     let source_id = auris_sources::parse_src_uri(&b.uri)
         .map(|(id, _)| id)
@@ -613,15 +647,19 @@ async fn post_queue_add_next(
     State(s): State<AppState>,
     Json(b): Json<QueueAddBody>,
 ) -> ApiResult<Json<auris_core::PlayerState>> {
-    if let Ok(entry) = s.sources.stat(&b.uri).await {
-        if entry.is_dir {
-            let tracks = browse_tracks(&s.sources, &b.uri).await?;
-            for t in &tracks {
-                let _ = s.library.upsert_track(t);
-            }
-            s.engine.enqueue_next(tracks);
-            return Ok(Json(s.engine.state()));
+    let sources = s.sources.clone();
+    let uri_stat = b.uri.clone();
+    let handle = tokio::runtime::Handle::current();
+    let is_dir = offload_io(move || handle.block_on(sources.stat(&uri_stat)).map(|e| e.is_dir))
+        .await
+        .unwrap_or(false);
+    if is_dir {
+        let tracks = browse_tracks_offload(&s.sources, &b.uri).await?;
+        for t in &tracks {
+            let _ = s.library.upsert_track(t);
         }
+        s.engine.enqueue_next(tracks);
+        return Ok(Json(s.engine.state()));
     }
     let source_id = auris_sources::parse_src_uri(&b.uri)
         .map(|(id, _)| id)
@@ -1024,7 +1062,10 @@ async fn get_browse(
     State(s): State<AppState>,
     Query(q): Query<BrowseQuery>,
 ) -> ApiResult<Json<Vec<auris_core::BrowseEntry>>> {
-    let mut entries = s.sources.browse(&q.uri).await?;
+    let sources = s.sources.clone();
+    let uri = q.uri.clone();
+    let handle = tokio::runtime::Handle::current();
+    let mut entries = offload_io(move || handle.block_on(sources.browse(&uri))).await?;
     // Parcourir n'affiche que les dossiers et les fichiers audio (les autres
     // fichiers restent accessibles via l'export ZIP / la copie, qui passent
     // par walk_all et ne sont pas filtres ici).
@@ -1038,14 +1079,22 @@ async fn get_browse_tree(
     State(s): State<AppState>,
     Query(q): Query<BrowseQuery>,
 ) -> ApiResult<Json<Vec<BrowseEntry>>> {
-    let entry = s.sources.stat(&q.uri).await?;
-    let out = if entry.is_dir {
-        s.sources.walk_audio(&q.uri).await?
-    } else if entry.is_audio {
-        vec![entry]
-    } else {
-        Vec::new()
-    };
+    let sources = s.sources.clone();
+    let uri = q.uri.clone();
+    let handle = tokio::runtime::Handle::current();
+    let out = offload_io(move || {
+        handle.block_on(async {
+            let entry = sources.stat(&uri).await?;
+            if entry.is_dir {
+                sources.walk_audio(&uri).await
+            } else if entry.is_audio {
+                Ok(vec![entry])
+            } else {
+                Ok(Vec::new())
+            }
+        })
+    })
+    .await?;
     Ok(Json(out))
 }
 
@@ -1133,7 +1182,13 @@ async fn browse_cover(
 }
 
 async fn get_browse_cover(State(s): State<AppState>, Query(q): Query<BrowseQuery>) -> Response {
-    match browse_cover(&s.sources, &q.uri).await {
+    let sources = s.sources.clone();
+    let uri = q.uri.clone();
+    let handle = tokio::runtime::Handle::current();
+    // browse + ouverture du 1er fichier audio + sonde des metadonnees:
+    // tout est bloquant -> hors des workers async.
+    let res = offload_io(move || handle.block_on(browse_cover(&sources, &uri))).await;
+    match res {
         Ok(Some((bytes, ct))) => {
             (StatusCode::OK, [(header::CONTENT_TYPE, ct)], bytes).into_response()
         }
@@ -1144,7 +1199,7 @@ async fn get_browse_cover(State(s): State<AppState>, Query(q): Query<BrowseQuery
             .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
+            Json(serde_json::json!({"error": e.0.to_string()})),
         )
             .into_response(),
     }
@@ -1307,10 +1362,14 @@ async fn post_playlist(
 /// piste creee a la volee. Les pistes sont upsertées dans la bibliothèque.
 async fn resolve_uri_tracks(s: &AppState, uri: &str) -> ApiResult<Vec<Track>> {
     let mut tracks: Vec<Track> = Vec::new();
-    if let Ok(entry) = s.sources.stat(uri).await {
-        if entry.is_dir {
-            tracks = browse_tracks(&s.sources, uri).await?;
-        }
+    let sources = s.sources.clone();
+    let uri_stat = uri.to_string();
+    let handle = tokio::runtime::Handle::current();
+    let is_dir = offload_io(move || handle.block_on(sources.stat(&uri_stat)).map(|e| e.is_dir))
+        .await
+        .unwrap_or(false);
+    if is_dir {
+        tracks = browse_tracks_offload(&s.sources, uri).await?;
     }
     if tracks.is_empty() {
         if let Some(t) = s.library.get_by_uri(uri) {
