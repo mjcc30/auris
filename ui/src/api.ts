@@ -59,6 +59,8 @@ export interface PlayerState {
   max_volume: number;
   volume_mode: string;
   output_mode: "local" | "browser";
+  /** Backend de sortie actif, ex. « cpal » ou « exclusif 176400 Hz, 24 bits PCM, 2 ch ». */
+  output_backend: string;
 }
 
 export interface Source {
@@ -193,6 +195,10 @@ export interface DopStatus {
   windows: boolean;
   current_device: string | null;
   devices: DopDeviceStatus[];
+  /** Le périphérique courant accepte-t-il au moins un format en WASAPI exclusif. */
+  exclusive_supported: boolean;
+  /** Mode exclusif demandé (config) — appliqué au prochain flux. */
+  exclusive_enabled: boolean;
 }
 
 export interface DopSetupResp {
@@ -382,6 +388,7 @@ export const api = {
   dopSetup: (rate: number, device?: string | null) =>
     req<DopSetupResp>("/api/audio/dop-setup", post({ rate, device: device ?? null })),
   restartAudio: () => req<{ ok: boolean; message: string }>("/api/audio/restart-audio", post({})),
+  setExclusive: (enabled: boolean) => req<{ ok: boolean; enabled: boolean }>("/api/audio/exclusive", post({ enabled })),
   system: () => req<SystemInfo>("/api/system/info"),
   updateCheck: () => req<UpdateInfo>("/api/system/update"),
   settings: () => req<Settings>("/api/settings"),

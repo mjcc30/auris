@@ -47,6 +47,9 @@ pub struct Chunk {
 pub struct OutputSpec {
     pub rate: u32,
     pub channels: u8,
+    /// Bits par échantillon de la source PCM (16/24/32) ; 24 pour du DoP.
+    /// Sert à choisir le conteneur bit-perfect en sortie WASAPI exclusive.
+    pub bits: u8,
     /// true = trames DoP 24 bits (DSD), false = PCM f32.
     pub is_dsd_dop: bool,
 }
@@ -187,6 +190,7 @@ impl PcmDecoder {
             spec: OutputSpec {
                 rate,
                 channels,
+                bits,
                 is_dsd_dop: false,
             },
             duration,

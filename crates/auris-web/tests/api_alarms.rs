@@ -35,7 +35,7 @@ async fn spawn() -> Fixture {
     let src = Source::new_local("local1", music.to_str().unwrap());
     let sources = Arc::new(SourcesManager::new(vec![src]).unwrap());
     let library = Arc::new(Library::open(&root, sources.clone()).unwrap());
-    let engine = PlayerEngine::start(sources.clone(), None, 80);
+    let engine = PlayerEngine::start(sources.clone(), None, 80, false);
     let updater = Arc::new(Updater::new(UpdaterConfig {
         repo_owner: "mjcc30".into(),
         repo_name: "auris".into(),

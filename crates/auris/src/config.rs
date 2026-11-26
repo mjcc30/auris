@@ -18,6 +18,8 @@ pub struct AppConfig {
     pub audio_device: Option<String>,
     /// Mode de sortie persistant : "local" (DAC) ou "browser" (« Jouer ici »).
     pub output_mode: Option<String>,
+    /// WASAPI exclusif (Windows) : bit-perfect, le DAC reçoit le flux natif.
+    pub audio_exclusive: bool,
     /// Volume initial (0-100).
     pub volume: u8,
     /// Verification/mise a jour automatique depuis GitHub.
@@ -40,6 +42,7 @@ impl Default for AppConfig {
             data_dir: None,
             audio_device: None,
             output_mode: None,
+            audio_exclusive: true,
             volume: 80,
             auto_update: true,
             repo_owner: "mjcc30".into(),
@@ -122,6 +125,9 @@ impl AppConfig {
             if let Ok(n) = v.parse() {
                 cfg.volume = n;
             }
+        }
+        if let Ok(v) = std::env::var("AURIS_AUDIO_EXCLUSIVE") {
+            cfg.audio_exclusive = matches!(v.as_str(), "1" | "true" | "yes" | "on");
         }
         if let Ok(v) = std::env::var("AURIS_AUTO_UPDATE") {
             cfg.auto_update = matches!(v.as_str(), "1" | "true" | "yes" | "on");

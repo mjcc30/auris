@@ -333,6 +333,7 @@ pub fn ffmpeg_probe(src: SharedReader) -> Result<(TrackMeta, OutputSpec, Option<
     let spec = OutputSpec {
         rate: info.rate,
         channels: info.channels,
+        bits: info.bits,
         is_dsd_dop: false,
     };
     let duration = match info.duration {
@@ -370,6 +371,7 @@ impl FfmpegDecoder {
         let spec = OutputSpec {
             rate: info.rate,
             channels: info.channels,
+            bits: info.bits,
             is_dsd_dop: false,
         };
         // Duree manquante (ex. OGG via pipe) : mesure par decodage rapide.

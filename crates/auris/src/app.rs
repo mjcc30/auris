@@ -70,7 +70,12 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
     let library = Arc::new(Library::open(&data_dir, sources.clone())?);
     tracing::info!("bibliothèque: {} pistes indexées", library.track_count());
 
-    let engine = PlayerEngine::start(sources.clone(), config.audio_device.clone(), config.volume);
+    let engine = PlayerEngine::start(
+        sources.clone(),
+        config.audio_device.clone(),
+        config.volume,
+        config.audio_exclusive,
+    );
     engine.apply_playback(&config.settings.playback);
     // Mode de sortie persistant (« local » / « browser ») : repris tel quel au
     // demarrage pour ne pas retomber sur le defaut Windows.
@@ -125,6 +130,16 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         },
     );
 
+    // persistance du mode exclusif (bit-perfect) dans config.toml
+    let sink_data_dir4 = data_dir.clone();
+    let exclusive_sink = Arc::new(move |on: bool| {
+        let mut cfg = AppConfig::load(Some(sink_data_dir4.clone()));
+        cfg.audio_exclusive = on;
+        if let Err(e) = cfg.save() {
+            tracing::warn!("persistance du mode exclusif: {e}");
+        }
+    });
+
     let state = AppState {
         engine,
         library,
@@ -135,6 +150,7 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         settings: Arc::new(RwLock::new(config.settings.clone())),
         settings_sink: Some(settings_sink),
         player_sink: Some(player_sink),
+        exclusive_sink: Some(exclusive_sink),
         device_lister: None,
         ext_http: None,
         data_dir: data_dir.clone(),

@@ -32,7 +32,7 @@ async fn spawn_server() -> String {
     let src = Source::new_local("local1", root.join("music").to_str().unwrap());
     let sources = Arc::new(SourcesManager::new(vec![src]).unwrap());
     let library = Arc::new(Library::open(&root.join("db"), sources.clone()).unwrap());
-    let engine = PlayerEngine::start(sources.clone(), None, 80);
+    let engine = PlayerEngine::start(sources.clone(), None, 80, false);
     let updater = Arc::new(Updater::new(UpdaterConfig {
         repo_owner: "mjcc30".into(),
         repo_name: "auris".into(),
@@ -108,4 +108,42 @@ async fn restart_audio_hors_windows_message_propre() {
         .unwrap();
     assert_eq!(r["ok"], false);
     assert!(r["message"].as_str().unwrap().contains("Windows"));
+}
+
+#[tokio::test]
+async fn exclusive_toggle_endpoints_et_etat() {
+    let base = spawn_server().await;
+    let http = reqwest::Client::new();
+    // l'état expose les nouveaux champs du mode exclusif
+    let st: serde_json::Value = http
+        .get(format!("{base}/api/audio/dop-status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(st["exclusive_supported"].is_boolean());
+    assert_eq!(st["exclusive_enabled"], false); // démarrage avec false dans le test
+                                                // POST /api/audio/exclusive bascule le mode sur le moteur
+    let r: serde_json::Value = http
+        .post(format!("{base}/api/audio/exclusive"))
+        .json(&serde_json::json!({ "enabled": true }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(r["ok"], true);
+    assert_eq!(r["enabled"], true);
+    let st: serde_json::Value = http
+        .get(format!("{base}/api/audio/dop-status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(st["exclusive_enabled"], true);
 }

@@ -303,6 +303,7 @@ impl Decoder for DsdDecoder {
         OutputSpec {
             rate: self.info.dop_rate(),
             channels: self.info.channels,
+            bits: 24,
             is_dsd_dop: true,
         }
     }

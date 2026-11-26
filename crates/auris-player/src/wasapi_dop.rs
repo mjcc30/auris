@@ -54,7 +54,7 @@ pub fn dop_default_format_bytes(rate: u32, channels: u16) -> Vec<u8> {
 }
 
 /// Comparaison insensible à la casse et aux ponctuations.
-fn normalize(s: &str) -> String {
+pub(crate) fn normalize(s: &str) -> String {
     s.chars()
         .filter(|c| c.is_alphanumeric())
         .flat_map(|c| c.to_lowercase())
@@ -64,7 +64,7 @@ fn normalize(s: &str) -> String {
 /// cpal préfixe parfois le nom WASAPI par l'index de carte :
 /// « Casque (2- iBasso-DC03-Pro) » côté cpal vs « Casque (iBasso-DC03-Pro) »
 /// côté WASAPI — on retire le « (<chiffres>- » pour comparer.
-fn strip_card_prefix(s: &str) -> String {
+pub(crate) fn strip_card_prefix(s: &str) -> String {
     let b = s.as_bytes();
     let mut i = 0;
     while i + 3 < b.len() {
@@ -198,6 +198,9 @@ mod imp {
 }
 
 #[cfg(target_os = "windows")]
+pub(crate) use imp::{find_device_by_name, ComGuard};
+
+#[cfg(target_os = "windows")]
 mod imp {
     use super::{dop_default_format_bytes, normalize, strip_card_prefix, MixFormat};
     use windows::core::{Result, GUID};
@@ -219,10 +222,10 @@ mod imp {
     const SUBTYPE_IEEE_FLOAT: GUID = GUID::from_u128(0x0000_0003_0000_0010_8000_00aa_0038_9b71);
 
     /// Initialise COM pour le thread courant (no-op si déjà initialisé).
-    struct ComGuard(bool);
+    pub(crate) struct ComGuard(bool);
 
     impl ComGuard {
-        fn new() -> Result<ComGuard> {
+        pub(crate) fn new() -> Result<ComGuard> {
             let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
             if hr.is_ok() {
                 Ok(ComGuard(true))
@@ -488,6 +491,12 @@ mod imp {
                 None
             }
         }
+    }
+
+    pub(crate) unsafe fn find_device_by_name(
+        name: Option<&str>,
+    ) -> std::result::Result<IMMDevice, String> {
+        unsafe { find_device(name) }
     }
 
     pub fn restart_audio_service() -> std::result::Result<String, String> {

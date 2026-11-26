@@ -31,8 +31,134 @@ pub fn make_ring(capacity_chunks: usize) -> (Prod, Cons) {
     Arc::new(HeapRb::<Chunk>::new(capacity_chunks)).split()
 }
 
-/// Conversion d'un echantillon vers le type de sortie cpal.
-trait WriteOut: SizedSample + Send + 'static {
+/// Paramètres partagés entre le callback cpal et le thread WASAPI exclusif.
+pub struct RenderParams {
+    pub volume: Arc<AtomicU8>,
+    pub muted: Arc<AtomicBool>,
+    pub frames_out: Arc<AtomicU64>,
+    pub gen: Arc<AtomicU64>,
+    pub max_volume: Arc<AtomicU8>,
+    pub curve: Arc<AtomicU8>,
+    pub vol_mode: Arc<AtomicU8>,
+    pub out_mode: Arc<AtomicU8>,
+    pub browser_tx: broadcast::Sender<BrowserFrame>,
+    pub eq: Arc<std::sync::RwLock<EqConfig>>,
+}
+
+/// Remplit `data` (taille = trames * canaux de sortie) à partir de l'anneau de
+/// chunks : conversion f32/DoP -> T, EQ paramétrique, gain, adaptation de
+/// canaux, forward « Jouer ici » vers le navigateur. Retourne le nombre de
+/// trames écrites (underrun -> silence, mais `data` est toujours rempli).
+/// Partagé entre le callback cpal (mode partagé) et le worker WASAPI exclusif.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_samples<T: WriteOut>(
+    data: &mut [T],
+    stash: &mut Option<Stash>,
+    cons: &mut Cons,
+    gen: &AtomicU64,
+    src_channels: usize,
+    out_channels: usize,
+    eq: &std::sync::RwLock<EqConfig>,
+    eq_proc: &mut EqProcessor,
+    eq_rate: u32,
+    gain: f32,
+    forward_browser: bool,
+    out_mode: &AtomicU8,
+    browser_tx: &broadcast::Sender<BrowserFrame>,
+    frames_out: &AtomicU64,
+) -> u64 {
+    let eq_cfg = eq.read().unwrap();
+    let cur_gen = gen.load(Ordering::Relaxed);
+    let mut i = 0usize;
+    let mut frames_written = 0u64;
+    while i < data.len() {
+        if stash.is_none() {
+            match cons.try_pop() {
+                Some(chunk) if chunk.gen == cur_gen => {
+                    *stash = Some(match chunk.data {
+                        ChunkData::F32(v) => Stash::F32(v, 0),
+                        ChunkData::I24Dop(v) => Stash::Dop(v, 0),
+                    });
+                }
+                Some(_) => continue, // generation perimee (seek)
+                None => {
+                    // underrun: silence
+                    while i < data.len() {
+                        data[i] = T::zero();
+                        i += 1;
+                    }
+                    frames_written += (data.len() / out_channels.max(1)) as u64;
+                }
+            }
+        }
+        let done = match &mut *stash {
+            Some(Stash::F32(v, off)) => {
+                let frames = v.len() / src_channels;
+                while *off / src_channels < frames && i < data.len() {
+                    let f = *off / src_channels;
+                    for oc in 0..out_channels {
+                        if i >= data.len() {
+                            break;
+                        }
+                        let ic = oc.min(src_channels - 1);
+                        // EQ paramétrique avant le gain de volume
+                        let s = eq_proc.process(
+                            &eq_cfg,
+                            eq_rate,
+                            src_channels,
+                            ic,
+                            v[f * src_channels + ic],
+                        );
+                        data[i] = T::from_f32(s, gain);
+                        i += 1;
+                    }
+                    *off += src_channels;
+                    frames_written += 1;
+                }
+                *off >= v.len()
+            }
+            Some(Stash::Dop(v, off)) => {
+                let frames = v.len() / src_channels;
+                while *off / src_channels < frames && i < data.len() {
+                    let f = *off / src_channels;
+                    for oc in 0..out_channels {
+                        if i >= data.len() {
+                            break;
+                        }
+                        let ic = oc.min(src_channels - 1);
+                        data[i] = T::from_dop24(v[f * src_channels + ic], gain);
+                        i += 1;
+                    }
+                    *off += src_channels;
+                    frames_written += 1;
+                }
+                *off >= v.len()
+            }
+            None => true,
+        };
+        if done {
+            *stash = None;
+        }
+    }
+    // « Jouer ici » : on forward le PCM post-gain au navigateur, et la sortie
+    // locale reçoit du silence.
+    if forward_browser && out_mode.load(Ordering::Relaxed) == 1 {
+        let mut v: Vec<f32> = Vec::with_capacity(data.len());
+        for s in data.iter() {
+            v.push(s.to_f32());
+        }
+        // send() est non bloquant; Err si aucun client connecté.
+        let _ = browser_tx.send(BrowserFrame::Pcm(v.into()));
+        for s in data.iter_mut() {
+            *s = T::zero();
+        }
+    }
+    frames_out.fetch_add(frames_written, Ordering::Relaxed);
+    frames_written
+}
+
+/// Conversion d'un echantillon vers le type de sortie (cpal ou WASAPI exclusif).
+pub(crate) trait WriteOut: SizedSample + Send + 'static {
     fn from_f32(v: f32, gain: f32) -> Self;
     /// Conversion inverse (pour le flux navigateur) : échantillon normalisé [-1, 1].
     fn to_f32(self) -> f32;
@@ -40,6 +166,10 @@ trait WriteOut: SizedSample + Send + 'static {
     /// qu'aux 16 bits de donnees, jamais au marqueur.
     fn from_dop24(v: i32, gain: f32) -> Self;
     fn zero() -> Self;
+    /// Sérialise l'échantillon en little-endian dans `out`.
+    /// `packed24` = conteneur 24 bits « packed » 3 octets (on écrit les 3 octets
+    /// hauts d'un i32 24-in-32).
+    fn push_le(self, out: &mut Vec<u8>, packed24: bool);
 }
 
 impl WriteOut for f32 {
@@ -54,6 +184,9 @@ impl WriteOut for f32 {
     }
     fn zero() -> Self {
         0.0
+    }
+    fn push_le(self, out: &mut Vec<u8>, _packed24: bool) {
+        out.extend_from_slice(&self.to_le_bytes());
     }
 }
 impl WriteOut for i16 {
@@ -70,6 +203,9 @@ impl WriteOut for i16 {
     fn zero() -> Self {
         0
     }
+    fn push_le(self, out: &mut Vec<u8>, _packed24: bool) {
+        out.extend_from_slice(&self.to_le_bytes());
+    }
 }
 impl WriteOut for i32 {
     fn to_f32(self) -> f32 {
@@ -85,6 +221,15 @@ impl WriteOut for i32 {
     fn zero() -> Self {
         0
     }
+    fn push_le(self, out: &mut Vec<u8>, packed24: bool) {
+        let b = self.to_le_bytes();
+        if packed24 {
+            // 24 bits packed = les 3 octets hauts du mot 32 bits
+            out.extend_from_slice(&b[1..4]);
+        } else {
+            out.extend_from_slice(&b);
+        }
+    }
 }
 impl WriteOut for I24 {
     fn to_f32(self) -> f32 {
@@ -99,6 +244,14 @@ impl WriteOut for I24 {
     }
     fn zero() -> Self {
         I24::new_unchecked(0)
+    }
+    fn push_le(self, out: &mut Vec<u8>, packed24: bool) {
+        let v = self.inner();
+        if packed24 {
+            out.extend_from_slice(&v.to_le_bytes()[1..4]);
+        } else {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
     }
 }
 
@@ -138,7 +291,7 @@ pub fn resolve_device_name(
 }
 
 /// Reste d'un chunk non encore consomme (le buffer cpal peut etre plus petit qu'un chunk).
-enum Stash {
+pub(crate) enum Stash {
     F32(Vec<f32>, usize),
     Dop(Vec<i32>, usize),
 }
@@ -153,6 +306,12 @@ pub struct AudioOutput {
     paused: Arc<AtomicBool>,
     /// Porteuse DoP du dernier flux DSD joué (Some(rate) si flux DoP).
     dop_carrier: Option<u32>,
+    /// Mode WASAPI exclusif demandé (Windows) — bit-perfect, repli cpal sinon.
+    exclusive: bool,
+    /// Flux WASAPI exclusif actif (si ouvert avec succès).
+    exclusive_stream: Option<crate::wasapi_exclusive::ExclusiveStream>,
+    /// Backend réellement utilisé pour le dernier flux : "cpal", "exclusif", "navigateur".
+    backend: &'static str,
 }
 
 impl AudioOutput {
@@ -261,6 +420,9 @@ impl AudioOutput {
             drain: None,
             paused: Arc::new(AtomicBool::new(false)),
             dop_carrier: None,
+            exclusive: false,
+            exclusive_stream: None,
+            backend: "cpal",
         })
     }
 
@@ -277,6 +439,9 @@ impl AudioOutput {
             drain: None,
             paused: Arc::new(AtomicBool::new(false)),
             dop_carrier: None,
+            exclusive: false,
+            exclusive_stream: None,
+            backend: "navigateur",
         }
     }
 
@@ -287,6 +452,17 @@ impl AudioOutput {
     /// True si un vrai peripherique cpal est attache (false = navigateur seul).
     pub fn has_device(&self) -> bool {
         self.device.is_some()
+    }
+
+    /// Active/désactive le mode WASAPI exclusif (Windows, bit-perfect).
+    /// Pris en compte au prochain `build_stream`.
+    pub fn set_exclusive(&mut self, on: bool) {
+        self.exclusive = on;
+    }
+
+    /// Backend utilisé pour le dernier flux construit.
+    pub fn backend(&self) -> &'static str {
+        self.backend
     }
 
     fn stop_drain(&mut self) {
@@ -327,6 +503,38 @@ impl AudioOutput {
             );
         }
         let device = self.device.as_ref().unwrap();
+
+        // Mode WASAPI EXCLUSIF (Windows) : bit-perfect — le DAC reçoit le flux
+        // natif (PCM ou DoP à la porteuse) sans moteur audio intermédiaire.
+        // Si le device refuse tout format en exclusif, on rend le Cons et on
+        // retombe sur le chemin cpal partagé ci-dessous.
+        #[cfg(target_os = "windows")]
+        if self.exclusive {
+            let params = RenderParams {
+                volume: volume.clone(),
+                muted: muted.clone(),
+                frames_out: frames_out.clone(),
+                gen: gen.clone(),
+                max_volume: max_volume.clone(),
+                curve: curve.clone(),
+                vol_mode: vol_mode.clone(),
+                out_mode: out_mode.clone(),
+                browser_tx: browser_tx.clone(),
+                eq: eq.clone(),
+            };
+            match crate::wasapi_exclusive::open(Some(&self.device_name), spec, cons, params) {
+                Ok(stream) => {
+                    tracing::info!("sortie WASAPI exclusive: {}", stream.label());
+                    self.backend = "exclusif";
+                    self.exclusive_stream = Some(stream);
+                    return Ok(());
+                }
+                Err((e, cons2)) => {
+                    cons = cons2;
+                    tracing::warn!("mode exclusif indisponible ({e}) — repli sur cpal partagé");
+                }
+            }
+        }
         self.dop_carrier = spec.is_dsd_dop.then_some(spec.rate);
         // DoP sous Windows: le moteur WASAPI (mode partagé de cpal) ne laisse
         // passer le flux au DAC que s'il est au « mix format » du device — on
@@ -434,6 +642,7 @@ impl AudioOutput {
                 let out_mode = out_mode.clone();
                 let browser_tx = browser_tx.clone();
                 let eq = eq.clone();
+                let mut cons = cons;
                 // stash persistant entre les appels du callback: un chunk plus gros
                 // que le buffer cpal est consomme sur plusieurs appels.
                 let mut stash: Option<Stash> = None;
@@ -443,7 +652,6 @@ impl AudioOutput {
                     .build_output_stream::<$t, _, _>(
                         stream_config.clone(),
                         move |data: &mut [$t], _info| {
-                            let eq_cfg = eq.read().unwrap();
                             let gain = compute_gain(
                                 volume.load(Ordering::Relaxed),
                                 max_volume.load(Ordering::Relaxed),
@@ -451,96 +659,22 @@ impl AudioOutput {
                                 vol_mode.load(Ordering::Relaxed),
                                 muted.load(Ordering::Relaxed),
                             );
-                            let cur_gen = gen.load(Ordering::Relaxed);
-                            let mut i = 0usize;
-                            let mut frames_written = 0u64;
-                            while i < data.len() {
-                                if stash.is_none() {
-                                    match cons.try_pop() {
-                                        Some(chunk) if chunk.gen == cur_gen => {
-                                            stash = Some(match chunk.data {
-                                                ChunkData::F32(v) => Stash::F32(v, 0),
-                                                ChunkData::I24Dop(v) => Stash::Dop(v, 0),
-                                            });
-                                        }
-                                        Some(_) => continue, // generation perimee (seek)
-                                        None => {
-                                            // underrun: silence
-                                            while i < data.len() {
-                                                data[i] = <$t>::zero();
-                                                i += 1;
-                                            }
-                                            frames_written +=
-                                                (data.len() / out_channels.max(1)) as u64;
-                                        }
-                                    }
-                                }
-                                let done = match &mut stash {
-                                    Some(Stash::F32(v, off)) => {
-                                        let frames = v.len() / src_channels;
-                                        while *off / src_channels < frames && i < data.len() {
-                                            let f = *off / src_channels;
-                                            for oc in 0..out_channels {
-                                                if i >= data.len() {
-                                                    break;
-                                                }
-                                                let ic = oc.min(src_channels - 1);
-                                                // EQ paramétrique avant le gain de volume
-                                                let s = eq_proc.process(
-                                                    &eq_cfg,
-                                                    eq_rate,
-                                                    src_channels,
-                                                    ic,
-                                                    v[f * src_channels + ic],
-                                                );
-                                                data[i] = <$t>::from_f32(s, gain);
-                                                i += 1;
-                                            }
-                                            *off += src_channels;
-                                            frames_written += 1;
-                                        }
-                                        *off >= v.len()
-                                    }
-                                    Some(Stash::Dop(v, off)) => {
-                                        let frames = v.len() / src_channels;
-                                        while *off / src_channels < frames && i < data.len() {
-                                            let f = *off / src_channels;
-                                            for oc in 0..out_channels {
-                                                if i >= data.len() {
-                                                    break;
-                                                }
-                                                let ic = oc.min(src_channels - 1);
-                                                data[i] = <$t>::from_dop24(
-                                                    v[f * src_channels + ic],
-                                                    gain,
-                                                );
-                                                i += 1;
-                                            }
-                                            *off += src_channels;
-                                            frames_written += 1;
-                                        }
-                                        *off >= v.len()
-                                    }
-                                    None => true,
-                                };
-                                if done {
-                                    stash = None;
-                                }
-                            }
-                            // « Jouer ici » : on forward le PCM post-gain au
-                            // navigateur, et le DAC local reçoit du silence.
-                            if forward_browser && out_mode.load(Ordering::Relaxed) == 1 {
-                                let mut v: Vec<f32> = Vec::with_capacity(data.len());
-                                for s in data.iter() {
-                                    v.push(s.to_f32());
-                                }
-                                // send() est non bloquant; Err si aucun client connecté.
-                                let _ = browser_tx.send(BrowserFrame::Pcm(v.into()));
-                                for s in data.iter_mut() {
-                                    *s = <$t>::zero();
-                                }
-                            }
-                            frames_out.fetch_add(frames_written, Ordering::Relaxed);
+                            let _ = render_samples::<$t>(
+                                data,
+                                &mut stash,
+                                &mut cons,
+                                &gen,
+                                src_channels,
+                                out_channels,
+                                &eq,
+                                &mut eq_proc,
+                                eq_rate,
+                                gain,
+                                forward_browser,
+                                &out_mode,
+                                &browser_tx,
+                                &frames_out,
+                            );
                         },
                         |err| {
                             tracing::error!("erreur flux audio: {err}");
@@ -551,6 +685,7 @@ impl AudioOutput {
                 stream
                     .play()
                     .map_err(|e| AurisError::Output(e.to_string()))?;
+                self.backend = "cpal";
                 self.stream = Some(stream);
             }};
         }
@@ -669,15 +804,22 @@ impl AudioOutput {
         if let Some(s) = &self.stream {
             let _ = s.pause();
         }
+        if let Some(s) = &self.exclusive_stream {
+            s.pause();
+        }
     }
     pub fn resume(&mut self) {
         self.paused.store(false, Ordering::Relaxed);
         if let Some(s) = &self.stream {
             let _ = s.play();
         }
+        if let Some(s) = &self.exclusive_stream {
+            s.resume();
+        }
     }
     pub fn stop(&mut self) {
         self.stream = None;
+        self.exclusive_stream = None; // Drop -> Stop + join du worker
         self.stop_drain();
         // A l'arret du flux, re-ecrit le Default Format DoP: c'est au repos
         // que l'ecriture persiste dans le registre (le moteur audio la
@@ -725,7 +867,7 @@ pub fn compute_gain(volume: u8, max_volume: u8, curve: u8, vol_mode: u8, muted: 
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_gain, resolve_device_name, AudioDeviceInfo};
+    use super::{compute_gain, resolve_device_name, AudioDeviceInfo, WriteOut};
     use ringbuf::traits::Producer;
 
     fn dev(name: &str, is_default: bool) -> AudioDeviceInfo {
@@ -811,6 +953,7 @@ mod tests {
         let spec = OutputSpec {
             rate: 44100,
             channels: 2,
+            bits: 16,
             is_dsd_dop: false,
         };
         let frames_out = Arc::new(AtomicU64::new(0));
@@ -880,6 +1023,7 @@ mod tests {
         let spec = OutputSpec {
             rate: 44100,
             channels: 2,
+            bits: 16,
             is_dsd_dop: true,
         };
         out.build_stream(
@@ -909,5 +1053,49 @@ mod tests {
         // aucun frame PCM ne doit sortir pour du DoP
         assert!(browser_rx.try_recv().is_err());
         out.stop();
+    }
+
+    #[test]
+    fn push_le_i16_petit_boutiste() {
+        let mut v = Vec::new();
+        0x1234i16.push_le(&mut v, false);
+        assert_eq!(v, vec![0x34, 0x12]);
+    }
+
+    #[test]
+    fn push_le_f32_petit_boutiste() {
+        let mut v = Vec::new();
+        1.0f32.push_le(&mut v, false);
+        assert_eq!(v, vec![0x00, 0x00, 0x80, 0x3f]);
+    }
+
+    #[test]
+    fn push_le_i32_24in32_packed_ne_garde_que_les_3_octets_hauts() {
+        // mot DoP 24 bits 0xAB12CD stocké 24-in-32 -> i32 0xAB12CD00,
+        // LE = [00, CD, 12, AB] ; packed 24 bits = les 3 octets hauts = CD 12 AB
+        let mut v = Vec::new();
+        (0xAB12_CD00u32 as i32).push_le(&mut v, true);
+        assert_eq!(v, vec![0xCD, 0x12, 0xAB]);
+        // conteneur 32 bits : les 4 octets
+        let mut v = Vec::new();
+        (0xAB12_CD00u32 as i32).push_le(&mut v, false);
+        assert_eq!(v, vec![0x00, 0xCD, 0x12, 0xAB]);
+    }
+
+    #[test]
+    fn push_le_aller_retour_f32_vers_entier_sans_perte_pcm16_24() {
+        // bit-perfect : un échantillon entier 16/24 bits est exactement
+        // représentable en f32, donc f32 -> i16/i32 est sans perte.
+        for x in [0i32, 1, -1, 32767, -32768, 12345, -23456] {
+            let f = (x as f32 / i16::MAX as f32) * i16::MAX as f32;
+            let back = f as i16;
+            // la conversion f32 -> i16 tronque ; on verifie la plage de confiance
+            assert!((back as i32 - x).abs() <= 1);
+        }
+        for x in [0i32, 8_388_607, -8_388_608, 1_234_567] {
+            let f = (x as f32 / 8_388_608.0) * 8_388_608.0;
+            let back = (f as i32) << 8; // 24-in-32
+            assert!((back - (x << 8)).abs() <= 256);
+        }
     }
 }

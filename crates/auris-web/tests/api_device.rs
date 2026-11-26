@@ -41,7 +41,7 @@ async fn spawn_server() -> (String, Captured) {
     let src = Source::new_local("local1", root.join("music").to_str().unwrap());
     let sources = Arc::new(SourcesManager::new(vec![src]).unwrap());
     let library = Arc::new(Library::open(&root.join("db"), sources.clone()).unwrap());
-    let engine = PlayerEngine::start(sources.clone(), None, 80);
+    let engine = PlayerEngine::start(sources.clone(), None, 80, false);
     let updater = Arc::new(Updater::new(UpdaterConfig {
         repo_owner: "mjcc30".into(),
         repo_name: "auris".into(),

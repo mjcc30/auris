@@ -73,7 +73,7 @@ async fn spawn() -> Fixture {
     }
     assert_eq!(library.tracks().len(), 2, "scan requis pour le fixture");
 
-    let engine = PlayerEngine::start(sources.clone(), None, 80);
+    let engine = PlayerEngine::start(sources.clone(), None, 80, false);
     let updater = Arc::new(Updater::new(UpdaterConfig {
         repo_owner: "mjcc30".into(),
         repo_name: "auris".into(),

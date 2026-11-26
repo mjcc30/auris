@@ -42,6 +42,7 @@ pub enum Command {
     SelectDevice(Option<String>),
     ApplyPlayback(Box<PlaybackSettings>),
     SetOutputMode(OutputMode),
+    SetExclusive(bool),
 }
 
 enum WorkerCmd {
@@ -264,6 +265,8 @@ struct Engine {
     device_name: Option<String>,
     /// 0 = DAC local, 1 = « Jouer ici » (navigateur).
     out_mode: Arc<AtomicU8>,
+    /// Mode WASAPI exclusif demandé (Windows, bit-perfect).
+    exclusive: Arc<AtomicBool>,
     browser_tx: broadcast::Sender<BrowserFrame>,
     browser_spec: Arc<RwLock<Option<(u32, u16)>>>,
     /// Config de l'égaliseur paramétrique, poussée à chaud (versionnée).
@@ -542,7 +545,8 @@ impl Engine {
             }
             Command::SelectDevice(name) => {
                 match AudioOutput::new(name.as_deref()) {
-                    Ok(out) => {
+                    Ok(mut out) => {
+                        out.set_exclusive(self.exclusive.load(Ordering::SeqCst));
                         let pos = self.state.read().unwrap().position_secs;
                         let uri = self
                             .state
@@ -587,6 +591,13 @@ impl Engine {
                 self.state.write().unwrap().output_mode = m;
                 self.publish();
             }
+            Command::SetExclusive(on) => {
+                self.exclusive.store(on, Ordering::SeqCst);
+                if let Some(out) = &mut self.output {
+                    out.set_exclusive(on);
+                }
+                self.publish();
+            }
         }
     }
 
@@ -619,7 +630,8 @@ impl Engine {
                 }
                 if self.output.is_none() {
                     match AudioOutput::new(self.device_name.as_deref()) {
-                        Ok(o) => {
+                        Ok(mut o) => {
+                            o.set_exclusive(self.exclusive.load(Ordering::SeqCst));
                             self.device_name = Some(o.name().to_string());
                             self.output = Some(o);
                         }
@@ -635,7 +647,8 @@ impl Engine {
                                 // on retombe sur la sortie par defaut de l'OS avec un
                                 // avertissement publie, plutot que de rester muet.
                                 match AudioOutput::new(None) {
-                                    Ok(o) => {
+                                    Ok(mut o) => {
+                                        o.set_exclusive(self.exclusive.load(Ordering::SeqCst));
                                         self.publish_msg(
                                             "warning",
                                             &format!(
@@ -714,6 +727,7 @@ impl Engine {
                     } else {
                         self.device_name.clone()
                     };
+                    st.output_backend = out.backend().to_string();
                 }
                 if let Some(s) = self.seek_after_ready.take() {
                     if let Some(w) = &self.worker {
@@ -797,6 +811,7 @@ pub struct PlayerEngine {
     /// Canal du flux « Jouer ici » (PCM f32 vers /ws/audio).
     pub browser_tx: broadcast::Sender<BrowserFrame>,
     browser_spec: Arc<RwLock<Option<(u32, u16)>>>,
+    exclusive: Arc<AtomicBool>,
 }
 
 impl PlayerEngine {
@@ -805,6 +820,7 @@ impl PlayerEngine {
         sources: Arc<SourcesManager>,
         device: Option<String>,
         initial_volume: u8,
+        exclusive: bool,
     ) -> Arc<Self> {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (events, _) = broadcast::channel::<WsEvent>(256);
@@ -821,6 +837,7 @@ impl PlayerEngine {
         let cur_rate = Arc::new(AtomicU64::new(44100));
         let (browser_tx, _) = broadcast::channel::<BrowserFrame>(128);
         let out_mode = Arc::new(AtomicU8::new(0));
+        let exclusive = Arc::new(AtomicBool::new(exclusive));
         let browser_spec = Arc::new(RwLock::new(None::<(u32, u16)>));
         let eq = Arc::new(RwLock::new(EqConfig::default()));
 
@@ -862,6 +879,7 @@ impl PlayerEngine {
             frames_out,
             gen,
             cur_rate,
+            exclusive: exclusive.clone(),
             output: None,
             device_name: device,
             out_mode: out_mode.clone(),
@@ -888,6 +906,7 @@ impl PlayerEngine {
             events,
             browser_tx,
             browser_spec,
+            exclusive,
         })
     }
 
@@ -957,6 +976,13 @@ impl PlayerEngine {
     }
     pub fn select_device(&self, name: Option<String>) {
         self.send(Command::SelectDevice(name));
+    }
+    /// Active/désactive le mode WASAPI exclusif (Windows, bit-perfect).
+    pub fn set_exclusive(&self, on: bool) {
+        self.send(Command::SetExclusive(on));
+    }
+    pub fn exclusive_enabled(&self) -> bool {
+        self.exclusive.load(Ordering::SeqCst)
     }
     /// Bascule la sortie active : DAC local ou navigateur (« Jouer ici »).
     pub fn set_output_mode(&self, m: OutputMode) {

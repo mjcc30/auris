@@ -1232,6 +1232,16 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
                   desc={dev ? `${dev.name} — mix actuel : ${fmtMix(mix)} ; format adopté au prochain rebranchement : ${fmtMix(def)}` : "Aucun périphérique audio détecté"}>
                   {mix && <span className={`pill ${ok ? "ok" : "warn"}`}>{ok ? `Prêt DoP ${dopRate / 1000} kHz` : "DoP non actif"}</span>}
                 </SetRow>
+                <SetRow label="Mode exclusif WASAPI (bit-perfect)"
+                  desc={dop.exclusive_supported
+                    ? "Le DAC est ouvert en mode EXCLUSIF : aucun moteur audio Windows entre auris et le pilote, le flux arrive intact (PCM natif au format de la source, ou trames DoP). Si le DAC refuse, retour automatique au mode partagé."
+                    : "Ce périphérique n'accepte aucun format en mode exclusif — le mode partagé (cpal) est utilisé."}>
+                  <Switch checked={dop.exclusive_enabled} label="Mode exclusif WASAPI"
+                    onChange={async (v) => {
+                      try { await api.setExclusive(v); loadDop(); say(v ? "Mode exclusif WASAPI activé (bit-perfect)" : "Mode exclusif désactivé — mode partagé"); }
+                      catch (e) { say(e instanceof Error ? e.message : String(e)); }
+                    }} />
+                </SetRow>
                 <SetRow label="Porteuse DoP à appliquer"
                   desc="Écrit le Default Format du DAC en PCM 24 bits à cette fréquence (à faire au repos, sans lecture en cours). Devient effectif au rebranchement du DAC ou au redémarrage du service Audio Windows.">
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -1409,6 +1419,7 @@ function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, o
           </>
         )}
         {state?.current_format && <span className="badge">{fmtFormat(state.current_format)}</span>}
+        {state?.output_backend && <span className="badge" title="Backend de sortie audio actuellement utilisé">{state.output_backend}</span>}
         <select value={state?.audio_device ?? ""} onChange={(e) => act(() => api.selectDevice(e.target.value || null))} aria-label="Périphérique audio"
           title={devices.length === 0 ? "Aucun périphérique de sortie détecté — si vous lancez le binaire Linux/WSL, les DAC USB Windows n'y sont pas visibles : lancez auris.exe sous Windows" : "Périphérique audio"}>
           <option value="">DAC par défaut</option>

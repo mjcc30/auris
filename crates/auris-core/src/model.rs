@@ -374,6 +374,14 @@ pub struct PlayerState {
     /// Sortie active : "local" (DAC) ou "browser" (« Jouer ici »).
     #[serde(default)]
     pub output_mode: OutputMode,
+    /// Backend audio réellement utilisé : "cpal" (partagé), "exclusif"
+    /// (WASAPI exclusif, bit-perfect) ou "navigateur".
+    #[serde(default = "default_output_backend")]
+    pub output_backend: String,
+}
+
+fn default_output_backend() -> String {
+    "cpal".into()
 }
 
 fn default_max_volume() -> u8 {
@@ -402,6 +410,7 @@ impl Default for PlayerState {
             max_volume: 100,
             volume_mode: "software".into(),
             output_mode: OutputMode::Local,
+            output_backend: default_output_backend(),
         }
     }
 }

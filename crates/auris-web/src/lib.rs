@@ -24,7 +24,9 @@ use auris_core::{
     RepeatMode, Settings, ShareKind, ShareLink, Source, Track, WsEvent, ZipWriter,
 };
 use auris_library::Library;
-use auris_player::{probe_meta, wasapi_dop, AudioOutput, PlayerEngine, TrackMeta};
+use auris_player::{
+    probe_meta, wasapi_dop, wasapi_exclusive, AudioOutput, PlayerEngine, TrackMeta,
+};
 use auris_sources::{discover_removable, SourcesManager};
 use auris_updater::Updater;
 
@@ -63,6 +65,9 @@ pub struct AppState {
     /// Persiste le périphérique audio choisi + le mode de sortie (config.toml).
     /// `None` = pas de persistance (tests).
     pub player_sink: Option<PlayerSink>,
+    /// Persiste le mode WASAPI exclusif bit-perfect (config.toml `audio_exclusive`).
+    /// `None` = pas de persistance (tests).
+    pub exclusive_sink: Option<Arc<dyn Fn(bool) + Send + Sync>>,
     /// Liste les périphériques audio (par défaut `AudioOutput::devices`).
     pub device_lister: Option<DeviceLister>,
     /// GET HTTP externe (paroles lrclib, bio Wikipedia). `None` = reqwest réel.
@@ -105,6 +110,7 @@ impl AppState {
             settings: Arc::new(RwLock::new(Settings::default())),
             settings_sink: None,
             player_sink: None,
+            exclusive_sink: None,
             device_lister: None,
             ext_http: None,
             data_dir,
@@ -350,6 +356,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/audio/devices", get(get_devices))
         .route("/api/audio/device", post(post_device))
         .route("/api/audio/dop-status", get(get_dop_status))
+        .route("/api/audio/exclusive", post(post_exclusive))
         .route("/api/audio/dop-setup", post(post_dop_setup))
         .route("/api/audio/restart-audio", post(post_restart_audio))
         // systeme
@@ -1627,6 +1634,10 @@ struct DopStatus {
     windows: bool,
     current_device: Option<String>,
     devices: Vec<DopDeviceStatus>,
+    /// Le device courant accepte-t-il au moins un format en WASAPI exclusif.
+    exclusive_supported: bool,
+    /// Mode exclusif demandé (config) — appliqué au prochain flux.
+    exclusive_enabled: bool,
 }
 
 async fn get_dop_status(State(s): State<AppState>) -> Json<DopStatus> {
@@ -1639,10 +1650,14 @@ async fn get_dop_status(State(s): State<AppState>) -> Json<DopStatus> {
             name,
         })
         .collect();
+    let exclusive_supported = wasapi_exclusive::probe_any(current_device.as_deref());
+    let exclusive_enabled = s.engine.exclusive_enabled();
     Json(DopStatus {
         windows: cfg!(target_os = "windows"),
         current_device,
         devices,
+        exclusive_supported,
+        exclusive_enabled,
     })
 }
 
@@ -1662,10 +1677,25 @@ struct DopSetupResp {
     message: String,
 }
 
-/// Écrit le Default Format WASAPI du DAC en PCM 24 bits à la porteuse DoP.
-/// À utiliser au repos (aucune lecture en cours) : le moteur révoque la
-/// propriété tant qu'un flux tourne. Le changement devient effectif au
-/// rebranchement du DAC ou au redémarrage du service Audio Windows.
+#[derive(Deserialize)]
+struct ExclusiveBody {
+    enabled: bool,
+}
+
+/// Active/désactive le mode WASAPI exclusif (bit-perfect) et le persiste.
+async fn post_exclusive(
+    State(s): State<AppState>,
+    Json(b): Json<ExclusiveBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    s.engine.set_exclusive(b.enabled);
+    if let Some(sink) = &s.exclusive_sink {
+        sink(b.enabled);
+    }
+    Ok(Json(
+        serde_json::json!({ "ok": true, "enabled": b.enabled }),
+    ))
+}
+
 async fn post_dop_setup(
     State(s): State<AppState>,
     Json(b): Json<DopSetupBody>,
