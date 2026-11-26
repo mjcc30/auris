@@ -30,6 +30,7 @@ use auris_player::{
 use auris_sources::{discover_removable, SourcesManager};
 use auris_updater::Updater;
 
+mod packs;
 mod radios;
 
 #[derive(RustEmbed)]
@@ -373,6 +374,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/radios/play-url", post(radios::post_play_url))
         .route("/api/radios/{id}", delete(radios::delete_radio))
         .route("/api/radios/{id}/play", post(radios::post_radio_play))
+        // packs d'interface (thèmes CSS + langues) embarqués ou communautaires
+        .route("/api/packs", get(packs::get_packs))
+        .route("/api/packs/theme/{file}", get(packs::get_theme_css))
+        .route("/api/packs/locale/{file}", get(packs::get_locale_json))
         .route("/api/upnp/discover", get(get_upnp_discover))
         .route("/api/usb/devices", get(get_usb_devices))
         // import / export

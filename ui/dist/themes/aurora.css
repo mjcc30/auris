@@ -1,0 +1,43 @@
+/* Thème « Aurora » — pack de thème Auris embarqué (ui/public/themes/aurora.css).
+ *
+ * Format d'un pack de thème communautaire : un simple fichier CSS qui redéfinit
+ * les variables de `ui/src/styles.css` (voir :root). Déposez un fichier
+ * `<data-dir>/themes/{id}.css` (id en [a-z0-9-]) pour créer votre propre thème,
+ * il apparaîtra dans Réglages → Apparence → Thème.
+ */
+
+:root {
+  --bg: #0b1020;
+  --surface: #131a30;
+  --surface-high: #1d2745;
+  --border: #28325a;
+  --text: #e9edff;
+  --text-dim: #8f9ac4;
+  --accent: #7c5cff;
+  --accent-dark: #6a48f0;
+  --dsd: #ff4d6d;
+  --hires: #e8c15a;
+  --error: #ff5c6c;
+  --shadow-card: 0 8px 24px rgba(0, 0, 0, 0.55);
+  --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.65);
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 85% -10%, rgba(124, 92, 255, 0.22), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(46, 196, 255, 0.14), transparent 55%),
+    var(--bg);
+}
+
+.sidebar {
+  background: linear-gradient(180deg, rgba(19, 26, 48, 0.96), rgba(11, 16, 32, 0.96));
+}
+
+.topbar {
+  background: rgba(11, 16, 32, 0.85);
+  backdrop-filter: blur(10px);
+}
+
+.card:hover {
+  box-shadow: 0 8px 28px rgba(124, 92, 255, 0.25);
+}

@@ -315,9 +315,23 @@ export interface AlarmsInfo {
 }
 
 export interface AppearanceSettings {
-  theme: "dark" | "light" | "system";
+  /** id du thème : "dark" | "light" | "system" ou id d'un pack CSS (ex. "aurora"). */
+  theme: string;
+  /** code ISO de la langue (ex. "fr", "en", "pt-BR"). */
+  language: string;
   accent: string;
   background: string | null;
+}
+
+export interface PackEntry {
+  id: string;
+  name: string;
+  builtin: boolean;
+}
+
+export interface Packs {
+  themes: PackEntry[];
+  locales: PackEntry[];
 }
 
 export interface SystemSettings {
@@ -444,6 +458,7 @@ export const api = {
   system: () => req<SystemInfo>("/api/system/info"),
   updateCheck: () => req<UpdateInfo>("/api/system/update"),
   settings: () => req<Settings>("/api/settings"),
+  packs: () => req<Packs>("/api/packs"),
   alarms: () => req<AlarmsInfo>("/api/alarms"),
   updateSettings: (s: Settings) =>
     req<Settings>("/api/settings", {

@@ -100,7 +100,7 @@ async fn get_settings_defauts() {
         .unwrap();
     assert_eq!(s.playback.max_volume, 100);
     assert_eq!(s.appearance.accent, "#1ED760");
-    assert_eq!(s.appearance.theme, auris_core::Theme::Dark);
+    assert_eq!(s.appearance.theme, "dark");
     assert_eq!(s.system.device_name, "auris");
 }
 
@@ -117,7 +117,7 @@ async fn put_settings_valide_persiste_et_applique_au_moteur() {
         .await
         .unwrap();
     s.playback.max_volume = 60;
-    s.appearance.theme = auris_core::Theme::Light;
+    s.appearance.theme = "light".into();
     s.appearance.accent = "#FF8800".into();
     let back: Settings = http
         .put(format!("{}/api/settings", f.base))

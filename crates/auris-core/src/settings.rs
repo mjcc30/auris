@@ -5,16 +5,15 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Thème de l'interface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Theme {
-    #[default]
-    Dark,
-    Light,
-    /// Suit `prefers-color-scheme` du navigateur.
-    System,
-}
+/// Thèmes intégrés de l'interface (ids réservés ; tout autre id = pack de thème
+/// CSS servi par `/api/packs/theme/{id}.css`, embarqué ou déposé dans
+/// `<data-dir>/themes/`).
+pub const BUILTIN_THEMES: &[&str] = &["dark", "light", "system"];
+
+/// Langues intégrées (packs embarqués dans l'UI) ; toute autre langue ISO
+/// (`xx` / `xx-YY`) peut être fournie par un pack communautaire
+/// `<data-dir>/locales/{lang}.json`.
+pub const BUILTIN_LOCALES: &[&str] = &["fr", "en"];
 
 /// Courbe de volume (comme Volumio : « Natural (Logarithmic) » vs linéaire).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -143,7 +142,11 @@ impl Default for PlaybackSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppearanceSettings {
-    pub theme: Theme,
+    /// Id du thème : `dark` / `light` / `system` (intégrés) ou id d'un pack de
+    /// thème CSS communautaire (ex. `aurora`).
+    pub theme: String,
+    /// Langue de l'interface (code ISO `xx` ou `xx-YY`, ex. `fr`, `en`).
+    pub language: String,
     /// Couleur d'accent au format `#RRGGBB` (défaut `#1ED760`, vert charter).
     pub accent: String,
     /// Image de fond optionnelle (URL ou chemin servi par l'UI).
@@ -153,7 +156,8 @@ pub struct AppearanceSettings {
 impl Default for AppearanceSettings {
     fn default() -> Self {
         AppearanceSettings {
-            theme: Theme::Dark,
+            theme: "dark".into(),
+            language: "fr".into(),
             accent: "#1ED760".into(),
             background: None,
         }
@@ -228,6 +232,37 @@ impl Settings {
                 "accent doit être une couleur hex `#RRGGBB` (reçu: `{a}`)"
             ));
         }
+        // thème : id intégré ou id de pack (alphanum + tiret, ex. `aurora`)
+        let th = self.appearance.theme.trim();
+        let theme_ok = BUILTIN_THEMES.contains(&th)
+            || (!th.is_empty()
+                && th.len() <= 64
+                && th
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+        if !theme_ok {
+            return Err(format!(
+                "theme doit être dark/light/system ou un id de pack [a-z0-9-] (reçu: `{th}`)"
+            ));
+        }
+        // langue : code ISO simplifié `xx` ou `xx-YY` (pack de langue embarqué ou communautaire)
+        let lang = self.appearance.language.trim();
+        let lang_ok = (lang.len() == 2 && lang.chars().all(|c| c.is_ascii_lowercase()))
+            || (lang.len() == 5
+                && lang.chars().enumerate().all(|(i, c)| {
+                    if i == 2 {
+                        c == '-'
+                    } else if i < 2 {
+                        c.is_ascii_lowercase()
+                    } else {
+                        c.is_ascii_uppercase()
+                    }
+                }));
+        if !lang_ok {
+            return Err(format!(
+                "language doit être un code ISO `xx` ou `xx-YY` (reçu: `{lang}`)"
+            ));
+        }
         let name = self.system.device_name.trim();
         if name.is_empty() || name.len() > 64 {
             return Err("device_name doit faire entre 1 et 64 caractères".into());
@@ -284,7 +319,7 @@ mod tests {
         assert!(!s.playback.eq.enabled);
         assert_eq!(s.playback.eq.bands.len(), EQ_BAND_FREQS.len());
         assert!(s.playback.eq.bands.iter().all(|b| b.gain_db == 0.0));
-        assert_eq!(s.appearance.theme, Theme::Dark);
+        assert_eq!(s.appearance.theme, "dark");
         assert_eq!(s.appearance.accent, "#1ED760");
         assert_eq!(s.system.device_name, "auris");
         assert!(s.sources.metadata_discovery);
@@ -361,6 +396,30 @@ mod tests {
     }
 
     #[test]
+    fn validation_theme_et_language() {
+        let mut s = Settings::default();
+        assert_eq!(s.appearance.theme, "dark");
+        assert_eq!(s.appearance.language, "fr");
+        for ok in ["dark", "light", "system", "aurora", "mon-theme-2"] {
+            s.appearance.theme = ok.into();
+            s.validate().unwrap();
+        }
+        for bad in ["", "Aurora", "../etc", "thème", "a b", &"x".repeat(65)] {
+            s.appearance.theme = bad.into();
+            assert!(s.validate().is_err(), "{bad} devrait être refusé");
+        }
+        s.appearance.theme = "dark".into();
+        for ok in ["fr", "en", "de", "pt-BR", "zh-CN"] {
+            s.appearance.language = ok.into();
+            s.validate().unwrap();
+        }
+        for bad in ["", "fr!", "french", "fr-FR-extra", "FR"] {
+            s.appearance.language = bad.into();
+            assert!(s.validate().is_err(), "{bad} devrait être refusé");
+        }
+    }
+
+    #[test]
     fn validation_accent() {
         let mut s = Settings::default();
         for bad in ["1ED760", "#1ED76", "#GGGGGG", "red", "#1ed7600"] {
@@ -391,7 +450,7 @@ mod tests {
         // un TOML partiel (ex. juste max_volume) complète avec les défauts
         let partial: Settings = toml::from_str("[playback]\nmax_volume = 80\n").unwrap();
         assert_eq!(partial.playback.max_volume, 80);
-        assert_eq!(partial.appearance.theme, Theme::Dark);
+        assert_eq!(partial.appearance.theme, "dark");
         assert_eq!(partial.playback.volume_mode, VolumeMode::Software);
     }
 }

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type InfosResponse, type LyricsResponse, type MountInfo, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type InfosResponse, type LyricsResponse, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
+import { loadLocalePack, setLocale, t } from "./i18n";
 
 type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "sources" | "settings";
 type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http";
@@ -51,12 +52,28 @@ function shade(hex: string, amt: number): string {
 }
 
 /// Applique thème / accent / fond au document (persisté côté backend).
+/// Un thème hors dark/light/system est un pack CSS servi par `/api/packs/theme/{id}.css`
+/// (embarqué ou déposé dans `<data-dir>/themes/`).
 function applyAppearance(a: AppearanceSettings) {
   const root = document.documentElement;
   const theme = a.theme === "system"
     ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
     : a.theme;
-  root.dataset.theme = theme;
+  if (theme === "dark" || theme === "light") {
+    root.dataset.theme = theme;
+    document.getElementById("auris-theme-pack")?.remove();
+  } else {
+    // pack de thème : base sombre, le CSS du pack écrase les variables
+    root.dataset.theme = "dark";
+    let link = document.getElementById("auris-theme-pack") as HTMLLinkElement | null;
+    if (!link) {
+      link = document.createElement("link");
+      link.id = "auris-theme-pack";
+      link.rel = "stylesheet";
+      document.head.appendChild(link);
+    }
+    link.href = `/api/packs/theme/${encodeURIComponent(a.theme)}.css`;
+  }
   root.style.setProperty("--accent", a.accent);
   root.style.setProperty("--accent-dark", shade(a.accent, -20));
   if (a.background) {
@@ -77,6 +94,8 @@ export default function App() {
   const [devices, setDevices] = useState<AudioDevice[]>([]);
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [packs, setPacks] = useState<Packs | null>(null);
+  const [, setLocaleTick] = useState(0);
   const [alarms, setAlarms] = useState<AlarmsInfo | null>(null);
   const [browseSrc, setBrowseSrc] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -96,8 +115,11 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, srcs, devs, sys, st] = await Promise.all([api.state(), api.sources(), api.devices(), api.system(), api.settings()]);
-      setState(s); setSources(srcs); setDevices(devs); setSystem(sys); setSettings(st);
+      const [s, srcs, devs, sys, st, pk] = await Promise.all([
+        api.state(), api.sources(), api.devices(), api.system(), api.settings(),
+        api.packs().catch(() => null),
+      ]);
+      setState(s); setSources(srcs); setDevices(devs); setSystem(sys); setSettings(st); setPacks(pk);
     } catch { /* backend indisponible pour l'instant */ }
   }, []);
 
@@ -126,6 +148,18 @@ export default function App() {
     if (appearance) applyAppearance(appearance);
     // Dépendances sur les champs primitifs : évite de réécrire les styles du document à chaque message WS.
   }, [appearance?.theme, appearance?.accent, appearance?.background]);
+
+  // Langue de l'interface : charge le pack de langue (embarqué ou communautaire) puis re-render.
+  const language = appearance?.language ?? "fr";
+  useEffect(() => {
+    let cancelled = false;
+    loadLocalePack(language).then((pack) => {
+      if (cancelled) return;
+      setLocale(language, pack);
+      setLocaleTick((x) => x + 1);
+    });
+    return () => { cancelled = true; };
+  }, [language]);
 
   // « Jouer ici » : démarre/arrête le lecteur WebAudio selon la sortie active.
   useEffect(() => {
@@ -185,12 +219,12 @@ export default function App() {
         <Sidebar view={view} setView={setView} sources={sources} browseSrc={browseSrc} openSource={openSource} system={system} />
         <main className="content">
           <div className="topbar">
-            <div className="topbar-title">{view === "home" ? "Accueil" : view === "library" ? "Bibliothèque" : view === "browse" ? "Parcourir" : view === "radios" ? "Radios" : view === "queue" ? "File d'attente" : view === "playlists" ? "Listes de lecture" : view === "sources" ? "Sources" : "Réglages"}</div>
+            <div className="topbar-title">{view === "home" ? t("Accueil") : view === "library" ? t("Bibliothèque") : view === "browse" ? t("Parcourir") : view === "radios" ? t("Radios") : view === "queue" ? t("File d'attente") : view === "playlists" ? t("Listes de lecture") : view === "sources" ? t("Sources") : t("Réglages")}</div>
             <div className="topbar-search">
               <Icon name="search" size={18} />
-              <input type="text" placeholder="Rechercher un titre, un artiste…" value={searchQ}
+              <input type="text" placeholder={t("Rechercher un titre, un artiste…")} value={searchQ}
                 onChange={(e) => setSearchQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && globalSearch()} />
-              <button className="icon-btn" title="Rechercher" onClick={globalSearch}><Icon name="search" size={18} /></button>
+              <button className="icon-btn" title={t("Rechercher")} onClick={globalSearch}><Icon name="search" size={18} /></button>
             </div>
           </div>
           {view === "home" && <Home state={state} sources={sources} playTrack={playTrack} playAll={playAll} openSource={openSource} />}
@@ -200,7 +234,7 @@ export default function App() {
           {view === "queue" && <Queue state={state} act={act} say={say} playAll={playAll} />}
           {view === "playlists" && <Playlists act={act} say={say} playAll={playAll} playTrack={playTrack} />}
           {view === "sources" && <Sources sources={sources} refresh={refresh} say={say} />}
-          {view === "settings" && <SettingsView settings={settings} updateSettings={updateSettings} say={say} refresh={refresh} />}
+          {view === "settings" && <SettingsView settings={settings} updateSettings={updateSettings} say={say} refresh={refresh} packs={packs} />}
         </main>
         {npOpen && state?.current && (
           <NowPlayingPanel
@@ -227,14 +261,14 @@ function Sidebar({ view, setView, sources, browseSrc, openSource, system }: {
   browseSrc: string | null; openSource: (id: string) => void; system: SystemInfo | null;
 }) {
   const nav: [View, string, string][] = [
-    ["home", "Accueil", "home"],
-    ["library", "Bibliothèque", "note"],
-    ["browse", "Parcourir", "folder"],
-    ["radios", "Radios", "radio"],
-    ["queue", "File d'attente", "queue"],
-    ["playlists", "Listes de lecture", "playlist"],
-    ["sources", "Sources", "server"],
-    ["settings", "Réglages", "gear"],
+    ["home", t("Accueil"), "home"],
+    ["library", t("Bibliothèque"), "note"],
+    ["browse", t("Parcourir"), "folder"],
+    ["radios", t("Radios"), "radio"],
+    ["queue", t("File d'attente"), "queue"],
+    ["playlists", t("Listes de lecture"), "playlist"],
+    ["sources", t("Sources"), "server"],
+    ["settings", t("Réglages"), "gear"],
   ];
   return (
     <nav className="sidebar">
@@ -245,7 +279,7 @@ function Sidebar({ view, setView, sources, browseSrc, openSource, system }: {
         </div>
       ))}
       <div className="sep" />
-      <div className="sources-label">Vos sources</div>
+      <div className="sources-label">{t("Vos sources")}</div>
       <div className="sources-list">
         {sources.map((s) => (
           <div key={s.id} className={`src-item ${view === "browse" && browseSrc === s.id ? "active" : ""}`} onClick={() => openSource(s.id)}>
@@ -254,7 +288,7 @@ function Sidebar({ view, setView, sources, browseSrc, openSource, system }: {
           </div>
         ))}
       </div>
-      {system && <div className="sysinfo">v{system.version} · {system.track_count} titres</div>}
+      {system && <div className="sysinfo">v{system.version} · {t("{count} titres", { count: system.track_count })}</div>}
     </nav>
   );
 }
@@ -280,7 +314,7 @@ function Home({ state, sources, playTrack, playAll, openSource }: { state: Playe
           </div>
         </div>
       )}
-      <h2>Vos sources</h2>
+      <h2>{t("Vos sources")}</h2>
       <div className="grid">
         {sources.map((s) => (
           <div key={s.id} className="card" onClick={() => openSource(s.id)}>
@@ -820,8 +854,8 @@ function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () =
         onContextMenu={(ev) => openMenu(ev, { kind: "entry", entry: r })} title={r.url}>
         <span className="row-ico"><Icon name="radio" size={20} /></span>
         <span className="name">{r.name}</span>
-        <span className="meta">{liveTitle ?? (current ? "en direct" : r.url)}</span>
-        <button className="icon-btn" title="Options" onClick={(ev) => openMenu(ev, { kind: "entry", entry: r })}><Icon name="dots" size={18} /></button>
+        <span className="meta">{liveTitle ?? (current ? t("en direct") : r.url)}</span>
+        <button className="icon-btn" title={t("Options")} onClick={(ev) => openMenu(ev, { kind: "entry", entry: r })}><Icon name="dots" size={18} /></button>
       </div>
     );
   };
@@ -845,17 +879,17 @@ function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () =
             : <Icon name="radio" size={20} />}
         </span>
         <span className="name">{st.name}</span>
-        <span className="meta">{liveTitle ?? (current ? "en direct" : parts.join(" · "))}</span>
-        <button className="icon-btn" title="Options" onClick={(ev) => openMenu(ev, { kind: "station", station: st })}><Icon name="dots" size={18} /></button>
+        <span className="meta">{liveTitle ?? (current ? t("en direct") : parts.join(" · "))}</span>
+        <button className="icon-btn" title={t("Options")} onClick={(ev) => openMenu(ev, { kind: "station", station: st })}><Icon name="dots" size={18} /></button>
       </div>
     );
   };
 
-  const tagRow = (t: DirTag) => (
-    <div key={t.name} className="browse-row" onClick={() => setView(`genre:${t.name}`)} title={t.name}>
+  const tagRow = (tg: DirTag) => (
+    <div key={tg.name} className="browse-row" onClick={() => setView(`genre:${tg.name}`)} title={tg.name}>
       <span className="row-ico"><Icon name="note" size={20} /></span>
-      <span className="name">{t.name}</span>
-      <span className="meta">{t.count} radio(s)</span>
+      <span className="name">{tg.name}</span>
+      <span className="meta">{t("{count} radio(s)", { count: tg.count })}</span>
     </div>
   );
 
@@ -863,39 +897,39 @@ function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () =
     <div key={c.code} className="browse-row" onClick={() => setView(`country:${c.code}`)} title={c.name}>
       <span className="row-ico"><Icon name="globe" size={20} /></span>
       <span className="name">{c.name}</span>
-      <span className="meta">{c.code} · {c.count} radio(s)</span>
+      <span className="meta">{c.code} · {t("{count} radio(s)", { count: c.count })}</span>
     </div>
   );
 
   const viewTitle = () => {
-    if (view === "fav") return "Mes radios";
-    if (view === "builtin") return "Radios par défaut";
-    if (view === "sources") return "Sources radio";
-    if (view === "top") return "Top radios";
-    if (view === "popular") return "Radios populaires";
-    if (view === "genres") return "Par genre";
-    if (view === "countries") return "Par pays";
-    if (view.startsWith("genre:")) return `Genre : ${view.slice(6)}`;
-    if (view.startsWith("country:")) return `Pays : ${view.slice(8)}`;
-    if (view.startsWith("search:")) return `Recherche : ${view.slice(7)}`;
-    return "Radios";
+    if (view === "fav") return t("Mes radios");
+    if (view === "builtin") return t("Radios par défaut");
+    if (view === "sources") return t("Sources radio");
+    if (view === "top") return t("Top radios");
+    if (view === "popular") return t("Radios populaires");
+    if (view === "genres") return t("Par genre");
+    if (view === "countries") return t("Par pays");
+    if (view.startsWith("genre:")) return t("Genre : {name}", { name: view.slice(6) });
+    if (view.startsWith("country:")) return t("Pays : {name}", { name: view.slice(8) });
+    if (view.startsWith("search:")) return t("Recherche : {q}", { q: view.slice(7) });
+    return t("Radios");
   };
 
   const tiles = [
-    { id: "fav", icon: "heart", label: "Mes radios", sub: `${list?.favorites.length ?? 0} radio(s)` },
-    { id: "builtin", icon: "radio", label: "Radios par défaut", sub: `${list?.builtin.length ?? 0} radio(s)` },
-    { id: "sources", icon: "server", label: "Sources radio", sub: `${list?.sources.length ?? 0} source(s)` },
-    { id: "top", icon: "star", label: "Top radios", sub: "les mieux notées" },
-    { id: "popular", icon: "flame", label: "Radios populaires", sub: "les plus écoutées" },
-    { id: "genres", icon: "note", label: "Par genre", sub: "rock, jazz, classique…" },
-    { id: "countries", icon: "globe", label: "Par pays", sub: "du monde entier" },
-    { id: "__search", icon: "search", label: "Rechercher", sub: "par nom de radio" },
-    { id: "__add", icon: "plus", label: "Ajouter une radio", sub: "URL de flux personnalisée" },
+    { id: "fav", icon: "heart", label: t("Mes radios"), sub: t("{count} radio(s)", { count: list?.favorites.length ?? 0 }) },
+    { id: "builtin", icon: "radio", label: t("Radios par défaut"), sub: t("{count} radio(s)", { count: list?.builtin.length ?? 0 }) },
+    { id: "sources", icon: "server", label: t("Sources radio"), sub: t("{count} source(s)", { count: list?.sources.length ?? 0 }) },
+    { id: "top", icon: "star", label: t("Top radios"), sub: t("les mieux notées") },
+    { id: "popular", icon: "flame", label: t("Radios populaires"), sub: t("les plus écoutées") },
+    { id: "genres", icon: "note", label: t("Par genre"), sub: t("rock, jazz, classique…") },
+    { id: "countries", icon: "globe", label: t("Par pays"), sub: t("du monde entier") },
+    { id: "__search", icon: "search", label: t("Rechercher"), sub: t("par nom de radio") },
+    { id: "__add", icon: "plus", label: t("Ajouter une radio"), sub: t("URL de flux personnalisée") },
   ];
 
   const onTile = (id: string) => {
     if (id === "__search") {
-      const q = window.prompt("Rechercher une radio (nom) :");
+      const q = window.prompt(t("Rechercher une radio (nom) :"));
       if (q && q.trim()) setView(`search:${q.trim()}`);
     } else if (id === "__add") {
       setShowAdd((v) => !v);
@@ -905,31 +939,31 @@ function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () =
   };
 
   const subView = () => {
-    if (!list) return <div className="empty">Chargement…</div>;
-    if (view === "fav") return list.favorites.length ? list.favorites.map(row) : <div className="empty">Aucune radio favorite — ajoutez-en via « Ajouter une radio » ou le menu ⋮ d'une radio.</div>;
+    if (!list) return <div className="empty">{t("Chargement…")}</div>;
+    if (view === "fav") return list.favorites.length ? list.favorites.map(row) : <div className="empty">{t("Aucune radio favorite — ajoutez-en via « Ajouter une radio » ou le menu ⋮ d'une radio.")}</div>;
     if (view === "builtin") return list.builtin.map(row);
-    if (view === "sources") return list.sources.length ? list.sources.map(row) : <div className="empty">Aucune source radio configurée.</div>;
+    if (view === "sources") return list.sources.length ? list.sources.map(row) : <div className="empty">{t("Aucune source radio configurée.")}</div>;
     // ne rend les données de l'annuaire que si elles correspondent à la vue courante
     const data = dir && dir.view === view ? dir.data : null;
-    if (dirLoading || !data) return <div className="empty">Chargement de l'annuaire…</div>;
+    if (dirLoading || !data) return <div className="empty">{t("Chargement de l'annuaire…")}</div>;
     if (view === "genres") return (data as DirTag[]).map(tagRow);
     if (view === "countries") return (data as DirCountry[]).map(countryRow);
     const stations = data as DirStation[];
-    return stations.length ? stations.map(stationRow) : <div className="empty">Aucune radio trouvée.</div>;
+    return stations.length ? stations.map(stationRow) : <div className="empty">{t("Aucune radio trouvée.")}</div>;
   };
 
   return (
     <div>
       {view !== "root" && (
         <div className="toolbar">
-          <button className="icon-btn" title="Retour" onClick={() => setView("root")}><Icon name="back" size={18} /></button>
+          <button className="icon-btn" title={t("Retour")} onClick={() => setView("root")}><Icon name="back" size={18} /></button>
           <h2 style={{ margin: 0 }}>{viewTitle()}</h2>
         </div>
       )}
 
       {view === "root" && (
         <>
-          {!list && <div className="empty">Chargement…</div>}
+          {!list && <div className="empty">{t("Chargement…")}</div>}
           {list && (
             <div className="grid">
               {tiles.map((t) => (
@@ -943,12 +977,12 @@ function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () =
           )}
           {showAdd && (
             <div className="toolbar" style={{ marginTop: 16 }}>
-              <input type="text" placeholder="Nom de la radio" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 180 }}
+              <input type="text" placeholder={t("Nom de la radio")} value={name} onChange={(e) => setName(e.target.value)} style={{ width: 180 }}
                 onKeyDown={(e) => e.key === "Enter" && submit()} />
-              <input type="text" placeholder="URL du flux (http://… / https://…)" value={url} onChange={(e) => setUrl(e.target.value)} style={{ width: 340 }}
+              <input type="text" placeholder={t("URL du flux (http://… / https://…)")} value={url} onChange={(e) => setUrl(e.target.value)} style={{ width: 340 }}
                 onKeyDown={(e) => e.key === "Enter" && submit()} />
               <button className="btn sm" disabled={adding || !name.trim() || !url.trim()} onClick={submit}>
-                <Icon name="plus" size={14} /> {adding ? "Ajout…" : "Ajouter"}
+                <Icon name="plus" size={14} /> {adding ? t("Ajout…") : t("Ajouter")}
               </button>
             </div>
           )}
@@ -958,20 +992,20 @@ function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () =
       {view !== "root" && subView()}
 
       {menu && (() => {
-        const t = menu.target;
+        const tgt = menu.target;
         return (
           <>
             <div className="menu-overlay" onClick={closeMenu} onContextMenu={(e) => { e.preventDefault(); closeMenu(); }} />
             <div className="ctx-menu" style={{ left: menu.x, top: menu.y }}>
-              <div className="ctx-title">{targetName(t)}</div>
-              <div className="ctx-item" onClick={() => { playTarget(t); closeMenu(); }}><Icon name="play" size={16} filled /> Lire maintenant</div>
-              <div className="ctx-item" onClick={() => { act(() => api.queueAddNext(targetUrl(t)), " lira juste après la piste en cours"); closeMenu(); }}><Icon name="next" size={16} /> Lire ensuite</div>
-              <div className="ctx-item" onClick={() => { act(() => api.queueAdd(targetUrl(t)), "Ajouté à la file d'attente"); closeMenu(); }}><Icon name="plus" size={16} /> Ajouter à la file d'attente</div>
-              {!isFavUrl(targetUrl(t)) && (
-                <div className="ctx-item" onClick={() => { addFav(t); closeMenu(); }}><Icon name="heart" size={16} /> Ajouter aux favoris</div>
+              <div className="ctx-title">{targetName(tgt)}</div>
+              <div className="ctx-item" onClick={() => { playTarget(tgt); closeMenu(); }}><Icon name="play" size={16} filled /> {t("Lire maintenant")}</div>
+              <div className="ctx-item" onClick={() => { act(() => api.queueAddNext(targetUrl(tgt)), " lira juste après la piste en cours"); closeMenu(); }}><Icon name="next" size={16} /> {t("Lire ensuite")}</div>
+              <div className="ctx-item" onClick={() => { act(() => api.queueAdd(targetUrl(tgt)), "Ajouté à la file d'attente"); closeMenu(); }}><Icon name="plus" size={16} /> {t("Ajouter à la file d'attente")}</div>
+              {!isFavUrl(targetUrl(tgt)) && (
+                <div className="ctx-item" onClick={() => { addFav(tgt); closeMenu(); }}><Icon name="heart" size={16} /> {t("Ajouter aux favoris")}</div>
               )}
-              {t.kind === "entry" && t.entry.origin === "favorite" && (
-                <div className="ctx-item" onClick={() => { delFav(t.entry); closeMenu(); }}><Icon name="trash" size={16} /> Supprimer des favoris</div>
+              {tgt.kind === "entry" && tgt.entry.origin === "favorite" && (
+                <div className="ctx-item" onClick={() => { delFav(tgt.entry); closeMenu(); }}><Icon name="trash" size={16} /> {t("Supprimer des favoris")}</div>
               )}
             </div>
           </>
@@ -1104,8 +1138,8 @@ function Sources({ sources, refresh, say }: { sources: Source[]; refresh: () => 
         <button className="btn" onClick={() => setModal({ mode: "add" })}><Icon name="plus" size={16} /> Ajouter une source</button>
       </div>
 
-      <h2>Vos sources</h2>
-      {sources.length === 0 && <div className="empty">Aucune source configurée.</div>}
+      <h2>{t("Vos sources")}</h2>
+      {sources.length === 0 && <div className="empty">{t("Aucune source configurée.")}</div>}
       {sources.map((s) => (
         <div key={s.id} className="src-card">
           <span className="src-ico"><Icon name={kindIconName(s.kind)} size={24} /></span>
@@ -1259,11 +1293,12 @@ function SetRow({ label, desc, children }: { label: string; desc?: string; child
   );
 }
 
-function SettingsView({ settings, updateSettings, say, refresh }: {
+function SettingsView({ settings, updateSettings, say, refresh, packs }: {
   settings: Settings | null;
   updateSettings: (patch: (s: Settings) => Settings, ok?: string) => Promise<void>;
   say: (m: string) => void;
   refresh: () => Promise<void>;
+  packs: Packs | null;
 }) {
   const [q, setQ] = useState("");
   const [storage, setStorage] = useState<StorageInfo | null>(null);
@@ -1284,7 +1319,7 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
     api.systemStorage().then(setStorage).catch(() => {});
   }, []);
 
-  if (!settings) return <div className="empty">Chargement des réglages…</div>;
+  if (!settings) return <div className="empty">{t("Chargement des réglages…")}</div>;
 
   const qn = q.trim().toLowerCase();
   const show = (label: string, desc?: string) =>
@@ -1323,7 +1358,7 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
 
   const sections: { title: string; rows: React.ReactNode[] }[] = [
     {
-      title: "Lecture",
+      title: t("Lecture"),
       rows: [
         show("Courbe de volume", "Logarithmique (naturelle) ou linéaire") && (
           <SetRow key="curve" label="Courbe de volume" desc="Logarithmique (naturelle) ou linéaire">
@@ -1385,7 +1420,7 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
       ].filter(Boolean) as React.ReactNode[],
     },
     {
-      title: "Égaliseur",
+      title: t("Égaliseur"),
       rows: [
         show("Égaliseur paramétrique", "10 bandes, ±20 dB, appliqué en temps réel (DAC et « Jouer ici »)") && (
           <SetRow key="eq" label="Égaliseur paramétrique" desc="10 bandes ISO (31 Hz – 16 kHz), ±20 dB, appliqué à chaud sur le flux PCM">
@@ -1412,19 +1447,34 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
       ].filter(Boolean) as React.ReactNode[],
     },
     {
-      title: "Apparence",
+      title: t("Apparence"),
       rows: [
-        show("Thème", "Sombre, clair, ou suivre le système") && (
-          <SetRow key="theme" label="Thème" desc="Sombre, clair, ou suivre les préférences du système">
-            <select value={ap.theme} onChange={(e) => setAppearance("theme", e.target.value as Settings["appearance"]["theme"])}>
-              <option value="dark">Sombre</option>
-              <option value="light">Clair</option>
-              <option value="system">Système</option>
+        show(t("Thème"), t("Thème de l'interface (packs embarqués ou déposés dans <data-dir>/themes)")) && (
+          <SetRow key="theme" label={t("Thème")} desc={t("Thème de l'interface (packs embarqués ou déposés dans <data-dir>/themes)")}>
+            <select value={ap.theme} onChange={(e) => setAppearance("theme", e.target.value)}>
+              {(packs?.themes ?? []).map((th) => (
+                <option key={th.id} value={th.id}>{t(th.name)}</option>
+              ))}
+              {!packs?.themes.some((th) => th.id === ap.theme) && (
+                <option value={ap.theme}>{ap.theme}</option>
+              )}
             </select>
           </SetRow>
         ),
-        show("Couleur d'accent", "Couleur principale de l'interface (#RRGGBB)") && (
-          <SetRow key="accent" label="Couleur d'accent" desc="Couleur principale de l'interface">
+        show(t("Langue"), t("Langue de l'interface (packs embarqués ou déposés dans <data-dir>/locales)")) && (
+          <SetRow key="language" label={t("Langue")} desc={t("Langue de l'interface (packs embarqués ou déposés dans <data-dir>/locales)")}>
+            <select value={ap.language} onChange={(e) => setAppearance("language", e.target.value)}>
+              {(packs?.locales ?? []).map((lo) => (
+                <option key={lo.id} value={lo.id}>{t(lo.name)}</option>
+              ))}
+              {!packs?.locales.some((lo) => lo.id === ap.language) && (
+                <option value={ap.language}>{ap.language}</option>
+              )}
+            </select>
+          </SetRow>
+        ),
+        show(t("Couleur d'accent"), "Couleur principale de l'interface (#RRGGBB)") && (
+          <SetRow key="accent" label={t("Couleur d'accent")} desc="Couleur principale de l'interface">
             <div className="range-ctrl">
               <input type="color" value={ap.accent} aria-label="Couleur d'accent"
                 onChange={(e) => setAppearance("accent", e.target.value)} style={{ width: 44, height: 32, padding: 2, border: "1px solid var(--border)", borderRadius: 6, background: "none" }} />
@@ -1442,7 +1492,7 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
       ].filter(Boolean) as React.ReactNode[],
     },
     {
-      title: "Système",
+      title: t("Système"),
       rows: [
         show("Nom de l'appareil", "Nom affiché sur le réseau et dans l'interface") && (
           <SetRow key="devname" label="Nom de l'appareil" desc="Nom affiché sur le réseau (découverte LAN)">
@@ -1484,7 +1534,7 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
       ].filter(Boolean) as React.ReactNode[],
     },
     {
-      title: "Réseau",
+      title: t("Réseau"),
       rows: [
         show("Nom d'hôte", "Nom d'hôte souhaité pour la machine (Linux uniquement)") && (
           <SetRow key="hostname" label="Nom d'hôte" desc="Appliqué au mieux selon l'OS (Linux uniquement)">
@@ -1495,7 +1545,7 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
       ].filter(Boolean) as React.ReactNode[],
     },
     {
-      title: "Sources",
+      title: t("Sources"),
       rows: [
         show("Découverte de métadonnées musicales", "Tags et pochettes extraits à l'indexation") && (
           <SetRow key="metadata" label="Découverte de métadonnées musicales" desc="Extraction des tags et pochettes lors du scan">
@@ -1505,7 +1555,7 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
       ].filter(Boolean) as React.ReactNode[],
     },
     {
-      title: "Partage",
+      title: t("Partage"),
       rows: [
         show("Liens de partage", "URL publiques /share/<token> pour écouter une piste, un album ou une playlist depuis un autre appareil") && (
           <SetRow key="shares" label="Liens de partage" desc={shares.length ? `${shares.length} lien(s) actif(s)` : "aucun lien actif"}>
@@ -1522,9 +1572,9 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
     <div className="settings">
       <div className="settings-search">
         <Icon name="search" size={18} />
-        <input type="text" placeholder="Rechercher dans les réglages…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input type="text" placeholder={t("Rechercher dans les réglages…")} value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      {visible.length === 0 && <div className="empty">Aucun réglage ne correspond à « {q} ».</div>}
+      {visible.length === 0 && <div className="empty">{t("Aucun réglage ne correspond à « {q} ».", { q })}</div>}
       {visible.map((sec) => (
         <section key={sec.title} className="set-card">
           <h2>{sec.title}</h2>
@@ -1689,7 +1739,7 @@ function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, o
         <div className="seek">
           {live ? (
             <>
-              <span className="badge live">En direct</span>
+              <span className="badge live">{t("EN DIRECT")}</span>
               <span className="num-time" title="Temps écoulé depuis le début du flux">{fmtTime(pos)}</span>
             </>
           ) : (
