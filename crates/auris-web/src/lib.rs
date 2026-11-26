@@ -24,7 +24,7 @@ use auris_core::{
     RepeatMode, Settings, ShareKind, ShareLink, Source, Track, WsEvent, ZipWriter,
 };
 use auris_library::Library;
-use auris_player::{probe_meta, AudioOutput, PlayerEngine, TrackMeta};
+use auris_player::{probe_meta, wasapi_dop, AudioOutput, PlayerEngine, TrackMeta};
 use auris_sources::{discover_removable, SourcesManager};
 use auris_updater::Updater;
 
@@ -349,6 +349,9 @@ pub fn router(state: AppState) -> Router {
         // audio
         .route("/api/audio/devices", get(get_devices))
         .route("/api/audio/device", post(post_device))
+        .route("/api/audio/dop-status", get(get_dop_status))
+        .route("/api/audio/dop-setup", post(post_dop_setup))
+        .route("/api/audio/restart-audio", post(post_restart_audio))
         // systeme
         .route("/api/system/info", get(get_system_info))
         .route("/api/system/update", get(get_update).post(post_update))
@@ -1605,6 +1608,113 @@ async fn post_device(
     // demarrage (sinon la sortie suivrait le defaut Windows au redemarrage).
     s.persist_player(resolved, OutputMode::Local);
     Ok(Json(s.engine.state()))
+}
+
+// ---------- DoP / WASAPI (Windows) : statut + réglage du DAC depuis l'UI ----------
+
+#[derive(Serialize)]
+struct DopDeviceStatus {
+    name: String,
+    /// Mix format live de l'endpoint (ce que le moteur délivre actuellement).
+    mix: Option<wasapi_dop::MixFormat>,
+    /// Default Format persisté (registre) : sera adopté au prochain
+    /// rebranchement du DAC / redémarrage du service audio.
+    default_format: Option<wasapi_dop::MixFormat>,
+}
+
+#[derive(Serialize)]
+struct DopStatus {
+    windows: bool,
+    current_device: Option<String>,
+    devices: Vec<DopDeviceStatus>,
+}
+
+async fn get_dop_status(State(s): State<AppState>) -> Json<DopStatus> {
+    let current_device = s.engine.state().audio_device;
+    let devices = wasapi_dop::all_mix_formats()
+        .into_iter()
+        .map(|(name, mix)| DopDeviceStatus {
+            default_format: wasapi_dop::device_default_format(Some(&name)),
+            mix: Some(mix),
+            name,
+        })
+        .collect();
+    Json(DopStatus {
+        windows: cfg!(target_os = "windows"),
+        current_device,
+        devices,
+    })
+}
+
+#[derive(Deserialize)]
+struct DopSetupBody {
+    device: Option<String>,
+    rate: u32,
+}
+
+#[derive(Serialize)]
+struct DopSetupResp {
+    ok: bool,
+    applied: bool,
+    rate: u32,
+    device: Option<String>,
+    mix: Option<wasapi_dop::MixFormat>,
+    message: String,
+}
+
+/// Écrit le Default Format WASAPI du DAC en PCM 24 bits à la porteuse DoP.
+/// À utiliser au repos (aucune lecture en cours) : le moteur révoque la
+/// propriété tant qu'un flux tourne. Le changement devient effectif au
+/// rebranchement du DAC ou au redémarrage du service Audio Windows.
+async fn post_dop_setup(
+    State(s): State<AppState>,
+    Json(b): Json<DopSetupBody>,
+) -> Json<DopSetupResp> {
+    let device = b.device.or_else(|| s.engine.state().audio_device);
+    let name = device.as_deref();
+    match wasapi_dop::ensure_dop_carrier(name, b.rate) {
+        Ok(applied) => {
+            let mix = wasapi_dop::device_mix_format(name);
+            let message = if applied {
+                format!(
+                    "Default Format écrit en 24 bits / {} Hz — rebranchez le DAC USB ou redémarrez le service Audio Windows pour l'appliquer.",
+                    b.rate
+                )
+            } else {
+                format!(
+                    "Default Format déjà en 24 bits / {} Hz (mix actuel : {}).",
+                    b.rate,
+                    mix.map(|m| m.to_string())
+                        .unwrap_or_else(|| "inconnu".into())
+                )
+            };
+            Json(DopSetupResp {
+                ok: true,
+                applied,
+                rate: b.rate,
+                device,
+                mix,
+                message,
+            })
+        }
+        Err(e) => Json(DopSetupResp {
+            ok: false,
+            applied: false,
+            rate: b.rate,
+            device,
+            mix: None,
+            message: e,
+        }),
+    }
+}
+
+/// Redémarre le service Audio Windows en élévation (UAC) pour appliquer
+/// immédiatement le Default Format persisté, sans rebrancher le DAC.
+async fn post_restart_audio() -> Json<serde_json::Value> {
+    match wasapi_dop::restart_audio_service() {
+        Ok(message) => Json(serde_json::json!({ "ok": true, "message": message })),
+        Err(e) => Json(serde_json::json!({ "ok": false, "message": e })),
+    }
 }
 
 async fn get_system_info(State(s): State<AppState>) -> Json<SystemInfo> {

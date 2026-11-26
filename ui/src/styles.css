@@ -220,6 +220,25 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-w
   white-space: nowrap;
 }
 .pill.ok { background: rgba(30, 215, 96, 0.15); color: var(--accent); }
+.pill.warn { background: rgba(235, 160, 30, 0.18); color: #eba01e; }
+
+/* Bannière DoP au-dessus de la barre de lecture (piste DSD + DAC non réglé). */
+.dop-banner {
+  position: fixed;
+  left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--player-h) + 10px);
+  z-index: 90;
+  display: flex; align-items: center; gap: 10px;
+  max-width: min(880px, calc(100vw - 32px));
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  border-left: 3px solid #eba01e;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-modal);
+  padding: 10px 14px;
+  font-size: 13px;
+}
+.dop-banner .dop-text { color: var(--text); line-height: 1.35; }
 
 /* ---------- Barre d'outils / fil d'Ariane ---------- */
 

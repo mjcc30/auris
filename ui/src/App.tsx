@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, fmtBytes, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type InfosResponse, type LyricsResponse, type MountInfo, type PlaylistDetail, type PlayerState, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type InfosResponse, type LyricsResponse, type MountInfo, type PlaylistDetail, type PlayerState, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 
@@ -140,6 +140,19 @@ export default function App() {
     return () => { dead = true; clearInterval(iv); };
   }, []);
 
+  // Statut DoP/WASAPI du DAC : on ne sonde que pendant la lecture d'une piste
+  // DSD (c'est le seul cas où le réglage du DAC importe pour l'UI).
+  const [dop, setDop] = useState<DopStatus | null>(null);
+  const dsdCarrier = dopCarrier(state?.current_format ?? state?.current?.format);
+  useEffect(() => {
+    if (!dsdCarrier) { setDop(null); return; }
+    let dead = false;
+    const load = async () => { try { const d = await api.dopStatus(); if (!dead) setDop(d); } catch { /* ignore */ } };
+    load();
+    const iv = setInterval(load, 15000);
+    return () => { dead = true; clearInterval(iv); };
+  }, [dsdCarrier]);
+
   const act = useCallback(async (fn: () => Promise<unknown>, okMsg?: string) => {
     try { await fn(); if (okMsg) say(okMsg); await refresh(); }
     catch (e) { say(e instanceof Error ? e.message : String(e)); }
@@ -196,6 +209,10 @@ export default function App() {
           />
         )}
       </div>
+      {dsdCarrier != null && dop && (
+        <DopBanner carrier={dsdCarrier} dop={dop} deviceName={state?.audio_device ?? null} say={say}
+          onChanged={() => api.dopStatus().then(setDop).catch(() => {})} />
+      )}
       <PlayerBar state={state} devices={devices} act={act} say={say} alarms={alarms} refreshDevices={refreshDevices} npOpen={npOpen} onToggleNp={() => setNpOpen((v) => !v)} />
       {toast && <div className="toast">{toast}</div>}
     </div>
@@ -942,6 +959,13 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
   const loadShares = useCallback(() => { api.listShares().then(setShares).catch(() => {}); }, []);
   useEffect(() => { loadShares(); }, [loadShares]);
 
+  // Statut DoP/WASAPI des périphériques (Windows uniquement).
+  const [dop, setDop] = useState<DopStatus | null>(null);
+  const [dopRate, setDopRate] = useState(176400);
+  const [dopBusy, setDopBusy] = useState(false);
+  const loadDop = useCallback(() => { api.dopStatus().then(setDop).catch(() => {}); }, []);
+  useEffect(() => { loadDop(); }, [loadDop]);
+
   useEffect(() => {
     api.systemStorage().then(setStorage).catch(() => {});
   }, []);
@@ -1193,6 +1217,50 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
           {sec.rows}
         </section>
       ))}
+      {show("DoP", "Régler le DAC pour la lecture DSD (fichiers .dsf) en DoP") && dop?.windows && (
+        <section className="set-card">
+          <h2>DoP — lecture DSD sur DAC USB (Windows)</h2>
+          {(() => {
+            const devName = dop.current_device;
+            const dev = dop.devices.find((d) => devName != null && sameDevice(d.name, devName)) ?? dop.devices[0] ?? null;
+            const mix = dev?.mix ?? null;
+            const def = dev?.default_format ?? null;
+            const ok = mix != null && !mix.is_float && mix.rate === dopRate;
+            return (
+              <>
+                <SetRow label="État WASAPI du DAC"
+                  desc={dev ? `${dev.name} — mix actuel : ${fmtMix(mix)} ; format adopté au prochain rebranchement : ${fmtMix(def)}` : "Aucun périphérique audio détecté"}>
+                  {mix && <span className={`pill ${ok ? "ok" : "warn"}`}>{ok ? `Prêt DoP ${dopRate / 1000} kHz` : "DoP non actif"}</span>}
+                </SetRow>
+                <SetRow label="Porteuse DoP à appliquer"
+                  desc="Écrit le Default Format du DAC en PCM 24 bits à cette fréquence (à faire au repos, sans lecture en cours). Devient effectif au rebranchement du DAC ou au redémarrage du service Audio Windows.">
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <select value={dopRate} onChange={(e) => setDopRate(Number(e.target.value))}>
+                      <option value={176400}>DSD64 → 24 bits / 176400 Hz</option>
+                      <option value={352800}>DSD128 → 24 bits / 352800 Hz</option>
+                    </select>
+                    <button className="btn sm" disabled={dopBusy} onClick={async () => {
+                      setDopBusy(true);
+                      try { say((await api.dopSetup(dopRate, dop.current_device)).message); loadDop(); }
+                      catch (e) { say(e instanceof Error ? e.message : String(e)); }
+                      finally { setDopBusy(false); }
+                    }}>{dopBusy ? "…" : `Appliquer 24 bits / ${dopRate} Hz`}</button>
+                  </div>
+                </SetRow>
+                <SetRow label="Appliquer maintenant"
+                  desc="Redémarre le service Audio Windows (invite UAC) pour adopter le format sans rebrancher le DAC. Alternative : rebrancher le câble USB du DAC.">
+                  <button className="btn sm" disabled={dopBusy} onClick={async () => {
+                    setDopBusy(true);
+                    try { say((await api.restartAudio()).message); loadDop(); }
+                    catch (e) { say(e instanceof Error ? e.message : String(e)); }
+                    finally { setDopBusy(false); }
+                  }}>Redémarrer Audio Windows</button>
+                </SetRow>
+              </>
+            );
+          })()}
+        </section>
+      )}
       {show("Liens de partage") && (
         <section className="set-card">
           <h2>Liens de partage actifs</h2>
@@ -1220,6 +1288,45 @@ function SettingsView({ settings, updateSettings, say, refresh }: {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------- Bannière DoP (lecture DSD sur DAC USB, Windows) ----------
+
+/** Correspondance nom cpal ("Casque (2- iBasso-DC03-Pro)") vs nom WASAPI ("Casque (iBasso-DC03-Pro)"). */
+function sameDevice(a: string, b: string): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const x = norm(a), y = norm(b);
+  return x.length > 0 && y.length > 0 && (x.includes(y) || y.includes(x));
+}
+
+function DopBanner({ carrier, dop, deviceName, say, onChanged }: { carrier: number; dop: DopStatus; deviceName: string | null; say: (m: string) => void; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const dev = dop.devices.find((d) => deviceName != null && sameDevice(d.name, deviceName));
+  const mix = dev?.mix ?? null;
+  // RAS si le mix est déjà un PCM entier à la porteuse ; sinon le flux DoP
+  // sera rééchantillonné (bruit) ou refusé par le pilote.
+  if (!dop.windows || !mix || (!mix.is_float && mix.rate === carrier)) return null;
+  const run = async (fn: () => Promise<{ message: string }>) => {
+    setBusy(true);
+    try { say((await fn()).message); onChanged(); }
+    catch (e) { say(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="dop-banner">
+      <span className="pill warn">DoP</span>
+      <span className="dop-text">
+        Le DAC n'est pas réglé pour le DoP (mix actuel : <b>{fmtMix(mix)}</b>, porteuse : <b>24 bits / {carrier} Hz</b>) — le .dsf risque de sortir en bruit.
+        Appliquez le format au repos, puis rebranchez le DAC ou redémarrez Audio Windows.
+      </span>
+      <button className="btn sm" disabled={busy} onClick={() => run(() => api.dopSetup(carrier, deviceName))}>
+        Appliquer 24 bits / {carrier} Hz
+      </button>
+      <button className="btn ghost sm" disabled={busy} onClick={() => run(() => api.restartAudio())}>
+        Redémarrer Audio Windows
+      </button>
     </div>
   );
 }

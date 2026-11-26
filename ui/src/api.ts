@@ -173,6 +173,49 @@ export interface AudioDevice {
   max_channels: number;
 }
 
+/** Mix format WASAPI d'un endpoint (backend Rust `MixFormat`). */
+export interface MixFormat {
+  rate: number;
+  channels: number;
+  bits_per_sample: number;
+  is_float: boolean;
+}
+
+export interface DopDeviceStatus {
+  name: string;
+  /** Mix format live de l'endpoint (ce que le moteur délivre maintenant). */
+  mix: MixFormat | null;
+  /** Default Format persisté : adopté au prochain rebranchement du DAC / redémarrage Audio. */
+  default_format: MixFormat | null;
+}
+
+export interface DopStatus {
+  windows: boolean;
+  current_device: string | null;
+  devices: DopDeviceStatus[];
+}
+
+export interface DopSetupResp {
+  ok: boolean;
+  applied: boolean;
+  rate: number;
+  device: string | null;
+  mix: MixFormat | null;
+  message: string;
+}
+
+/** Formate un MixFormat pour l'affichage (ex: « 176400 Hz, 24 bits PCM, 2 ch »). */
+export function fmtMix(m: MixFormat | null | undefined): string {
+  if (!m) return "inconnu";
+  return `${m.rate} Hz, ${m.bits_per_sample} bits ${m.is_float ? "float" : "PCM"}, ${m.channels} ch`;
+}
+
+/** Porteuse DoP d'un format DSD (DSD64 -> 176400, DSD128 -> 352800…). */
+export function dopCarrier(fmt: AudioFormat | null | undefined): number | null {
+  if (!fmt || fmt.kind !== "dsd" || !fmt.sample_rate) return null;
+  return Math.round(fmt.sample_rate / 16);
+}
+
 export interface SystemInfo {
   name: string;
   version: string;
@@ -335,6 +378,10 @@ export const api = {
   shareUrl: (token: string) => `${location.origin}/share/${token}`,
   devices: () => req<AudioDevice[]>("/api/audio/devices"),
   selectDevice: (name: string | null) => req<PlayerState>("/api/audio/device", post({ name })),
+  dopStatus: () => req<DopStatus>("/api/audio/dop-status"),
+  dopSetup: (rate: number, device?: string | null) =>
+    req<DopSetupResp>("/api/audio/dop-setup", post({ rate, device: device ?? null })),
+  restartAudio: () => req<{ ok: boolean; message: string }>("/api/audio/restart-audio", post({})),
   system: () => req<SystemInfo>("/api/system/info"),
   updateCheck: () => req<UpdateInfo>("/api/system/update"),
   settings: () => req<Settings>("/api/settings"),

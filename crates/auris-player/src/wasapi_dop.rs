@@ -12,8 +12,10 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// Mix format courant d'un endpoint de rendu WASAPI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MixFormat {
     pub rate: u32,
     pub channels: u16,
@@ -102,6 +104,54 @@ pub fn ensure_dop_carrier(device_name: Option<&str>, dop_rate: u32) -> Result<bo
     imp::ensure_dop_carrier(device_name, dop_rate)
 }
 
+/// « Default Format » persisté du device (registre MMDevices — lisible sans
+/// admin). C'est le format que le moteur adoptera au prochain rebranchement du
+/// DAC / redémarrage du service audio. `None` hors Windows ou si illisible.
+pub fn device_default_format(device_name: Option<&str>) -> Option<MixFormat> {
+    imp::device_default_format(device_name)
+}
+
+/// Redémarre le service Audio Windows en élévation (invite UAC) : c'est ce
+/// qui force le moteur à réadopter le Default Format écrit au repos, sans
+/// avoir à rebrancher le DAC.
+pub fn restart_audio_service() -> std::result::Result<String, String> {
+    imp::restart_audio_service()
+}
+
+/// GUID SubFormat IEEE float en little-endian (KSDATAFORMAT_SUBTYPE_IEEE_FLOAT).
+const SUBFORMAT_IEEE_FLOAT_LE: [u8; 16] = [
+    0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
+];
+
+/// Parse un blob contenant un WAVEFORMATEX (éventuellement précédé de
+/// l'en-tête PROPVARIANT de 8 octets) en `MixFormat`.
+pub fn parse_waveformatex(b: &[u8]) -> Option<MixFormat> {
+    for off in [0usize, 8] {
+        let w = b.get(off..off + 18)?;
+        let tag = u16::from_le_bytes([w[0], w[1]]);
+        if tag != 1 && tag != 3 && tag != 0xFFFE {
+            continue;
+        }
+        let channels = u16::from_le_bytes([w[2], w[3]]);
+        let rate = u32::from_le_bytes([w[4], w[5], w[6], w[7]]);
+        let bits = u16::from_le_bytes([w[14], w[15]]);
+        if !(1..=8).contains(&channels) || !(8_000..=1_536_000).contains(&rate) {
+            continue;
+        }
+        let is_float = tag == 3
+            || (tag == 0xFFFE
+                && b.len() >= off + 40
+                && b[off + 24..off + 40] == SUBFORMAT_IEEE_FLOAT_LE);
+        return Some(MixFormat {
+            rate,
+            channels,
+            bits_per_sample: bits,
+            is_float,
+        });
+    }
+    None
+}
+
 /// Indique si le mix format WASAPI courant est compatible avec un flux DoP à
 /// `carrier` Hz : il faut un PCM entier (pas float) à exactement la porteuse,
 /// sinon le moteur rééchantillonne et détruit les marqueurs DoP (ou le pilote
@@ -136,6 +186,14 @@ mod imp {
 
     pub fn ensure_dop_carrier(_device_name: Option<&str>, _dop_rate: u32) -> Result<bool, String> {
         Ok(false)
+    }
+
+    pub fn device_default_format(_device_name: Option<&str>) -> Option<MixFormat> {
+        None
+    }
+
+    pub fn restart_audio_service() -> std::result::Result<String, String> {
+        Err("Redémarrage du service audio : disponible sous Windows uniquement (sinon rebranchez le DAC USB).".into())
     }
 }
 
@@ -219,21 +277,34 @@ mod imp {
     }
 
     /// Device correspondant au nom cpal, sinon l'endpoint de rendu par défaut.
-    unsafe fn find_device(name: Option<&str>) -> Result<IMMDevice> {
+    unsafe fn find_device(name: Option<&str>) -> std::result::Result<IMMDevice, String> {
         if let Some(n) = name
             .map(str::trim)
             .filter(|n| !n.is_empty() && *n != "default")
         {
             let want = normalize(&strip_card_prefix(n));
-            for dev in unsafe { endpoints()? } {
-                let got = normalize(&unsafe { friendly_name(&dev) });
+            let mut names = Vec::new();
+            for dev in unsafe { endpoints() }.map_err(|e| e.to_string())? {
+                let got_name = unsafe { friendly_name(&dev) };
+                // le nom WASAPI énuméré contient lui aussi le préfixe carte
+                // « (2- » : on le strip des deux côtés avant de comparer
+                let got = normalize(&strip_card_prefix(&got_name));
+                if !got_name.is_empty() {
+                    names.push(got_name);
+                }
                 if !got.is_empty() && (got.contains(&want) || want.contains(&got)) {
                     return Ok(dev);
                 }
             }
+            // Nom explicite inconnu : PAS de repli silencieux sur l'endpoint
+            // par défaut (sinon on reconfigurerait le mauvais DAC).
+            return Err(format!(
+                "périphérique '{n}' introuvable — disponibles : {}",
+                names.join(", ")
+            ));
         }
-        let en = unsafe { enumerator()? };
-        unsafe { en.GetDefaultAudioEndpoint(eRender, eMultimedia) }
+        let en = unsafe { enumerator() }.map_err(|e| e.to_string())?;
+        unsafe { en.GetDefaultAudioEndpoint(eRender, eMultimedia) }.map_err(|e| e.to_string())
     }
 
     unsafe fn mix_format_of(dev: &IMMDevice) -> Result<MixFormat> {
@@ -294,8 +365,9 @@ mod imp {
                 Err(_) => return false,
             };
             // GetId() -> "{0.0.0.00000000}.{357f0e79-...}" ; la clé registre
-            // ne contient que le second GUID.
-            let guid = id.split_once('.').map(|(_, g)| g).unwrap_or(&id);
+            // ne contient que le second GUID (rsplit : le premier segment
+            // contient lui-même des points).
+            let guid = id.rsplit_once('.').map(|(_, g)| g).unwrap_or(&id);
             let path = windows::core::HSTRING::from(format!(
                 "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\Render\\{guid}\\Properties"
             ));
@@ -373,6 +445,66 @@ mod imp {
             Ok(true)
         }
     }
+
+    const REG_VALUE_NAME: &str = "{f19f064d-082c-4e27-bc73-6882a1bb8e4c},0";
+
+    /// Lit le « Default Format » persisté dans le registre MMDevices
+    /// (lecture HKLM autorisée sans admin).
+    pub fn device_default_format(device_name: Option<&str>) -> Option<MixFormat> {
+        use windows::Win32::System::Registry::{
+            RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_LOCAL_MACHINE, KEY_READ,
+        };
+        let _guard = ComGuard::new().ok()?;
+        let dev = unsafe { find_device(device_name) }.ok()?;
+        let id = unsafe { dev.GetId().ok()?.to_string().ok()? };
+        // GetId() -> "{0.0.0.00000000}.{357f0e79-...}" ; la clé registre ne
+        // contient que le second GUID (rsplit : le premier segment contient
+        // lui-même des points).
+        let guid = id.rsplit_once('.').map(|(_, g)| g).unwrap_or(&id);
+        let path = windows::core::HSTRING::from(format!(
+            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\Render\\{guid}\\Properties"
+        ));
+        unsafe {
+            let mut hkey = windows::Win32::System::Registry::HKEY::default();
+            if RegOpenKeyExW(HKEY_LOCAL_MACHINE, &path, None, KEY_READ, &mut hkey).0 != 0 {
+                return None;
+            }
+            let name = windows::core::HSTRING::from(REG_VALUE_NAME);
+            let mut buf = [0u8; 128];
+            let mut len = buf.len() as u32;
+            let ok = RegQueryValueExW(
+                hkey,
+                &name,
+                None,
+                None,
+                Some(buf.as_mut_ptr()),
+                Some(&mut len),
+            )
+            .0 == 0;
+            let _ = RegCloseKey(hkey);
+            if ok {
+                super::parse_waveformatex(&buf[..len as usize])
+            } else {
+                None
+            }
+        }
+    }
+
+    pub fn restart_audio_service() -> std::result::Result<String, String> {
+        // Redémarrage en élévation (UAC) : le moteur audio réadopte alors le
+        // Default Format persisté, sans rebrancher le DAC.
+        std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Start-Process -Verb RunAs -FilePath powershell.exe -ArgumentList '-NoProfile','-Command','Restart-Service Audiosrv -Force'",
+            ])
+            .spawn()
+            .map(|_| {
+                "Demande de redémarrage du service Audio Windows envoyée — validez l'invite UAC.".to_string()
+            })
+            .map_err(|e| format!("lancement de PowerShell: {e}"))
+    }
 }
 
 #[cfg(test)]
@@ -405,6 +537,46 @@ mod tests {
                 rate * ch as u32 * 3
             );
         }
+    }
+
+    #[test]
+    fn parse_waveformatex_pcm24_176400() {
+        // blob registre observé pour le iBasso (Default Format 24 bits / 176400 Hz)
+        let b = dop_default_format_bytes(176_400, 2);
+        let m = parse_waveformatex(&b).expect("parse");
+        assert_eq!(m.rate, 176_400);
+        assert_eq!(m.channels, 2);
+        assert_eq!(m.bits_per_sample, 24);
+        assert!(!m.is_float);
+        // avec l'en-tête PROPVARIANT de 8 octets devant
+        let mut prefixed = vec![0x41u8, 0, 0, 0, 0, 0, 0, 0];
+        prefixed.extend_from_slice(&b);
+        let m = parse_waveformatex(&prefixed).expect("parse avec prefixe");
+        assert_eq!(m.rate, 176_400);
+        assert!(!m.is_float);
+    }
+
+    #[test]
+    fn parse_waveformatex_extensible_float() {
+        // WAVEFORMATEXTENSIBLE 32 bits float 48000 Hz (mix format typique)
+        let mut b = Vec::new();
+        b.extend_from_slice(&0xFFFEu16.to_le_bytes()); // tag extensible
+        b.extend_from_slice(&2u16.to_le_bytes()); // canaux
+        b.extend_from_slice(&48_000u32.to_le_bytes()); // rate
+        b.extend_from_slice(&(48_000u32 * 8).to_le_bytes()); // byte rate
+        b.extend_from_slice(&8u16.to_le_bytes()); // block align
+        b.extend_from_slice(&32u16.to_le_bytes()); // bits
+        b.extend_from_slice(&22u16.to_le_bytes()); // cbSize
+        b.extend_from_slice(&32u16.to_le_bytes()); // valid bits
+        b.extend_from_slice(&0u32.to_le_bytes()); // channel mask
+        b.extend_from_slice(&SUBFORMAT_IEEE_FLOAT_LE); // subformat float
+        let m = parse_waveformatex(&b).expect("parse extensible");
+        assert_eq!(m.rate, 48_000);
+        assert_eq!(m.bits_per_sample, 32);
+        assert!(m.is_float);
+        // garbage -> None
+        assert!(parse_waveformatex(&[0u8; 4]).is_none());
+        assert!(parse_waveformatex(&[]).is_none());
     }
 
     #[test]
@@ -468,16 +640,24 @@ mod tests {
 
     #[test]
     fn matching_nom_cpal_vs_wasapi() {
+        // côté WASAPI, le friendly name énuméré contient AUSSI le préfixe
+        // carte : « Casque (2- iBasso-DC03-Pro) »
         let cpal = "Casque (2- iBasso-DC03-Pro)";
-        let wasapi = "Casque (iBasso-DC03-Pro)";
+        let wasapi = "Casque (2- iBasso-DC03-Pro)";
         let want = normalize(&strip_card_prefix(cpal));
-        let got = normalize(wasapi);
+        let got = normalize(&strip_card_prefix(wasapi));
         assert_eq!(want, got);
         assert!(got.contains(&want) || want.contains(&got));
-        // sans le strip, le préfixe "2-" empêcherait la correspondance
-        assert_ne!(normalize(cpal), normalize(wasapi));
+        // sans strip côté énuméré, le préfixe « 2- » empêcherait la
+        // correspondance (régression : find_device retournait « introuvable »
+        // pour un nom pourtant présent dans la liste)
+        let got_sans_strip = normalize(wasapi);
+        assert!(!got_sans_strip.contains(&want) && !want.contains(&got_sans_strip));
         // les autres devices ne doivent pas matcher
-        assert!(!normalize("Voicemeeter In 3 (VB-Audio Voicemeeter VAIO)").contains(&want));
+        assert!(!normalize(&strip_card_prefix(
+            "Voicemeeter In 3 (VB-Audio Voicemeeter VAIO)"
+        ))
+        .contains(&want));
     }
 
     #[cfg(not(target_os = "windows"))]
