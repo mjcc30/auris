@@ -341,6 +341,7 @@ export const api = {
   queue: () => req<Track[]>("/api/queue"),
   clearQueue: () => req<unknown>("/api/queue/clear", post({})),
   queueAdd: (uri: string) => req<PlayerState>("/api/queue/add", post({ uri })),
+  queueAddNext: (uri: string) => req<PlayerState>("/api/queue/add-next", post({ uri })),
   removeQueueItem: (index: number) => req<PlayerState>(`/api/queue/${index}`, del()),
   tracks: () => req<Track[]>("/api/library/tracks"),
   albums: () => req<Album[]>("/api/library/albums"),
@@ -372,11 +373,13 @@ export const api = {
     `/api/export?uri=${encodeURIComponent(uri)}${name ? `&name=${encodeURIComponent(name)}` : ""}`,
   albumExportUrl: (albumId: string) => `/api/library/albums/${encodeURIComponent(albumId)}/export`,
   playlists: () => req<Playlist[]>("/api/playlists"),
-  addPlaylist: (name: string, trackIds?: string[]) =>
-    req<Playlist>("/api/playlists", post({ name, track_ids: trackIds })),
+  addPlaylist: (name: string, trackIds?: string[], uri?: string) =>
+    req<Playlist>("/api/playlists", post({ name, track_ids: trackIds, uri })),
   playlist: (id: string) => req<PlaylistDetail>(`/api/playlists/${encodeURIComponent(id)}`),
   deletePlaylist: (id: string) => req<unknown>(`/api/playlists/${encodeURIComponent(id)}`, del()),
   playPlaylist: (id: string) => req<PlayerState>(`/api/playlists/${encodeURIComponent(id)}/play`, post({})),
+  playlistAdd: (id: string, uri: string) =>
+    req<{ playlist: Playlist; added: number }>(`/api/playlists/${encodeURIComponent(id)}/add`, post({ uri })),
   listShares: () => req<ShareLink[]>("/api/shares"),
   createShare: (kind: ShareLink["kind"], id: string, expires_in_secs?: number) =>
     req<ShareLink>("/api/shares", post({ kind, id, expires_in_secs })),

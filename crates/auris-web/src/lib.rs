@@ -235,6 +235,9 @@ struct PlaylistBody {
     name: String,
     /// Si absent: la file d'attente courante est enregistree.
     track_ids: Option<Vec<String>>,
+    /// Si renseigne: la playlist est cree a partir de cet URI (fichier ou
+    /// dossier, parcouru recursivement) — utilisé depuis Parcourir.
+    uri: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -310,6 +313,7 @@ pub fn router(state: AppState) -> Router {
         // file d'attente
         .route("/api/queue", get(get_queue).post(post_queue))
         .route("/api/queue/add", post(post_queue_add))
+        .route("/api/queue/add-next", post(post_queue_add_next))
         .route(
             "/api/queue/clear",
             post(|State(s): State<AppState>| async move {
@@ -352,6 +356,7 @@ pub fn router(state: AppState) -> Router {
             get(get_playlist).delete(delete_playlist),
         )
         .route("/api/playlists/{id}/play", post(post_playlist_play))
+        .route("/api/playlists/{id}/add", post(post_playlist_add))
         // audio
         .route("/api/audio/devices", get(get_devices))
         .route("/api/audio/device", post(post_device))
@@ -599,6 +604,33 @@ async fn post_queue_add(
     t.title = b.uri.rsplit('/').next().unwrap_or(&b.uri).to_string();
     t.finalize_keys();
     s.engine.enqueue(t);
+    Ok(Json(s.engine.state()))
+}
+
+/// « Lire ensuite » : insere un URI (fichier, dossier ou URL) juste apres la
+/// piste en cours dans la file d'attente.
+async fn post_queue_add_next(
+    State(s): State<AppState>,
+    Json(b): Json<QueueAddBody>,
+) -> ApiResult<Json<auris_core::PlayerState>> {
+    if let Ok(entry) = s.sources.stat(&b.uri).await {
+        if entry.is_dir {
+            let tracks = browse_tracks(&s.sources, &b.uri).await?;
+            for t in &tracks {
+                let _ = s.library.upsert_track(t);
+            }
+            s.engine.enqueue_next(tracks);
+            return Ok(Json(s.engine.state()));
+        }
+    }
+    let source_id = auris_sources::parse_src_uri(&b.uri)
+        .map(|(id, _)| id)
+        .unwrap_or_default();
+    let mut t = Track::new(b.uri.clone(), source_id);
+    t.title = b.uri.rsplit('/').next().unwrap_or(&b.uri).to_string();
+    t.finalize_keys();
+    let _ = s.library.upsert_track(&t);
+    s.engine.enqueue_next(vec![t]);
     Ok(Json(s.engine.state()))
 }
 async fn delete_queue_item(
@@ -992,7 +1024,11 @@ async fn get_browse(
     State(s): State<AppState>,
     Query(q): Query<BrowseQuery>,
 ) -> ApiResult<Json<Vec<auris_core::BrowseEntry>>> {
-    let entries = s.sources.browse(&q.uri).await?;
+    let mut entries = s.sources.browse(&q.uri).await?;
+    // Parcourir n'affiche que les dossiers et les fichiers audio (les autres
+    // fichiers restent accessibles via l'export ZIP / la copie, qui passent
+    // par walk_all et ne sont pas filtres ici).
+    entries.retain(|e| e.is_dir || e.is_audio);
     Ok(Json(entries))
 }
 
@@ -1245,19 +1281,53 @@ async fn post_playlist(
     State(s): State<AppState>,
     Json(b): Json<PlaylistBody>,
 ) -> ApiResult<Json<Playlist>> {
-    let ids = match b.track_ids {
-        Some(ids) => ids,
-        None => {
-            // sauvegarde de la file d'attente: les pistes hors scan y sont indexees
-            let queue = s.engine.state().queue;
-            for t in &queue {
-                s.library.upsert_track(t)?;
-            }
-            queue.iter().map(|t| t.id.clone()).collect()
+    let ids = if let Some(uri) = b.uri {
+        // création depuis Parcourir: fichier ou dossier (récursif)
+        resolve_uri_tracks(&s, &uri)
+            .await?
+            .iter()
+            .map(|t| t.id.clone())
+            .collect()
+    } else if let Some(ids) = b.track_ids {
+        ids
+    } else {
+        // sauvegarde de la file d'attente: les pistes hors scan y sont indexees
+        let queue = s.engine.state().queue;
+        for t in &queue {
+            s.library.upsert_track(t)?;
         }
+        queue.iter().map(|t| t.id.clone()).collect()
     };
     let p = s.library.create_playlist(&b.name, ids)?;
     Ok(Json(p))
+}
+
+/// Resout un URI (fichier ou dossier) en pistes enregistrables: dossier ->
+/// tous ses fichiers audio (recursif), fichier -> piste bibliothèque ou
+/// piste creee a la volee. Les pistes sont upsertées dans la bibliothèque.
+async fn resolve_uri_tracks(s: &AppState, uri: &str) -> ApiResult<Vec<Track>> {
+    let mut tracks: Vec<Track> = Vec::new();
+    if let Ok(entry) = s.sources.stat(uri).await {
+        if entry.is_dir {
+            tracks = browse_tracks(&s.sources, uri).await?;
+        }
+    }
+    if tracks.is_empty() {
+        if let Some(t) = s.library.get_by_uri(uri) {
+            tracks = vec![t];
+        } else {
+            let source_id = auris_sources::parse_src_uri(uri)
+                .map(|(id, _)| id)
+                .unwrap_or_default();
+            let mut t = Track::new(uri.to_string(), source_id);
+            t.finalize_keys();
+            tracks = vec![t];
+        }
+    }
+    for t in &tracks {
+        let _ = s.library.upsert_track(t);
+    }
+    Ok(tracks)
 }
 
 async fn get_playlist(
@@ -1597,6 +1667,27 @@ async fn post_playlist_play(
     }
     s.engine.play_queue(tracks, 0);
     Ok(Json(s.engine.state()))
+}
+
+/// Ajoute un URI (fichier ou dossier, joue recursivement) a une playlist.
+async fn post_playlist_add(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<QueueAddBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    // Resout l'uri en pistes: dossier -> tous ses fichiers audio (recursif),
+    // fichier -> la piste (cree/enregistree si hors scan).
+    let tracks = resolve_uri_tracks(&s, &b.uri).await?;
+    let ids = tracks.iter().map(|t| t.id.clone()).collect::<Vec<_>>();
+    let p = s
+        .library
+        .add_to_playlist(&id, ids.clone())
+        .map_err(ApiError)?
+        .ok_or_else(|| AurisError::other(format!("playlist introuvable: {id}")))?;
+    Ok(Json(serde_json::json!({
+        "playlist": p,
+        "added": ids.len(),
+    })))
 }
 
 async fn get_devices(State(s): State<AppState>) -> Json<Vec<auris_core::AudioDeviceInfo>> {

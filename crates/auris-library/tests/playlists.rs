@@ -101,3 +101,44 @@ async fn playlists_crud_avec_pistes_reelles() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[tokio::test]
+async fn add_to_playlist_ajoute_sans_doublon() {
+    let root = unique_tmp("pladd");
+    let music = root.join("music");
+    std::fs::create_dir_all(&music).unwrap();
+    write_test_wav(&music.join("t1.wav"), 1);
+    write_test_wav(&music.join("t2.wav"), 1);
+
+    let src = Source::new_local("test", music.to_str().unwrap());
+    let mgr = Arc::new(SourcesManager::new(vec![src.clone()]).unwrap());
+    let lib = Library::open(&root.join("db"), mgr).unwrap();
+    lib.scan_source(&src.id).unwrap();
+    for _ in 0..200 {
+        if !lib.scan_status().running {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let ids: Vec<String> = lib.tracks().iter().map(|t| t.id.clone()).collect();
+    assert_eq!(ids.len(), 2);
+
+    let p = lib.create_playlist("Mix", vec![ids[0].clone()]).unwrap();
+
+    // ajout de la 2e piste + doublon de la 1re (ignore)
+    let p2 = lib
+        .add_to_playlist(&p.id, vec![ids[1].clone(), ids[0].clone()])
+        .unwrap()
+        .unwrap();
+    assert_eq!(p2.track_ids, vec![ids[0].clone(), ids[1].clone()]);
+
+    // la playlist persiste avec les 2 pistes resolues
+    let (p3, t3) = lib.playlist(&p.id).unwrap();
+    assert_eq!(p3.track_ids.len(), 2);
+    assert_eq!(t3.len(), 2);
+
+    // playlist inconnue -> Ok(None)
+    assert!(lib.add_to_playlist("nope", ids.clone()).unwrap().is_none());
+
+    let _ = std::fs::remove_dir_all(&root);
+}

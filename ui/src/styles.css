@@ -168,12 +168,19 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-w
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
 .card {
+  position: relative;
   background: var(--surface);
   border-radius: var(--radius);
   padding: 12px;
   cursor: pointer;
   transition: transform 180ms var(--ease), box-shadow 200ms var(--ease), background 150ms var(--ease);
 }
+.card-menu {
+  position: absolute; top: 16px; right: 16px;
+  background: rgba(0, 0, 0, 0.55); border-radius: 8px;
+  opacity: 0; transition: opacity 150ms var(--ease);
+}
+.card:hover .card-menu, .card-menu:focus-visible { opacity: 1; }
 .card:hover { transform: scale(1.02); box-shadow: var(--shadow-card); background: var(--surface-high); }
 .card:active { transform: scale(0.99); }
 .cover {

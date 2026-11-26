@@ -390,6 +390,25 @@ impl Library {
         Ok(p)
     }
 
+    /// Ajoute des pistes a une playlist existante (les IDs en double sont
+    /// ignores). Retourne la playlist mise a jour, ou None si introuvable.
+    pub fn add_to_playlist(&self, id: &str, track_ids: Vec<String>) -> Result<Option<Playlist>> {
+        let raw = self.tree(TREE_PLAYLISTS).get(id.as_bytes()).ok().flatten();
+        let mut p: Playlist = match raw.and_then(|v| dec::<Playlist>(&v).ok()) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        for tid in track_ids {
+            if !p.track_ids.contains(&tid) {
+                p.track_ids.push(tid);
+            }
+        }
+        self.tree(TREE_PLAYLISTS)
+            .insert(p.id.as_bytes(), enc(&p)?)
+            .map_err(se)?;
+        Ok(Some(p))
+    }
+
     /// Playlist + ses pistes resolues (les IDs inconnus sont ignores).
     pub fn playlist(&self, id: &str) -> Option<(Playlist, Vec<Track>)> {
         let p: Playlist = dec(&self.tree(TREE_PLAYLISTS).get(id.as_bytes()).ok()??).ok()?;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type InfosResponse, type LyricsResponse, type MountInfo, type PlaylistDetail, type PlayerState, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type InfosResponse, type LyricsResponse, type MountInfo, type Playlist, type PlaylistDetail, type PlayerState, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 
@@ -110,13 +110,15 @@ export default function App() {
       try {
         const ev = JSON.parse(String(e.data));
         if (ev?.type === "state" && ev.payload) setState(ev.payload as PlayerState);
+        // messages du moteur (erreur flux audio, bascule de sortie, alarmes…): toast + refresh
+        else if (ev?.type === "message" && ev.payload?.message) { say(String(ev.payload.message)); refresh(); }
         else if (ev?.type) refresh();
         else setState(ev as PlayerState);
       } catch { refresh(); }
     };
     const iv = setInterval(refresh, 10000);
     return () => { ws.close(); clearInterval(iv); };
-  }, [refresh]);
+  }, [refresh, say]);
 
   // Applique l'apparence (thème, accent, fond) au document à chaque changement.
   const appearance = settings?.appearance;
@@ -536,6 +538,8 @@ function Browse({ sources, src, playUri, act, say }: { sources: Source[]; src: s
   const [loading, setLoading] = useState(false);
   const [grid, setGrid] = useState(true);
   const [menu, setMenu] = useState<MenuState>(null);
+  const [menuSub, setMenuSub] = useState<null | "playlists">(null);
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [copyTarget, setCopyTarget] = useState<BrowseEntry | null>(null);
   const id = src ?? sources[0]?.id ?? null;
 
@@ -546,16 +550,53 @@ function Browse({ sources, src, playUri, act, say }: { sources: Source[]; src: s
     setLoading(true);
     api.browse(uri).then(setEntries).catch((e) => say(e instanceof Error ? e.message : String(e))).finally(() => setLoading(false));
     setMenu(null);
+    setMenuSub(null);
   }, [id, path, say]);
 
   if (!id) return <div className="empty">Aucune source configurée — ajoutez-en une dans « Sources &amp; réglages ».</div>;
   const source = sources.find((s) => s.id === id);
   const curUri = `src://${id}/${path.join("/")}`;
 
+  // Un clic simple ouvre un dossier ou lance un fichier audio (plus de double clic).
+  const openEntry = (e: BrowseEntry) => {
+    if (e.is_dir) setPath([...path, e.name]);
+    else if (e.is_audio) playUri(e.uri);
+  };
+
   const openMenu = (e: React.MouseEvent, entry: BrowseEntry) => {
     e.preventDefault();
     e.stopPropagation();
     setMenu({ x: e.clientX, y: e.clientY, entry });
+    setMenuSub(null);
+  };
+
+  const closeMenu = () => { setMenu(null); setMenuSub(null); };
+
+  // « Ajouter à une playlist » : sous-menu listant les playlists existantes.
+  const openPlaylistsSub = async (entry: BrowseEntry) => {
+    setMenuSub("playlists");
+    try { setPlaylists(await api.playlists()); }
+    catch (e) { say(e instanceof Error ? e.message : String(e)); }
+    void entry;
+  };
+
+  const addEntryToPlaylist = async (pid: string, pname: string, entry: BrowseEntry) => {
+    try {
+      const r = await api.playlistAdd(pid, entry.uri);
+      say(`Ajouté à « ${pname} » (${r.added} piste${r.added > 1 ? "s" : ""})`);
+    } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+    closeMenu();
+  };
+
+  const createPlaylistFromEntry = async (entry: BrowseEntry) => {
+    const name = window.prompt("Nom de la nouvelle liste de lecture :");
+    if (!name || !name.trim()) return;
+    try {
+      // créé la playlist à partir de l'uri, puis on recharge la liste
+      await api.addPlaylist(name.trim(), undefined, entry.uri);
+      say(`Liste « ${name.trim()} » créée`);
+      setPlaylists(await api.playlists());
+    } catch (e) { say(e instanceof Error ? e.message : String(e)); }
   };
 
   return (
@@ -583,37 +624,54 @@ function Browse({ sources, src, playUri, act, say }: { sources: Source[]; src: s
       {!loading && grid && (
         <div className="grid">
           {entries.map((e) => (
-            <div key={e.uri} className="card" onDoubleClick={() => (e.is_dir ? setPath([...path, e.name]) : playUri(e.uri))}
-              onClick={() => { if (e.is_audio) playUri(e.uri); }}
+            <div key={e.uri} className="card" onClick={() => openEntry(e)}
               onContextMenu={(ev) => openMenu(ev, e)} title={e.name}>
               <div className="cover">{e.is_dir ? <CoverImg uri={e.uri} icon="folder" /> : <Icon name="note" size={44} />}</div>
               <div className="t">{e.name}</div>
-              <div className="s">{e.is_dir ? "dossier" : `${e.is_audio ? "audio" : "fichier"}${e.size ? ` · ${fmtBytes(e.size)}` : ""}`}</div>
+              <div className="s">{e.is_dir ? "dossier" : `audio${e.size ? ` · ${fmtBytes(e.size)}` : ""}`}</div>
+              <button className="icon-btn card-menu" title="Options" onClick={(ev) => openMenu(ev, e)}><Icon name="dots" size={18} /></button>
             </div>
           ))}
         </div>
       )}
       {!loading && !grid && entries.map((e) => (
-        <div key={e.uri} className="browse-row" onDoubleClick={() => (e.is_dir ? setPath([...path, e.name]) : playUri(e.uri))}
-          onClick={() => e.is_audio && playUri(e.uri)} onContextMenu={(ev) => openMenu(ev, e)}>
+        <div key={e.uri} className="browse-row" onClick={() => openEntry(e)} onContextMenu={(ev) => openMenu(ev, e)}>
           <span className="row-ico">{e.is_dir ? <CoverImg uri={e.uri} icon="folder" size={20} /> : <Icon name="note" size={20} />}</span>
           <span className="name">{e.name}</span>
           <span className="meta">{e.is_audio && e.format ? fmtFormat(e.format) : ""}{e.size ? ` · ${fmtBytes(e.size)}` : ""}</span>
-          <button className="icon-btn" onClick={(ev) => { ev.stopPropagation(); openMenu(ev, e); }}><Icon name="dots" size={18} /></button>
+          <button className="icon-btn" onClick={(ev) => openMenu(ev, e)}><Icon name="dots" size={18} /></button>
         </div>
       ))}
       {!loading && entries.length === 0 && <div className="empty">Dossier vide.</div>}
 
       {menu && (
         <>
-          <div className="menu-overlay" onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null); }} />
+          <div className="menu-overlay" onClick={closeMenu} onContextMenu={(e) => { e.preventDefault(); closeMenu(); }} />
           <div className="ctx-menu" style={{ left: menu.x, top: menu.y }}>
             <div className="ctx-title">{menu.entry.name}</div>
-            {!menu.entry.is_dir && menu.entry.is_audio && <div className="ctx-item" onClick={() => { playUri(menu.entry.uri); setMenu(null); }}><Icon name="play" size={16} filled /> Lire</div>}
-            {menu.entry.is_dir && <div className="ctx-item" onClick={() => { playUri(menu.entry.uri); setMenu(null); }}><Icon name="play" size={16} filled /> Tout lire</div>}
-            <div className="ctx-item" onClick={() => { act(() => api.queueAdd(menu.entry.uri)); setMenu(null); }}><Icon name="plus" size={16} /> Ajouter à la file</div>
-            <div className="ctx-item" onClick={() => { window.location.href = api.exportUrl(menu.entry.uri, menu.entry.name.replace(/\.[^.]+$/, "")); setMenu(null); }}><Icon name="download" size={16} /> Télécharger (ZIP)</div>
-            <div className="ctx-item" onClick={() => { setCopyTarget(menu.entry); setMenu(null); }}><Icon name="copy" size={16} /> Copier vers une autre source…</div>
+            {menuSub === "playlists" ? (
+              <>
+                <div className="ctx-item" onClick={() => setMenuSub(null)}><Icon name="back" size={16} /> Retour</div>
+                {playlists.length === 0 && <div className="ctx-item" style={{ color: "var(--text-dim)" }}>Aucune liste de lecture</div>}
+                {playlists.map((p) => (
+                  <div key={p.id} className="ctx-item" onClick={() => addEntryToPlaylist(p.id, p.name, menu.entry)}>
+                    <Icon name="playlist" size={16} /> {p.name}
+                  </div>
+                ))}
+                <div className="ctx-item" onClick={() => createPlaylistFromEntry(menu.entry)}><Icon name="plus" size={16} /> Nouvelle liste…</div>
+              </>
+            ) : (
+              <>
+                <div className="ctx-item" onClick={() => { playUri(menu.entry.uri); closeMenu(); }}><Icon name="play" size={16} filled /> Lire maintenant</div>
+                <div className="ctx-item" onClick={() => { act(() => api.queueAddNext(menu.entry.uri), " lira juste après la piste en cours"); closeMenu(); }}><Icon name="next" size={16} /> Lire ensuite</div>
+                <div className="ctx-item" onClick={() => { act(() => api.queueAdd(menu.entry.uri), "Ajouté à la file d'attente"); closeMenu(); }}><Icon name="plus" size={16} /> Ajouter à la file d'attente</div>
+                <div className="ctx-item" onClick={() => { act(async () => { await api.clearQueue(); await api.play(menu.entry.uri); }, "File vidée, lecture lancée"); closeMenu(); }}><Icon name="queue" size={16} /> Vider la file et lire</div>
+                <div className="ctx-item" onClick={() => openPlaylistsSub(menu.entry)}><Icon name="playlist" size={16} /> Ajouter à une playlist…</div>
+                <div className="ctx-item" onClick={() => { act(async () => { await api.scan(id); }, "Mise à jour du dossier lancée"); closeMenu(); }}><Icon name="refresh" size={16} /> Mettre à jour le dossier</div>
+                <div className="ctx-item" onClick={() => { window.location.href = api.exportUrl(menu.entry.uri, menu.entry.name.replace(/\.[^.]+$/, "")); closeMenu(); }}><Icon name="download" size={16} /> Télécharger (ZIP)</div>
+                <div className="ctx-item" onClick={() => { setCopyTarget(menu.entry); closeMenu(); }}><Icon name="copy" size={16} /> Copier vers une autre source…</div>
+              </>
+            )}
           </div>
         </>
       )}

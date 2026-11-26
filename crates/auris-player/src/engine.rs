@@ -27,6 +27,8 @@ pub enum Command {
     PlayUri(String),
     PlayQueue(Vec<Track>, usize),
     Enqueue(Box<Track>),
+    /// Insere des pistes juste apres la piste en cours (« Lire ensuite »).
+    EnqueueNext(Vec<Track>),
     Pause,
     Resume,
     Stop,
@@ -416,6 +418,22 @@ impl Engine {
                 let q = self.state.read().unwrap().queue.clone();
                 let _ = self.events.send(WsEvent::queue(&q));
             }
+            Command::EnqueueNext(tracks) => {
+                let mut st = self.state.write().unwrap();
+                // insertion juste apres la piste en cours (debut si rien ne joue)
+                let pos = st
+                    .queue_index
+                    .map(|i| (i + 1).min(st.queue.len()))
+                    .unwrap_or(0);
+                let n = tracks.len();
+                st.queue.splice(pos..pos, tracks);
+                drop(st);
+                let q = self.state.read().unwrap().queue.clone();
+                let _ = self.events.send(WsEvent::queue(&q));
+                if n > 0 {
+                    tracing::debug!("engine: {} piste(s) inseree(s) en position {pos}", n);
+                }
+            }
             Command::Pause => {
                 if let Some(o) = &mut self.output {
                     o.pause();
@@ -671,21 +689,24 @@ impl Engine {
                         }
                     }
                 }
-                let out = self.output.as_mut().unwrap();
-                if let Err(e) = out.build_stream(
-                    &spec,
-                    cons,
-                    self.volume.clone(),
-                    self.muted.clone(),
-                    self.frames_out.clone(),
-                    self.gen.clone(),
-                    self.max_volume.clone(),
-                    self.curve.clone(),
-                    self.vol_mode.clone(),
-                    self.out_mode.clone(),
-                    self.browser_tx.clone(),
-                    self.eq.clone(),
-                ) {
+                let build_res = {
+                    let out = self.output.as_mut().unwrap();
+                    out.build_stream(
+                        &spec,
+                        cons,
+                        self.volume.clone(),
+                        self.muted.clone(),
+                        self.frames_out.clone(),
+                        self.gen.clone(),
+                        self.max_volume.clone(),
+                        self.curve.clone(),
+                        self.vol_mode.clone(),
+                        self.out_mode.clone(),
+                        self.browser_tx.clone(),
+                        self.eq.clone(),
+                    )
+                };
+                if let Err(e) = build_res {
                     // Un flux qui ne s'ouvre pas ne doit pas laisser l'UI sur un
                     // « playing » fantôme à position 0 : on repasse en Stopped et
                     // on publie l'erreur. Pour un .dsf, on ajoute l'indice DoP si
@@ -697,6 +718,40 @@ impl Engine {
                             msg.push_str(&format!(" — {hint}"));
                         }
                     }
+                    // Si un périphérique précis était sélectionné et refuse le flux
+                    // (ex: « Ne pas autoriser » dans les réglages son Windows, ou DAC
+                    // débranché), on relance la piste sur la sortie par défaut de
+                    // l'OS avec un avertissement, plutôt que de rester muet.
+                    let cur_name = self
+                        .output
+                        .as_ref()
+                        .map(|o| o.name().to_string())
+                        .unwrap_or_default();
+                    let local_device = self.out_mode.load(Ordering::SeqCst) == 0
+                        && self
+                            .output
+                            .as_ref()
+                            .map(|o| o.has_device())
+                            .unwrap_or(false);
+                    if local_device && !cur_name.is_empty() {
+                        if let Ok(mut o) = AudioOutput::new(None) {
+                            o.set_exclusive(self.exclusive.load(Ordering::SeqCst));
+                            let def = o.name().to_string();
+                            if def != cur_name {
+                                self.publish_msg(
+                                    "warning",
+                                    &format!(
+                                        "{msg} — bascule sur « {def} » (sortie par défaut de l'OS)"
+                                    ),
+                                );
+                                self.device_name = Some(def);
+                                self.output = Some(o);
+                                let seek = self.seek_after_ready;
+                                self.start_track(uri, seek);
+                                return;
+                            }
+                        }
+                    }
                     self.publish_msg("error", &msg);
                     {
                         let mut st = self.state.write().unwrap();
@@ -706,6 +761,7 @@ impl Engine {
                     self.publish();
                     return;
                 }
+                let out = self.output.as_mut().unwrap();
                 self.cur_spec = Some(spec);
                 self.cur_rate.store(spec.rate as u64, Ordering::SeqCst);
                 *self.browser_spec.write().unwrap() = Some((spec.rate, u16::from(spec.channels)));
@@ -925,6 +981,10 @@ impl PlayerEngine {
     }
     pub fn enqueue(&self, t: Track) {
         self.send(Command::Enqueue(Box::new(t)));
+    }
+    /// « Lire ensuite » : insere les pistes juste apres la piste en cours.
+    pub fn enqueue_next(&self, tracks: Vec<Track>) {
+        self.send(Command::EnqueueNext(tracks));
     }
     pub fn pause(&self) {
         self.send(Command::Pause);
