@@ -212,7 +212,7 @@ export default function App() {
         )}
       </div>
       {dsdCarrier != null && dop && (
-        <DopBanner carrier={dsdCarrier} dop={dop} deviceName={state?.audio_device ?? null} say={say}
+        <DopBanner carrier={dsdCarrier} dop={dop} deviceName={state?.audio_device ?? null} backend={state?.output_backend ?? null} say={say}
           onChanged={() => api.dopStatus().then(setDop).catch(() => {})} />
       )}
       <PlayerBar state={state} devices={devices} act={act} say={say} alarms={alarms} refreshDevices={refreshDevices} npOpen={npOpen} onToggleNp={() => setNpOpen((v) => !v)} />
@@ -1370,10 +1370,15 @@ function sameDevice(a: string, b: string): boolean {
   return x.length > 0 && y.length > 0 && (x.includes(y) || y.includes(x));
 }
 
-function DopBanner({ carrier, dop, deviceName, say, onChanged }: { carrier: number; dop: DopStatus; deviceName: string | null; say: (m: string) => void; onChanged: () => void }) {
+function DopBanner({ carrier, dop, deviceName, backend, say, onChanged }: { carrier: number; dop: DopStatus; deviceName: string | null; backend: string | null; say: (m: string) => void; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const dev = dop.devices.find((d) => deviceName != null && sameDevice(d.name, deviceName));
   const mix = dev?.mix ?? null;
+  // Le mix format Windows ne concerne que la sortie partagée (backend cpal) :
+  // en WASAPI exclusif ou en lecture navigateur, le flux DoP ouvre le device
+  // (ou le navigateur) directement — le mixeur est contourné, l'avertissement
+  // n'a plus lieu d'être.
+  if (backend !== "cpal") return null;
   // RAS si le mix est déjà un PCM entier à la porteuse ; sinon le flux DoP
   // sera rééchantillonné (bruit) ou refusé par le pilote.
   if (!dop.windows || !mix || (!mix.is_float && mix.rate === carrier)) return null;
