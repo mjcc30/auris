@@ -104,6 +104,7 @@ async fn main() -> anyhow::Result<()> {
             app::list_audio_devices();
             Ok(())
         }
+        Some(Command::AudioDopSetup { rate, device }) => app::setup_dop_format(rate, device),
         Some(Command::UsbDevices) => {
             app::list_usb_devices();
             Ok(())

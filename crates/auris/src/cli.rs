@@ -19,6 +19,18 @@ pub enum Command {
     Update,
     /// Liste les peripheriques de sortie audio (DAC) detectes.
     AudioDevices,
+    /// Sur Windows, ecrit le « Default Format » WASAPI du DAC en PCM 24 bits
+    /// a la porteuse DoP pour que les .dsf passent en DoP natif. A lancer au
+    /// repos (aucune lecture en cours), puis rebrancher le DAC ou redemarrer
+    /// le service audio Windows pour que le moteur adopte le format.
+    AudioDopSetup {
+        /// Porteuse DoP en Hz (defaut 176400 = DSD64).
+        #[arg(long, default_value_t = 176_400)]
+        rate: u32,
+        /// Nom du DAC (voir `auris audio-devices`) [defaut: sortie par defaut].
+        #[arg(long)]
+        device: Option<String>,
+    },
     /// Liste les disques amovibles (cles USB, disques externes) detectes.
     UsbDevices,
     /// Installe un raccourci Bureau + un lancement au demarrage de Windows.

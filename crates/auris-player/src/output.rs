@@ -151,6 +151,8 @@ pub struct AudioOutput {
     drain_stop: Option<Arc<AtomicBool>>,
     drain: Option<std::thread::JoinHandle<()>>,
     paused: Arc<AtomicBool>,
+    /// Porteuse DoP du dernier flux DSD joué (Some(rate) si flux DoP).
+    dop_carrier: Option<u32>,
 }
 
 impl AudioOutput {
@@ -258,6 +260,7 @@ impl AudioOutput {
             drain_stop: None,
             drain: None,
             paused: Arc::new(AtomicBool::new(false)),
+            dop_carrier: None,
         })
     }
 
@@ -273,6 +276,7 @@ impl AudioOutput {
             drain_stop: None,
             drain: None,
             paused: Arc::new(AtomicBool::new(false)),
+            dop_carrier: None,
         }
     }
 
@@ -323,6 +327,7 @@ impl AudioOutput {
             );
         }
         let device = self.device.as_ref().unwrap();
+        self.dop_carrier = spec.is_dsd_dop.then_some(spec.rate);
         // DoP sous Windows: le moteur WASAPI (mode partagé de cpal) ne laisse
         // passer le flux au DAC que s'il est au « mix format » du device — on
         // écrit le Default Format en PCM 24 bits à la porteuse DoP (sinon les
@@ -668,6 +673,19 @@ impl AudioOutput {
     pub fn stop(&mut self) {
         self.stream = None;
         self.stop_drain();
+        // A l'arret du flux, re-ecrit le Default Format DoP: c'est au repos
+        // que l'ecriture persiste dans le registre (le moteur audio la
+        // revoque tant qu'un flux tourne sur l'endpoint).
+        if let Some(rate) = self.dop_carrier {
+            match crate::wasapi_dop::ensure_dop_carrier(Some(&self.device_name), rate) {
+                Ok(true) => tracing::info!(
+                    "DoP: Default Format de '{}' re-ecrit a l'arret du flux (24 bits / {rate} Hz) — adopte au prochain rebranchement du DAC ou redemarrage du service audio Windows",
+                    self.device_name
+                ),
+                Ok(false) => {}
+                Err(e) => tracing::warn!("DoP: re-ecriture du Default Format echouee: {e}"),
+            }
+        }
     }
 }
 

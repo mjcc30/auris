@@ -6,7 +6,9 @@ use std::sync::{Arc, RwLock};
 use anyhow::{Context, Result};
 
 use auris_library::Library;
-use auris_player::{all_mix_formats, AudioOutput, PlayerEngine};
+use auris_player::{
+    all_mix_formats, device_mix_format, ensure_dop_carrier, AudioOutput, PlayerEngine,
+};
 use auris_sources::SourcesManager;
 use auris_updater::{Updater, UpdaterConfig};
 use auris_web::{serve, AppState};
@@ -212,6 +214,25 @@ pub fn list_audio_devices() {
             println!("    {name}: {mix}");
         }
     }
+}
+
+/// Écrit le « Default Format » WASAPI du DAC en PCM 24 bits à la porteuse DoP
+/// (Windows uniquement; no-op ailleurs). À lancer au repos — aucune lecture
+/// en cours — pour que l'écriture persiste dans le registre; le moteur audio
+/// l'adopte au prochain rebranchement du DAC / redémarrage du service.
+pub fn setup_dop_format(rate: u32, device: Option<String>) -> Result<()> {
+    let name = device.as_deref();
+    match ensure_dop_carrier(name, rate) {
+        Ok(true) => println!(
+            "Default Format ecrit en 24 bits / {rate} Hz pour {name:?} — rebranchez le DAC USB ou redemarrez le service audio Windows pour l'appliquer."
+        ),
+        Ok(false) => println!("Default Format deja en {rate} Hz / 24 bits PCM (ou plateforme non concernee)."),
+        Err(e) => return Err(anyhow::anyhow!(e)),
+    }
+    if let Some(mix) = device_mix_format(name) {
+        println!("mix format actuel du device: {mix}");
+    }
+    Ok(())
 }
 
 /// Vérifie et applique une mise à jour.
