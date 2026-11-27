@@ -127,5 +127,13 @@
   "Label": "Label",
   "Éditeur": "Publisher",
   "Titre": "Title",
-  "Copyright": "Copyright"
+  "Copyright": "Copyright",
+  "Sauvegarde": "Backup",
+  "Télécharger la sauvegarde": "Download backup",
+  "Restaurer une sauvegarde": "Restore a backup",
+  "WebDAV": "WebDAV",
+  "Télécharger (.zip)": "Download (.zip)",
+  "Choisir un .zip…": "Choose a .zip…",
+  "Envoyer": "Send",
+  "Restaurer": "Restore"
 }

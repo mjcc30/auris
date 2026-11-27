@@ -1818,6 +1818,13 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
   const loadDop = useCallback(() => { api.dopStatus().then(setDop).catch(() => {}); }, []);
   useEffect(() => { loadDop(); }, [loadDop]);
 
+  // Sauvegarde / restauration (#40)
+  const [davBase, setDavBase] = useState("");
+  const [davFile, setDavFile] = useState("");
+  const [davUser, setDavUser] = useState("");
+  const [davPass, setDavPass] = useState("");
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
   useEffect(() => {
     api.systemStorage().then(setStorage).catch(() => {});
   }, []);
@@ -1853,6 +1860,51 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
       await api.systemReset();
       say("Reset effectué — redémarrage recommandé");
       await refresh();
+    } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(""); }
+  };
+
+  const downloadBackup = async () => {
+    setBusy("backup");
+    try {
+      const blob = await api.backup();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `auris-backup-${new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19)}.zip`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      say("Sauvegarde téléchargée");
+    } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(""); }
+  };
+
+  const restoreFile = async (f: File) => {
+    if (!window.confirm(`Restaurer la sauvegarde « ${f.name} » ? Réglages, favoris, playlists, historique et partages actuels seront remplacés.`)) return;
+    setBusy("restore");
+    try {
+      const r = await api.restore(f);
+      say(`Sauvegarde restaurée (${r.files} fichiers)`);
+      setTimeout(() => window.location.reload(), 800);
+    } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(""); }
+  };
+
+  const pushWebdav = async () => {
+    setBusy("dav-push");
+    try {
+      const r = await api.backupWebdav({ url: davBase.trim(), user: davUser.trim() || undefined, password: davPass || undefined });
+      say(`Sauvegarde envoyée : ${r.pushed} (${fmtBytes(r.bytes)})`);
+    } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(""); }
+  };
+
+  const restoreWebdav = async () => {
+    if (!window.confirm("Restaurer la sauvegarde depuis WebDAV ? Les données actuelles seront remplacées.")) return;
+    setBusy("dav-restore");
+    try {
+      const r = await api.restoreWebdav({ url: davFile.trim(), user: davUser.trim() || undefined, password: davPass || undefined });
+      say(`Sauvegarde restaurée depuis WebDAV (${r.files} fichiers)`);
+      setTimeout(() => window.location.reload(), 800);
     } catch (e) { say(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(""); }
   };
@@ -2039,6 +2091,49 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
         show("Éteindre", "Éteint la machine hôte (nécessite power_control = true)") && (
           <SetRow key="shutdown" label="Éteindre" desc="Nécessite `power_control = true` dans config.toml">
             <button className="btn ghost sm" disabled={busy === "Éteindre"} onClick={() => power(api.shutdown, "Éteindre")}>Éteindre</button>
+          </SetRow>
+        ),
+      ].filter(Boolean) as React.ReactNode[],
+    },
+    {
+      title: t("Sauvegarde"),
+      rows: [
+        show("Télécharger la sauvegarde", "ZIP : réglages, favoris, épingles, playlists, historique et partages") && (
+          <SetRow key="dl" label="Télécharger la sauvegarde (ZIP)" desc="Réglages + données utilisateur. La bibliothèque n'est pas incluse : elle est reconstruite par un scan.">
+            <button className="btn ghost sm" disabled={busy === "backup"} onClick={downloadBackup}>
+              <Icon name="download" size={16} /> {busy === "backup" ? "…" : "Télécharger (.zip)"}
+            </button>
+          </SetRow>
+        ),
+        show("Restaurer une sauvegarde", "Depuis un fichier ZIP précédemment téléchargé") && (
+          <SetRow key="restore" label="Restaurer une sauvegarde" desc="Remplace réglages, favoris, épingles, playlists, historique et partages — l'interface se recharge ensuite">
+            <input ref={fileRef} type="file" accept=".zip,application/zip" style={{ display: "none" }}
+              onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void restoreFile(f); }} />
+            <button className="btn ghost sm" disabled={busy === "restore"} onClick={() => fileRef.current?.click()}>
+              <Icon name="eject" size={16} /> {busy === "restore" ? "…" : "Choisir un .zip…"}
+            </button>
+          </SetRow>
+        ),
+        show("WebDAV", "Envoyer ou restaurer la sauvegarde sur un serveur WebDAV (Nextcloud, NAS…)") && (
+          <SetRow key="webdav" label="Sauvegarde WebDAV" desc="Envoi : URL du dossier. Restauration : URL complète du fichier .zip. Identifiants facultatifs.">
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+              <input type="text" value={davBase} placeholder="https://nas/dav/auris/ (envoi)" style={{ width: 330 }}
+                onChange={(e) => setDavBase(e.target.value)} />
+              <input type="text" value={davFile} placeholder="https://nas/dav/auris/backup.zip (restauration)" style={{ width: 330 }}
+                onChange={(e) => setDavFile(e.target.value)} />
+              <div style={{ display: "flex", gap: 6 }}>
+                <input type="text" value={davUser} placeholder="utilisateur" style={{ width: 120 }} onChange={(e) => setDavUser(e.target.value)} />
+                <input type="password" value={davPass} placeholder="mot de passe" style={{ width: 140 }} onChange={(e) => setDavPass(e.target.value)} />
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button className="btn ghost sm" disabled={busy === "dav-push" || !davBase.trim()} onClick={pushWebdav}>
+                  <Icon name="server" size={16} /> {busy === "dav-push" ? "…" : "Envoyer"}
+                </button>
+                <button className="btn ghost sm" disabled={busy === "dav-restore" || !davFile.trim()} onClick={restoreWebdav}>
+                  {busy === "dav-restore" ? "…" : "Restaurer"}
+                </button>
+              </div>
+            </div>
           </SetRow>
         ),
       ].filter(Boolean) as React.ReactNode[],

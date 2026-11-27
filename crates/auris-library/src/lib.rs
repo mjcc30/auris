@@ -1207,6 +1207,48 @@ pub fn purge_source(db: &sled::Db, source_id: &str) -> Result<usize> {
 /// HashMap utilitaire pour les reponses API.
 pub type TrackMap = HashMap<String, Track>;
 
+// ---------- sauvegarde / restauration (#40) ----------
+
+impl Library {
+    /// Remplace les favoris (restauration de sauvegarde).
+    pub fn restore_favorites(&self, f: &Favorites) -> Result<()> {
+        self.save_favorites(f)
+    }
+
+    /// Remplace les épingles (restauration de sauvegarde).
+    pub fn restore_pins(&self, p: &Pins) -> Result<()> {
+        self.save_pins(p)
+    }
+
+    /// Remplace l'historique d'écoute (restauration de sauvegarde).
+    pub fn restore_history(&self, h: &[HistoryEntry]) -> Result<()> {
+        self.tree(TREE_HISTORY)
+            .insert(HISTORY_KEY, enc(&h.to_vec())?)
+            .map_err(se)?;
+        Ok(())
+    }
+
+    /// Ajoute/remplace des playlists (restauration de sauvegarde).
+    pub fn restore_playlists(&self, ps: &[Playlist]) -> Result<()> {
+        for p in ps {
+            self.tree(TREE_PLAYLISTS)
+                .insert(p.id.as_bytes(), enc(p)?)
+                .map_err(se)?;
+        }
+        Ok(())
+    }
+
+    /// Ajoute/remplace des liens de partage (restauration de sauvegarde).
+    pub fn restore_shares(&self, ss: &[ShareLink]) -> Result<()> {
+        for s in ss {
+            self.tree(TREE_SHARES)
+                .insert(s.token.as_bytes(), enc(s)?)
+                .map_err(se)?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

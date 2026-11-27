@@ -467,6 +467,33 @@ export interface StorageInfo {
   free_bytes: number;
 }
 
+export interface WebdavTarget {
+  url: string;
+  name?: string;
+  user?: string;
+  password?: string;
+}
+
+export interface BackupRestoreReport {
+  files: number;
+  restored: Record<string, number | boolean>;
+  config_restored: boolean;
+}
+
+export interface BackupPushReport {
+  pushed: string;
+  bytes: number;
+}
+
+async function errMsg(r: Response): Promise<string> {
+  let msg = `HTTP ${r.status}`;
+  try {
+    const j = await r.json();
+    if (j.error) msg = j.error;
+  } catch { /* garde le status */ }
+  return msg;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, init);
   if (!r.ok) {
@@ -603,6 +630,22 @@ export const api = {
     return r.text();
   },
   systemReset: () => req<unknown>("/api/system/reset", post({ confirm: "RESET" })),
+  backup: async (): Promise<Blob> => {
+    const r = await fetch("/api/settings/backup");
+    if (!r.ok) throw new Error(await errMsg(r));
+    return r.blob();
+  },
+  restore: async (file: Blob): Promise<BackupRestoreReport> => {
+    const r = await fetch("/api/settings/restore", {
+      method: "POST",
+      headers: { "Content-Type": "application/zip" },
+      body: file,
+    });
+    if (!r.ok) throw new Error(await errMsg(r));
+    return r.json();
+  },
+  backupWebdav: (p: WebdavTarget) => req<BackupPushReport>("/api/settings/backup/webdav", post(p)),
+  restoreWebdav: (p: WebdavTarget) => req<BackupRestoreReport>("/api/settings/restore/webdav", post(p)),
   reboot: () => req<unknown>("/api/system/reboot", post({})),
   shutdown: () => req<unknown>("/api/system/shutdown", post({})),
   coverUrl: (trackId: string) => `/api/library/cover/${encodeURIComponent(trackId)}`,

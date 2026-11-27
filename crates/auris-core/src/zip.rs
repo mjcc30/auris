@@ -204,6 +204,86 @@ impl Default for ZipWriter {
     }
 }
 
+/// Mini-lecteur ZIP (methode "stored" uniquement, produite par [`ZipWriter`]) :
+/// retourne la liste (nom, contenu) des entrees, avec verification CRC.
+/// Utilise pour la restauration de sauvegarde (#40).
+pub fn read_zip(bytes: &[u8]) -> io::Result<Vec<(String, Vec<u8>)>> {
+    if bytes.len() < 22 {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "zip trop petit"));
+    }
+    // EOCD: on remonte depuis la fin (commentaire max 64 Ko + 22 octets d'EOCD).
+    let scan_from = bytes.len().saturating_sub(22 + 65_536);
+    let mut eocd = None;
+    let mut i = bytes.len() - 22;
+    loop {
+        if u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap()) == SIG_EOCD {
+            eocd = Some(i);
+            break;
+        }
+        if i == scan_from {
+            break;
+        }
+        i -= 1;
+    }
+    let eocd =
+        eocd.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "EOCD introuvable"))?;
+    let count = u16::from_le_bytes(bytes[eocd + 10..eocd + 12].try_into().unwrap()) as usize;
+    let cd_off = u32::from_le_bytes(bytes[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
+    let mut out = Vec::with_capacity(count);
+    let mut p = cd_off;
+    for _ in 0..count {
+        if p + 46 > bytes.len()
+            || u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()) != SIG_CENTRAL
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "central directory corrompue",
+            ));
+        }
+        let method = u16::from_le_bytes(bytes[p + 10..p + 12].try_into().unwrap());
+        let crc = u32::from_le_bytes(bytes[p + 16..p + 20].try_into().unwrap());
+        let size = u32::from_le_bytes(bytes[p + 24..p + 28].try_into().unwrap()) as usize;
+        let nlen = u16::from_le_bytes(bytes[p + 28..p + 30].try_into().unwrap()) as usize;
+        let elen = u16::from_le_bytes(bytes[p + 30..p + 32].try_into().unwrap()) as usize;
+        let local_off = u32::from_le_bytes(bytes[p + 42..p + 46].try_into().unwrap()) as usize;
+        let name = String::from_utf8_lossy(&bytes[p + 46..p + 46 + nlen]).into_owned();
+        if method != METHOD_STORED {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("entree compressee non supportee: {name}"),
+            ));
+        }
+        let l = local_off;
+        if l + 30 > bytes.len()
+            || u32::from_le_bytes(bytes[l..l + 4].try_into().unwrap()) != SIG_LOCAL
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "local header corrompu",
+            ));
+        }
+        let lnlen = u16::from_le_bytes(bytes[l + 26..l + 28].try_into().unwrap()) as usize;
+        let lelen = u16::from_le_bytes(bytes[l + 28..l + 30].try_into().unwrap()) as usize;
+        let data_off = l + 30 + lnlen + lelen;
+        if data_off + size > bytes.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "donnees tronquees",
+            ));
+        }
+        let data = bytes[data_off..data_off + size].to_vec();
+        if crc32(&data) != crc {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("crc invalide pour {name}"),
+            ));
+        }
+        out.push((name, data));
+        p += 46 + nlen + elen;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,48 +303,13 @@ mod tests {
         assert_eq!(sanitize_name("éàü.flac"), "éàü.flac");
     }
 
-    /// Mini-lecteur ZIP (stored uniquement) pour verifier le roundtrip.
-    fn read_zip(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
-        assert!(bytes.len() > 22);
-        let eocd = &bytes[bytes.len() - 22..];
-        assert_eq!(u32::from_le_bytes(eocd[0..4].try_into().unwrap()), SIG_EOCD);
-        let count = u16::from_le_bytes(eocd[10..12].try_into().unwrap()) as usize;
-        let cd_off = u32::from_le_bytes(eocd[16..20].try_into().unwrap()) as usize;
-        let mut out = Vec::new();
-        let mut p = cd_off;
-        for _ in 0..count {
-            assert_eq!(
-                u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap()),
-                SIG_CENTRAL
-            );
-            let crc = u32::from_le_bytes(bytes[p + 16..p + 20].try_into().unwrap());
-            let size = u32::from_le_bytes(bytes[p + 24..p + 28].try_into().unwrap()) as usize;
-            let nlen = u16::from_le_bytes(bytes[p + 28..p + 30].try_into().unwrap()) as usize;
-            let local_off = u32::from_le_bytes(bytes[p + 42..p + 46].try_into().unwrap()) as usize;
-            let name = String::from_utf8(bytes[p + 46..p + 46 + nlen].to_vec()).unwrap();
-            // local header
-            let l = local_off;
-            assert_eq!(
-                u32::from_le_bytes(bytes[l..l + 4].try_into().unwrap()),
-                SIG_LOCAL
-            );
-            let lnlen = u16::from_le_bytes(bytes[l + 26..l + 28].try_into().unwrap()) as usize;
-            let data_off = l + 30 + lnlen;
-            let data = bytes[data_off..data_off + size].to_vec();
-            assert_eq!(crc32(&data), crc, "crc de {name}");
-            out.push((name, data));
-            p += 46 + nlen;
-        }
-        out
-    }
-
     #[test]
     fn zip_roundtrip_fichiers() {
         let mut z = ZipWriter::new();
         z.add_file("album/titre 01.flac", b"RIFF....data");
         z.add_file("album/titre 02.flac", &[0u8; 100_000]);
         let bytes = z.finish();
-        let files = read_zip(&bytes);
+        let files = read_zip(&bytes).unwrap();
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].0, "album/titre 01.flac");
         assert_eq!(files[0].1, b"RIFF....data");
@@ -280,7 +325,7 @@ mod tests {
             .unwrap();
         assert_eq!(n, data.len() as u64);
         let bytes = z.finish();
-        let files = read_zip(&bytes);
+        let files = read_zip(&bytes).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].0, "gros/fichier.dsf");
         assert_eq!(files[0].1, data);
@@ -290,7 +335,7 @@ mod tests {
     fn zip_nom_utf8_avec_accents() {
         let mut z = ZipWriter::new();
         z.add_file("François - Été.flac", b"x");
-        let files = read_zip(&z.finish());
+        let files = read_zip(&z.finish()).unwrap();
         assert_eq!(files[0].0, "François - Été.flac");
     }
 }

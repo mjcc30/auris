@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
 use axum::{
+    body::Bytes,
     extract::{Path, Query, State, WebSocketUpgrade},
     http::{header, StatusCode, Uri},
     response::{IntoResponse, Response},
@@ -20,9 +21,9 @@ use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 
 use auris_core::{
-    lyrics, Alarm, AlarmState, AurisError, BrowseEntry, FavKind, Favorites, LibraryStats,
-    OutputMode, PinKind, Pins, PlayStatus, Playlist, RepeatMode, SearchResults, Settings,
-    ShareKind, ShareLink, Source, Track, WsEvent, ZipWriter,
+    lyrics, read_zip, Alarm, AlarmState, AurisError, BrowseEntry, FavKind, Favorites, HistoryEntry,
+    LibraryStats, OutputMode, PinKind, Pins, PlayStatus, Playlist, RepeatMode, SearchResults,
+    Settings, ShareKind, ShareLink, Source, Track, WsEvent, ZipWriter,
 };
 use auris_library::Library;
 use auris_player::{
@@ -420,6 +421,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/system/shutdown", post(post_shutdown))
         // réglages (menu Réglages façon Volumio Nova)
         .route("/api/settings", get(get_settings).put(put_settings))
+        // sauvegarde / restauration de la configuration (#40)
+        .route("/api/settings/backup", get(get_backup))
+        .route("/api/settings/restore", post(post_restore))
+        .route("/api/settings/backup/webdav", post(post_backup_webdav))
+        .route("/api/settings/restore/webdav", post(post_restore_webdav))
         .route("/api/alarms", get(get_alarms))
         .route("/api/shares", get(get_shares).post(post_share))
         .route("/api/shares/{token}", delete(delete_share))
@@ -1616,6 +1622,234 @@ async fn get_export(
         .map(|n| format!("{n}.zip"))
         .unwrap_or_else(|| zip_download_name(&base));
     Ok(zip_response(bytes, &name))
+}
+
+// ---------- sauvegarde / restauration de la configuration (#40) ----------
+
+#[derive(Deserialize)]
+struct WebdavBody {
+    /// URL de base WebDAV (backup) ou URL complete du fichier (restore).
+    url: String,
+    /// Nom du fichier pour l'envoi WebDAV (defaut: auris-backup-<ts>.zip).
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    user: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
+}
+
+/// Construit le ZIP de sauvegarde : manifest + config.toml + donnees
+/// utilisateur (favoris, epingles, playlists, historique, partages, reglags).
+/// L'index de la bibliotheque (sled `tracks`/`albums`...) n'est PAS inclu :
+/// il est reconstitue par un scan.
+fn build_backup_zip(s: &AppState) -> ApiResult<Vec<u8>> {
+    let jerr = |e: serde_json::Error| AurisError::other(format!("json: {e}"));
+    let mut z = ZipWriter::new();
+    let manifest = serde_json::json!({
+        "app": "auris",
+        "version": env!("CARGO_PKG_VERSION"),
+        "created_at": chrono::Utc::now().timestamp(),
+        "includes": ["config.toml", "favorites", "pins", "playlists", "history", "shares", "settings"],
+    });
+    z.add_file("manifest.json", manifest.to_string().as_bytes());
+    if let Ok(cfg) = std::fs::read(s.data_dir.join("config.toml")) {
+        z.add_file("config.toml", &cfg);
+    }
+    let lib = &s.library;
+    z.add_file(
+        "data/favorites.json",
+        &serde_json::to_vec(&lib.favorites()).map_err(jerr)?,
+    );
+    z.add_file(
+        "data/pins.json",
+        &serde_json::to_vec(&lib.pins()).map_err(jerr)?,
+    );
+    z.add_file(
+        "data/playlists.json",
+        &serde_json::to_vec(&lib.playlists()).map_err(jerr)?,
+    );
+    z.add_file(
+        "data/history.json",
+        &serde_json::to_vec(&lib.history(500)).map_err(jerr)?,
+    );
+    z.add_file(
+        "data/shares.json",
+        &serde_json::to_vec(&lib.shares()).map_err(jerr)?,
+    );
+    let settings = s.settings.read().unwrap_or_else(|e| e.into_inner()).clone();
+    z.add_file(
+        "data/settings.json",
+        &serde_json::to_vec(&settings).map_err(jerr)?,
+    );
+    Ok(z.finish())
+}
+
+/// Restaure un ZIP de sauvegarde produit par [`build_backup_zip`].
+fn restore_from_zip(s: &AppState, bytes: &[u8]) -> ApiResult<Json<serde_json::Value>> {
+    let entries = read_zip(bytes).map_err(|e| AurisError::other(format!("zip illisible: {e}")))?;
+    let n_files = entries.len();
+    let jerr = |e: serde_json::Error| AurisError::other(format!("json: {e}"));
+    let mut restored = serde_json::Map::new();
+    let mut config_restored = false;
+    for (name, data) in &entries {
+        match name.as_str() {
+            "config.toml" => {
+                let dst = s.data_dir.join("config.toml");
+                if dst.exists() {
+                    let _ = std::fs::copy(&dst, s.data_dir.join("config.toml.bak"));
+                }
+                std::fs::write(&dst, data)
+                    .map_err(|e| AurisError::other(format!("ecriture config.toml: {e}")))?;
+                config_restored = true;
+            }
+            "data/favorites.json" => {
+                let f: Favorites = serde_json::from_slice(data).map_err(jerr)?;
+                s.library.restore_favorites(&f)?;
+                restored.insert("favorites".into(), true.into());
+            }
+            "data/pins.json" => {
+                let p: Pins = serde_json::from_slice(data).map_err(jerr)?;
+                s.library.restore_pins(&p)?;
+                restored.insert("pins".into(), true.into());
+            }
+            "data/playlists.json" => {
+                let ps: Vec<Playlist> = serde_json::from_slice(data).map_err(jerr)?;
+                s.library.restore_playlists(&ps)?;
+                restored.insert("playlists".into(), ps.len().into());
+            }
+            "data/history.json" => {
+                let h: Vec<HistoryEntry> = serde_json::from_slice(data).map_err(jerr)?;
+                s.library.restore_history(&h)?;
+                restored.insert("history".into(), h.len().into());
+            }
+            "data/shares.json" => {
+                let ss: Vec<ShareLink> = serde_json::from_slice(data).map_err(jerr)?;
+                s.library.restore_shares(&ss)?;
+                restored.insert("shares".into(), ss.len().into());
+            }
+            "data/settings.json" => {
+                // les reglages sont appliques en memoire ; la persistance
+                // config.toml suivra via le prochain PUT /api/settings.
+                let st: Settings = serde_json::from_slice(data).map_err(jerr)?;
+                *s.settings.write().unwrap_or_else(|e| e.into_inner()) = st;
+                restored.insert("settings".into(), true.into());
+            }
+            _ => {}
+        }
+    }
+    Ok(Json(serde_json::json!({
+        "files": n_files,
+        "restored": restored,
+        "config_restored": config_restored,
+    })))
+}
+
+/// `GET /api/settings/backup` — ZIP telechargeable de la configuration + donnees.
+async fn get_backup(State(s): State<AppState>) -> ApiResult<Response> {
+    let bytes = build_backup_zip(&s)?;
+    let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    Ok(zip_response(bytes, &format!("auris-backup-{ts}.zip")))
+}
+
+/// `POST /api/settings/restore` — body = le ZIP de sauvegarde (application/zip).
+async fn post_restore(
+    State(s): State<AppState>,
+    body: Bytes,
+) -> ApiResult<Json<serde_json::Value>> {
+    if body.is_empty() {
+        return Err(AurisError::other("corps vide (ZIP de sauvegarde attendu)").into());
+    }
+    restore_from_zip(&s, &body)
+}
+
+/// Envoie un ZIP vers un serveur WebDAV (PUT, Basic auth optionnelle).
+fn webdav_put(
+    url: &str,
+    bytes: Vec<u8>,
+    user: &Option<String>,
+    password: &Option<String>,
+) -> Result<(), String> {
+    let mut req = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?
+        .put(url)
+        .body(bytes);
+    if let (Some(u), Some(p)) = (user, password) {
+        req = req.basic_auth(u, Some(p));
+    }
+    let r = req.send().map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        return Err(format!("PUT {url} -> {}", r.status()));
+    }
+    Ok(())
+}
+
+/// Recupere un fichier depuis un serveur WebDAV (GET, Basic auth optionnelle).
+fn webdav_get(
+    url: &str,
+    user: &Option<String>,
+    password: &Option<String>,
+) -> Result<Vec<u8>, String> {
+    let mut req = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?
+        .get(url);
+    if let (Some(u), Some(p)) = (user, password) {
+        req = req.basic_auth(u, Some(p));
+    }
+    let r = req.send().map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        return Err(format!("GET {url} -> {}", r.status()));
+    }
+    r.bytes().map(|b| b.to_vec()).map_err(|e| e.to_string())
+}
+
+/// `POST /api/settings/backup/webdav` — pousse la sauvegarde vers un dossier WebDAV.
+/// Body: `{url: "https://dav.example.com/auris", name?, user?, password?}`.
+async fn post_backup_webdav(
+    State(s): State<AppState>,
+    Json(b): Json<WebdavBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    if b.url.trim().is_empty() {
+        return Err(AurisError::other("url WebDAV vide").into());
+    }
+    let bytes = build_backup_zip(&s)?;
+    let len = bytes.len();
+    let name = b.name.unwrap_or_else(|| {
+        format!(
+            "auris-backup-{}.zip",
+            chrono::Utc::now().format("%Y%m%d-%H%M%S")
+        )
+    });
+    let url = format!("{}/{}", b.url.trim_end_matches('/'), name);
+    let (user, password) = (b.user.clone(), b.password.clone());
+    let pushed = url.clone();
+    tokio::task::spawn_blocking(move || webdav_put(&url, bytes, &user, &password))
+        .await
+        .map_err(|e| AurisError::other(format!("join webdav: {e}")))?
+        .map_err(AurisError::other)?;
+    Ok(Json(serde_json::json!({"pushed": pushed, "bytes": len})))
+}
+
+/// `POST /api/settings/restore/webdav` — telecharge un ZIP depuis WebDAV et restaure.
+/// Body: `{url: "https://dav.example.com/auris/auris-backup-xxx.zip", user?, password?}`.
+async fn post_restore_webdav(
+    State(s): State<AppState>,
+    Json(b): Json<WebdavBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    if b.url.trim().is_empty() {
+        return Err(AurisError::other("url WebDAV vide").into());
+    }
+    let (user, password) = (b.user.clone(), b.password.clone());
+    let url = b.url.clone();
+    let bytes = tokio::task::spawn_blocking(move || webdav_get(&url, &user, &password))
+        .await
+        .map_err(|e| AurisError::other(format!("join webdav: {e}")))?
+        .map_err(AurisError::other)?;
+    restore_from_zip(&s, &bytes)
 }
 
 /// Export ZIP d'un album de la bibliotheque (toutes ses pistes).

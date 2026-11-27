@@ -11,4 +11,4 @@ pub use error::{AurisError, Result};
 pub use model::*;
 pub use schedule::*;
 pub use settings::*;
-pub use zip::ZipWriter;
+pub use zip::{read_zip, ZipWriter};
