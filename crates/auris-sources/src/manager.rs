@@ -64,6 +64,7 @@ impl SourcesManager {
             SourceKind::Upnp { .. } => Ok(Arc::new(crate::upnp::UpnpSource::new(src.clone())?)), // ContentDirectory + lecture http des <res>
             SourceKind::Radio { .. } => Ok(Arc::new(RadioSource::new(src.clone())?)),
             SourceKind::Qobuz { .. } => Ok(Arc::new(crate::qobuz::QobuzSource::new(src.clone())?)),
+            SourceKind::Tidal { .. } => Ok(Arc::new(crate::tidal::TidalSource::new(src.clone())?)),
         }
     }
 

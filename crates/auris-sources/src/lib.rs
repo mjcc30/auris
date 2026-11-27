@@ -8,6 +8,7 @@ pub mod manager;
 pub mod qobuz;
 pub mod radio;
 pub mod smb;
+pub mod tidal;
 pub mod transfer;
 pub mod upnp;
 pub mod usb;

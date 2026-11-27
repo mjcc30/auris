@@ -382,7 +382,7 @@ export interface MusicBrainzInfo {
 export function makeSource(
   id: string,
   name: string,
-  kind: "local" | "usb" | "smb" | "http" | "radio" | "upnp" | "qobuz",
+  kind: "local" | "usb" | "smb" | "http" | "radio" | "upnp" | "qobuz" | "tidal",
   fields: Record<string, unknown>,
 ): Source {
   return { id, name, enabled: true, kind, ...fields };

@@ -249,10 +249,29 @@ pub enum SourceKind {
         #[serde(default)]
         api_base: Option<String>,
     },
+    /// Tidal (API v1 + token bearer de session perso) — #25.
+    Tidal {
+        /// Token bearer de la session Tidal (JWT du lecteur web / app).
+        token: String,
+        /// Session id (cookie `sid`) — requis par `playbackinfopostpaywall`.
+        #[serde(default)]
+        session_id: Option<String>,
+        /// Qualité demandée : « lossless » (16 bits / 44,1 kHz) ou
+        /// « hires » (HI_RES_LOSSLESS : FLAC 24 bits, MQA…).
+        #[serde(default = "default_tidal_quality")]
+        quality: String,
+        /// Base API (surcharge facultative, ex. miroir de test).
+        #[serde(default)]
+        api_base: Option<String>,
+    },
 }
 
 fn default_qobuz_quality() -> String {
     "hires".to_string()
+}
+
+fn default_tidal_quality() -> String {
+    "lossless".to_string()
 }
 
 impl SourceKind {

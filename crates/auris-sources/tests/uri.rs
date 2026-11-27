@@ -17,7 +17,10 @@ fn src_uri_roundtrip() {
 #[test]
 fn src_uri_invalides() {
     assert!(parse_src_uri("src://").is_none());
-    assert!(parse_src_uri("src://onlyid").is_none());
+    // `src://onlyid` (sans slash) = racine de la source, chemin vide — valide.
+    let (id, path) = parse_src_uri("src://onlyid").unwrap();
+    assert_eq!(id, "onlyid");
+    assert_eq!(path, "");
     assert!(parse_src_uri("http://x/y.flac").is_none());
     assert!(parse_src_uri("file:///tmp/x").is_none());
 }

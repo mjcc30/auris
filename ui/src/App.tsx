@@ -6,7 +6,7 @@ import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
 
 type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "favorites" | "sources" | "multiroom" | "plugins" | "settings" | "display";
-type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp" | "qobuz";
+type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp" | "qobuz" | "tidal";
 /** Onglets du panneau lecture en cours (style Volumio: Pochette / Infos / Paroles). */
 type NpTab = "cover" | "infos" | "lyrics";
 
@@ -18,6 +18,7 @@ function kindIconName(kind: string): string {
     case "radio": return "radio";
     case "http": return "link";
     case "qobuz": return "note";
+    case "tidal": return "note";
     default: return "folder";
   }
 }
@@ -30,6 +31,7 @@ function kindLabel(kind: string): string {
     case "radio": return "Radio";
     case "http": return "HTTP";
     case "qobuz": return "Qobuz";
+    case "tidal": return "Tidal";
     default: return "Dossier local";
   }
 }
@@ -1959,6 +1961,7 @@ function Sources({ sources, refresh, say }: { sources: Source[]; refresh: () => 
       case "radio": case "http": return String(r.url ?? r.base_url ?? "");
       case "upnp": return String(r.url ?? "");
       case "qobuz": return `${String(r.user ?? "")} · ${String(r.quality ?? "hires")}`;
+      case "tidal": return `session · ${String(r.quality ?? "lossless")}`;
       default: return "";
     }
   };
@@ -2004,6 +2007,8 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
   const [basePath, setBasePath] = useState(String((editing as Record<string, unknown> | null)?.base_path ?? ""));
   const [url, setUrl] = useState(String((editing as Record<string, unknown> | null)?.url ?? (editing as Record<string, unknown> | null)?.base_url ?? ""));
   const [quality, setQuality] = useState(String((editing as Record<string, unknown> | null)?.quality ?? "hires"));
+  const [token, setToken] = useState("");
+  const [sessionId, setSessionId] = useState(String((editing as Record<string, unknown> | null)?.session_id ?? ""));
   const [mounts, setMounts] = useState<MountInfo[]>([]);
   const [detecting, setDetecting] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -2026,6 +2031,7 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
       case "http": return makeSource(id, name.trim(), "http", { base_url: url.trim() || null });
       case "upnp": return url.trim() ? makeSource(id, name.trim(), "upnp", { url: url.trim() }) : null;
       case "qobuz": return user.trim() && password ? makeSource(id, name.trim(), "qobuz", { user: user.trim(), password, quality }) : null;
+      case "tidal": return token.trim() ? makeSource(id, name.trim(), "tidal", { token: token.trim(), session_id: sessionId.trim() || null, quality: quality === "hires" ? "hires" : "lossless" }) : null;
     }
   };
 
@@ -2050,7 +2056,7 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
     finally { setDetecting(false); }
   };
 
-  const kinds: [SourceKindTab, string][] = [["local", "Dossier local"], ["usb", "USB"], ["smb", "NAS (SMB/CIFS)"], ["radio", "Radio"], ["http", "URL HTTP"], ["upnp", "UPnP/DLNA"], ["qobuz", "Qobuz"]];
+  const kinds: [SourceKindTab, string][] = [["local", "Dossier local"], ["usb", "USB"], ["smb", "NAS (SMB/CIFS)"], ["radio", "Radio"], ["http", "URL HTTP"], ["upnp", "UPnP/DLNA"], ["qobuz", "Qobuz"], ["tidal", "Tidal"]];
 
   return (
     <div className="modal-bg" onClick={onClose}>
@@ -2118,6 +2124,19 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
                 </select>
               </label>
               <div className="span2 meta">La lecture passe par l'API Qobuz avec votre compte ; les pistes sont résolues en URL signée à la lecture. La navigation (favoris, playlists, recherche) est disponible dans « Parcourir ».</div>
+            </>
+          )}
+          {tab === "tidal" && (
+            <>
+              <label className="span2">Token bearer de session (JWT — inspecteur réseau du lecteur web Tidal, requête `api.tidal.com`, en-tête `Authorization: Bearer …`)<input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="eyJ…" autoComplete="new-password" /></label>
+              <label>Session id (cookie `sid` du navigateur, facultatif si absent du token)<input type="text" value={sessionId} onChange={(e) => setSessionId(e.target.value)} placeholder="xxxxxxxx-xxxx-…" /></label>
+              <label>Qualité de lecture
+                <select value={quality} onChange={(e) => setQuality(e.target.value)}>
+                  <option value="lossless">Lossless (16 bits / 44,1 kHz)</option>
+                  <option value="hires">Hi-Res lossless (FLAC 24 bits, MQA)</option>
+                </select>
+              </label>
+              <div className="span2 meta">La lecture passe par l'API v1 Tidal (`playbackinfopostpaywall`, manifest non chiffré) ; les pistes sont résolues en URL de flux à la lecture. Favoris, playlists et recherche dans « Parcourir ».</div>
             </>
           )}
         </div>
