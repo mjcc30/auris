@@ -73,6 +73,7 @@ impl SourcesManager {
             SourceKind::Jamendo { .. } => {
                 Ok(Arc::new(crate::jamendo::JamendoSource::new(src.clone())?))
             } // #86
+            SourceKind::Youtube => Ok(Arc::new(crate::youtube::YoutubeSource::new(src.clone())?)), // #87
         }
     }
 

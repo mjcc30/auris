@@ -282,6 +282,9 @@ pub enum SourceKind {
         #[serde(default)]
         client_id: Option<String>,
     },
+    /// YouTube — recherche et lecture audio via `yt-dlp` (binaire externe,
+    /// `AURIS_YTDLP` ou PATH). Sans compte Google pour le contenu public — #87.
+    Youtube,
 }
 
 fn default_qobuz_quality() -> String {

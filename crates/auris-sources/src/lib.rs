@@ -16,6 +16,7 @@ pub mod tidal;
 pub mod transfer;
 pub mod upnp;
 pub mod usb;
+pub mod youtube;
 
 pub use live::{open_live, radio_title, LiveStream};
 pub use manager::SourcesManager;

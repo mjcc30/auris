@@ -102,7 +102,15 @@ ouverts ou des intégrations communautaires avec compte utilisateur :
   recherche + populaires du mois ; sans `client_id` la source reste désactivée
   avec un message clair. Ajoutée désactivée par défaut, onglet « Jamendo (CC) »
   dans le formulaire de source.
-- API socket.io Volumio v1.7.4 (#45) : en backlog.
+- **Source YouTube via yt-dlp** (#87) `kind = "youtube"` : tendances + recherche
+  `ytsearch:` + lecture audio `bestaudio`, sans compte Google (contenu public).
+  Binaire `yt-dlp` résolu via `AURIS_YTDLP` puis le PATH ; message clair s'il
+  manque. Auto-ajoutée activée ; installée par `install.sh` sur Linux.
+- **API socket.io Volumio v1.7.4** (#45) : compat Engine.IO v3 EIO=3 (polling +
+  websocket) — getState/getQueue/play/seek/setVolume/repeat/shuffle/queue… et push
+  `pushState`/`pushQueue` ; vérifiée en live.
+- À part : **plugin YouTube Music (compte Google + cookies)** dans un repo plugin
+  séparé (catégorie `source`, manifeste `auris-plugin.toml`) — voir issue dédiée.
 
 ## Au-delà (idées, non planifiées)
 

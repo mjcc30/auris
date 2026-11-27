@@ -50,6 +50,13 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
   apt-get update -qq && apt-get install -y -qq ffmpeg
 fi
 
+# --- yt-dlp (source YouTube : recherche + lecture audio, #87) ------------------
+if ! command -v yt-dlp >/dev/null 2>&1; then
+  log "Installation de yt-dlp (source YouTube)…"
+  curl -fsSL -o "$INSTALL_DIR/yt-dlp" https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_$([ "$asset_arch" = "aarch64-unknown-linux-gnu" ] && echo aarch64 || echo x86_64)
+  chmod 755 "$INSTALL_DIR/yt-dlp"
+fi
+
 # --- Utilisateur dédié + répertoires ------------------------------------------
 if ! id "$USER_NAME" >/dev/null 2>&1; then
   log "Création de l'utilisateur système $USER_NAME…"

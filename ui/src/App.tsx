@@ -6,7 +6,7 @@ import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
 
 type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "favorites" | "sources" | "multiroom" | "plugins" | "settings" | "display";
-type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp" | "qobuz" | "tidal" | "linein" | "archive" | "deezer" | "jamendo";
+type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp" | "qobuz" | "tidal" | "linein" | "archive" | "deezer" | "jamendo" | "youtube";
 /** Onglets du panneau lecture en cours (style Volumio: Pochette / Infos / Paroles). */
 type NpTab = "cover" | "infos" | "lyrics";
 
@@ -23,6 +23,7 @@ function kindIconName(kind: string): string {
     case "archive": return "globe";
     case "deezer": return "note";
     case "jamendo": return "globe";
+    case "youtube": return "play";
     default: return "folder";
   }
 }
@@ -40,6 +41,7 @@ function kindLabel(kind: string): string {
     case "archive": return "Internet Archive";
     case "deezer": return "Deezer (extraits 30 s)";
     case "jamendo": return "Jamendo (Creative Commons)";
+    case "youtube": return "YouTube (yt-dlp)";
     default: return "Dossier local";
   }
 }
@@ -2239,6 +2241,7 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
       case "archive": return makeSource(id, name.trim(), "archive", {});
       case "deezer": return makeSource(id, name.trim(), "deezer", {});
       case "jamendo": return makeSource(id, name.trim(), "jamendo", { client_id: clientId.trim() || null });
+      case "youtube": return makeSource(id, name.trim(), "youtube", {});
     }
   };
 
@@ -2263,7 +2266,7 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
     finally { setDetecting(false); }
   };
 
-  const kinds: [SourceKindTab, string][] = [["local", "Dossier local"], ["usb", "USB"], ["smb", "NAS (SMB/CIFS)"], ["radio", "Radio"], ["http", "URL HTTP"], ["upnp", "UPnP/DLNA"], ["qobuz", "Qobuz"], ["tidal", "Tidal"], ["linein", "Line-in"], ["archive", "Internet Archive"], ["deezer", "Deezer (30 s)"], ["jamendo", "Jamendo (CC)"]];
+  const kinds: [SourceKindTab, string][] = [["local", "Dossier local"], ["usb", "USB"], ["smb", "NAS (SMB/CIFS)"], ["radio", "Radio"], ["http", "URL HTTP"], ["upnp", "UPnP/DLNA"], ["qobuz", "Qobuz"], ["tidal", "Tidal"], ["linein", "Line-in"], ["archive", "Internet Archive"], ["deezer", "Deezer (30 s)"], ["jamendo", "Jamendo (CC)"], ["youtube", "YouTube (yt-dlp)"]];
 
   useEffect(() => {
     if (tab === "linein") api.inputDevices().then(setInDevices).catch(() => {});
@@ -2331,6 +2334,9 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
               <div className="span2 meta">Musique Creative Commons (Jamendo) — lecture complète, sans compte. Inscrivez-vous gratuitement sur developer.jamendo.com pour obtenir un client_id.</div>
               <label className="span2">client_id Jamendo<input type="text" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="votre client_id (developer.jamendo.com)" /></label>
             </>
+          )}
+          {tab === "youtube" && (
+            <div className="span2 meta">Recherche YouTube et lecture audio (bestaudio) via le binaire <code>yt-dlp</code> (env <code>AURIS_YTDLP</code> ou PATH) — contenu public sans compte Google.</div>
           )}
           {tab === "upnp" && (
             <label className="span2">URL de description du serveur UPnP/DLNA (ex. http://192.168.1.10:8200/desc.xml) — utile si la découverte SSDP est bloquée<input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://…/desc.xml" /></label>
