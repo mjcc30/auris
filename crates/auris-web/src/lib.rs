@@ -43,6 +43,7 @@ mod radios;
 pub mod ripcd;
 pub mod socketio;
 pub mod spotify;
+mod volumio_v1;
 
 pub use multiroom::{peer_id, MultiroomHub};
 
@@ -216,7 +217,7 @@ type ApiResult<T> = Result<T, ApiError>;
 /// sonde de pochette embarquée...) sur le pool de threads bloquants de tokio
 /// au lieu d'un worker async : l'UI web reste réactive pendant le parcours
 /// des dossiers, même sur une source SMB lente.
-async fn offload_io<T, F>(f: F) -> ApiResult<T>
+pub(crate) async fn offload_io<T, F>(f: F) -> ApiResult<T>
 where
     T: Send + 'static,
     F: FnOnce() -> auris_core::Result<T> + Send + 'static,
@@ -552,6 +553,8 @@ pub fn router(state: AppState) -> Router {
 
     Router::new()
         .merge(api)
+        // compatibilité REST v1 façon Volumio (clients tiers) — #76
+        .merge(volumio_v1::router())
         .route("/", get(index_html))
         .route("/{*path}", get(static_asset))
         .layer(CorsLayer::permissive())
