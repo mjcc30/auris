@@ -109,6 +109,12 @@ pub trait SourceBackend: Send + Sync {
     async fn size(&self, _rel_path: &str) -> Result<Option<u64>> {
         Ok(None)
     }
+    /// `stat` direct d'un chemin relatif (ex. object_id UPnP, où le listage
+    /// du parent + match par nom ne suffit pas). `Ok(None)` = non supporté,
+    /// le manager retombe sur le listage du parent.
+    async fn stat(&self, _rel_path: &str) -> Result<Option<BrowseEntry>> {
+        Ok(None)
+    }
 
     // ---------- ecriture (import / copie vers la source) ----------
 

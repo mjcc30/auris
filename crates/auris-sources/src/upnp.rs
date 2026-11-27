@@ -3,11 +3,15 @@
 //! passent ensuite par la source HTTP (l'URI du <res>).
 
 use std::net::UdpSocket;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use auris_core::{AurisError, BrowseEntry, Result};
+use async_trait::async_trait;
+use auris_core::{AurisError, BrowseEntry, Result, Source, SourceKind};
 
+use crate::http::HttpSource;
 use crate::http_raw::{http_get, http_post, Url};
+use crate::{SeekRead, SourceBackend};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct UpnpDevice {
@@ -213,16 +217,18 @@ fn xml_unescape(s: &str) -> String {
         .replace("&amp;", "&")
 }
 
-/// Browse le ContentDirectory. `object_id` = "0" (racine), "0/3", ...
-pub fn browse(dev: &UpnpDevice, object_id: &str) -> Result<Vec<BrowseEntry>> {
+/// Appel SOAP `Browse` du ContentDirectory. Retourne le DIDL (XML desentry),
+/// déjà unescapé. `browse_flag` = "BrowseDirectChildren" ou "BrowseMetadata".
+pub fn soap_browse(dev: &UpnpDevice, object_id: &str, browse_flag: &str) -> Result<String> {
     let body = format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
 <s:Body><u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
-<ObjectID>{}</ObjectID><BrowseFlag>BrowseDirectChildren</BrowseFlag><Filter>*</Filter>
+<ObjectID>{}</ObjectID><BrowseFlag>{}</BrowseFlag><Filter>*</Filter>
 <StartingIndex>0</StartingIndex><RequestedCount>0</RequestedCount><SortCriteria></SortCriteria>
 </u:Browse></s:Body></s:Envelope>"#,
-        escape_xml(object_id)
+        escape_xml(object_id),
+        browse_flag
     );
     let resp = http_post(
         &dev.content_directory_control,
@@ -239,8 +245,76 @@ pub fn browse(dev: &UpnpDevice, object_id: &str) -> Result<Vec<BrowseEntry>> {
     }
     let text = String::from_utf8_lossy(&resp.body).to_string();
     let result = tag_content(&text, "Result").unwrap_or_default();
-    let didl = xml_unescape(&result);
-    parse_didl(dev, &didl)
+    Ok(xml_unescape(&result))
+}
+
+/// Browse le ContentDirectory. `object_id` = "0" (racine), "0/3", ...
+/// Les containers recoivent un URI `upnp://<location>/<object_id>` ; les items
+/// l'URL HTTP de leur <res>.
+pub fn browse(dev: &UpnpDevice, object_id: &str) -> Result<Vec<BrowseEntry>> {
+    let didl = soap_browse(dev, object_id, "BrowseDirectChildren")?;
+    parse_didl(&format!("upnp://{}", dev.location), &dev.base_url, &didl)
+}
+
+/// `stat` d'un objet UPnP via BrowseMetadata (l'objet lui-meme, pas ses enfants).
+/// Les containers recoivent un URI `upnp://<location>/<object_id>` ; les items
+/// l'URL HTTP de leur <res>.
+pub fn stat(dev: &UpnpDevice, object_id: &str) -> Result<BrowseEntry> {
+    stat_with_prefix(&format!("upnp://{}", dev.location), dev, object_id)
+}
+
+/// Variante de [`stat`] avec un prefixe d'URI personnalise (ex. `src://<id>`
+/// pour une source UPnP configurée manuellement).
+pub fn stat_with_prefix(
+    uri_prefix: &str,
+    dev: &UpnpDevice,
+    object_id: &str,
+) -> Result<BrowseEntry> {
+    let didl = soap_browse(dev, object_id, "BrowseMetadata")?;
+    let prefix = uri_prefix.trim_end_matches('/');
+    if let Some((attrs, _)) = tag_blocks(&didl, "container").into_iter().next() {
+        let id = attr(&attrs, "id").unwrap_or("0").to_string();
+        let block = find_block(&didl, "container", &attrs).unwrap_or("");
+        let title = tag_content(block, "dc:title").unwrap_or_else(|| "Sans titre".into());
+        return Ok(BrowseEntry {
+            name: title,
+            uri: format!("{prefix}/{id}"),
+            is_dir: true,
+            size: None,
+            format: None,
+            is_audio: false,
+        });
+    }
+    if let Some((attrs, _)) = tag_blocks(&didl, "item").into_iter().next() {
+        let block = find_block(&didl, "item", &attrs).unwrap_or("");
+        let title = tag_content(block, "dc:title").unwrap_or_else(|| "Sans titre".into());
+        let class = tag_content(block, "upnp:class").unwrap_or_default();
+        let res = tag_blocks(block, "res").into_iter().next();
+        let (url, size) = match res {
+            Some((rattrs, rcontent)) => (
+                absolutize(&dev.base_url, rcontent.trim()),
+                attr(&rattrs, "size").and_then(|s| s.parse::<u64>().ok()),
+            ),
+            None => (String::new(), None),
+        };
+        if url.is_empty() {
+            return Err(AurisError::InvalidUri(format!(
+                "objet UPnP sans <res>: {object_id}"
+            )));
+        }
+        let is_audio = class.contains("audioItem") || class.contains("musicTrack");
+        return Ok(BrowseEntry {
+            name: title,
+            uri: url,
+            is_dir: false,
+            size,
+            format: None,
+            is_audio,
+        });
+    }
+    Err(AurisError::InvalidUri(format!(
+        "objet UPnP introuvable: {object_id}"
+    )))
 }
 
 fn escape_xml(s: &str) -> String {
@@ -249,8 +323,12 @@ fn escape_xml(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
-fn parse_didl(dev: &UpnpDevice, didl: &str) -> Result<Vec<BrowseEntry>> {
+/// Parse un DIDL en entrees de parcours. `uri_prefix` sert a construire l'URI
+/// des containers (`upnp://<location>` ou `src://<source_id>`) ; les items
+/// prennent l'URL absolue de leur <res> (via `base_url`).
+fn parse_didl(uri_prefix: &str, base_url: &str, didl: &str) -> Result<Vec<BrowseEntry>> {
     let mut out = Vec::new();
+    let prefix = uri_prefix.trim_end_matches('/');
     // containers = dossiers
     for (attrs, _content) in tag_blocks(didl, "container") {
         let id = attr(&attrs, "id").unwrap_or("0").to_string();
@@ -261,7 +339,7 @@ fn parse_didl(dev: &UpnpDevice, didl: &str) -> Result<Vec<BrowseEntry>> {
             .unwrap_or_else(|| "Sans titre".into());
         out.push(BrowseEntry {
             name: title,
-            uri: format!("upnp://{}/{}", dev.location, id),
+            uri: format!("{prefix}/{id}"),
             is_dir: true,
             size: None,
             format: None,
@@ -273,10 +351,11 @@ fn parse_didl(dev: &UpnpDevice, didl: &str) -> Result<Vec<BrowseEntry>> {
         let block = find_block(didl, "item", &attrs);
         let block = block.unwrap_or("");
         let title = tag_content(block, "dc:title").unwrap_or_else(|| "Sans titre".into());
+        let class = tag_content(block, "upnp:class").unwrap_or_default();
         let res = tag_blocks(block, "res").into_iter().next();
         let (url, size) = match res {
             Some((rattrs, rcontent)) => (
-                absolutize(&dev.base_url, rcontent.trim()),
+                absolutize(base_url, rcontent.trim()),
                 attr(&rattrs, "size").and_then(|s| s.parse::<u64>().ok()),
             ),
             None => (String::new(), None),
@@ -284,13 +363,15 @@ fn parse_didl(dev: &UpnpDevice, didl: &str) -> Result<Vec<BrowseEntry>> {
         if url.is_empty() {
             continue;
         }
+        let is_audio =
+            class.contains("audioItem") || class.contains("musicTrack") || class.is_empty();
         out.push(BrowseEntry {
             name: title,
             uri: url,
             is_dir: false,
             size,
             format: None,
-            is_audio: true,
+            is_audio,
         });
         let _ = id;
     }
@@ -338,4 +419,128 @@ pub fn parse_upnp_uri(uri: &str) -> Option<(String, String)> {
     };
     let (loc, id) = rest.split_at(cut);
     Some((loc.to_string(), id[1..].to_string()))
+}
+
+/// Backend d'une source UPnP configurée manuellement (`kind = "upnp"`,
+/// `url` = URL du document de description du serveur). Utile quand la
+/// découverte SSDP est bloquée (multicast filtré) : on branche l'URL à la main.
+///
+/// Le listage navigue dans le ContentDirectory avec l'object_id comme chemin
+/// relatif (`src://<id>/0/3/...`) ; la lecture des items passe par l'URL HTTP
+/// de leur <res> (seekable, via HttpSource).
+pub struct UpnpSource {
+    source: Source,
+    url: String,
+    http: HttpSource,
+    dev: Mutex<Option<UpnpDevice>>,
+}
+
+impl UpnpSource {
+    pub fn new(source: Source) -> Result<Self> {
+        let url = match &source.kind {
+            SourceKind::Upnp { url } => url.clone(),
+            _ => {
+                return Err(AurisError::other(
+                    "UpnpSource attend une source kind=upnp".to_string(),
+                ))
+            }
+        };
+        if url.trim().is_empty() {
+            return Err(AurisError::other(
+                "source upnp: url de description vide".to_string(),
+            ));
+        }
+        let http_src = Source {
+            id: "__upnp_http__".into(),
+            name: "HTTP direct".into(),
+            kind: SourceKind::Http { base_url: None },
+            enabled: true,
+        };
+        Ok(UpnpSource {
+            source,
+            url,
+            http: HttpSource::new(http_src)?,
+            dev: Mutex::new(None),
+        })
+    }
+
+    /// Device UPnP (mis en cache ; re-téléchargé si le cache est vide).
+    fn device(&self) -> Result<UpnpDevice> {
+        if let Some(d) = &*self.dev.lock().unwrap() {
+            return Ok(d.clone());
+        }
+        self.refresh()
+    }
+
+    /// Re-télécharge le document de description et remet le cache à jour.
+    pub fn refresh(&self) -> Result<UpnpDevice> {
+        let d = fetch_device(self.url.trim())?;
+        *self.dev.lock().unwrap() = Some(d.clone());
+        Ok(d)
+    }
+
+    fn object_id(rel_path: &str) -> &str {
+        let t = rel_path.trim_matches('/');
+        if t.is_empty() {
+            "0"
+        } else {
+            t
+        }
+    }
+}
+
+#[async_trait]
+impl SourceBackend for UpnpSource {
+    fn source(&self) -> &Source {
+        &self.source
+    }
+
+    async fn list(&self, rel_path: &str) -> Result<Vec<BrowseEntry>> {
+        let dev = self.device()?;
+        let didl = soap_browse(&dev, Self::object_id(rel_path), "BrowseDirectChildren")?;
+        parse_didl(&format!("src://{}/", self.source.id), &dev.base_url, &didl)
+    }
+
+    async fn open(&self, rel_path: &str) -> Result<Box<dyn SeekRead>> {
+        let dev = self.device()?;
+        let entry = stat_with_prefix(
+            &format!("src://{}/", self.source.id),
+            &dev,
+            Self::object_id(rel_path),
+        )?;
+        if entry.is_dir {
+            return Err(AurisError::other(format!(
+                "UPnP: « {} » est un dossier",
+                entry.name
+            )));
+        }
+        let f = self.http.open_url(&entry.uri)?;
+        if f.size() == 0 {
+            return Err(AurisError::other(format!(
+                "UPnP: taille inconnue pour {}",
+                entry.uri
+            )));
+        }
+        Ok(Box::new(f))
+    }
+
+    async fn size(&self, rel_path: &str) -> Result<Option<u64>> {
+        let dev = self.device()?;
+        let entry = stat_with_prefix(
+            &format!("src://{}/", self.source.id),
+            &dev,
+            Self::object_id(rel_path),
+        )?;
+        Ok(entry.size)
+    }
+
+    async fn stat(&self, rel_path: &str) -> Result<Option<BrowseEntry>> {
+        let dev = self.device()?;
+        let entry = stat_with_prefix(
+            &format!("src://{}/", self.source.id),
+            &dev,
+            Self::object_id(rel_path),
+        )?;
+        Ok(Some(entry))
+    }
 }

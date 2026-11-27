@@ -14,10 +14,15 @@ use crate::transfer::{copy_uri, join_rel, CopyReport};
 use crate::upnp::{self, UpnpDevice};
 use crate::{resolve_uri, SeekRead, SourceBackend, UriRef};
 
+/// Durée de validité du cache de découverte SSDP (évite un M-SEARCH à chaque
+/// navigation dans un dossier UPnP).
+const UPNP_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub struct SourcesManager {
     sources: RwLock<Vec<Source>>,
     backends: RwLock<HashMap<String, Arc<dyn SourceBackend>>>,
     http: Arc<HttpSource>,
+    upnp_cache: std::sync::Mutex<Option<(std::time::Instant, Vec<UpnpDevice>)>>,
 }
 
 impl SourcesManager {
@@ -33,6 +38,7 @@ impl SourcesManager {
             sources: RwLock::new(Vec::new()),
             backends: RwLock::new(HashMap::new()),
             http,
+            upnp_cache: std::sync::Mutex::new(None),
         };
         // Un config historique peut contenir des doublons d'id: la dernière occurrence gagne.
         let mut dedup: Vec<Source> = Vec::new();
@@ -55,7 +61,7 @@ impl SourcesManager {
             SourceKind::Usb { .. } => Ok(Arc::new(UsbSource::new(src.clone())?)),
             SourceKind::Smb { .. } => Ok(Arc::new(SmbSource::new(src.clone())?)),
             SourceKind::Http { .. } => Ok(Arc::new(HttpSource::new(src.clone())?)),
-            SourceKind::Upnp { .. } => Ok(Arc::new(HttpSource::new(src.clone())?)), // UPnP = browse + lecture http
+            SourceKind::Upnp { .. } => Ok(Arc::new(crate::upnp::UpnpSource::new(src.clone())?)), // ContentDirectory + lecture http des <res>
             SourceKind::Radio { .. } => Ok(Arc::new(RadioSource::new(src.clone())?)),
         }
     }
@@ -181,21 +187,48 @@ impl SourcesManager {
         }
     }
 
-    /// Decouverte UPnP des serveurs multimedia du LAN.
+    /// Decouverte UPnP des serveurs multimedia du LAN, mise en cache
+    /// ([`UPNP_CACHE_TTL`]) pour ne pas relancer un M-SEARCH à chaque browse.
     pub fn discover_upnp(&self) -> Vec<UpnpDevice> {
-        upnp::discover(std::time::Duration::from_secs(2))
+        {
+            let cache = self.upnp_cache.lock().unwrap();
+            if let Some((t, devs)) = &*cache {
+                if t.elapsed() < UPNP_CACHE_TTL {
+                    return devs.clone();
+                }
+            }
+        }
+        self.refresh_upnp()
     }
 
-    /// Browse UPnP: uri = upnp://<location>/<object_id>.
-    /// Les object_id UPnP contiennent des '/': on apparie d'abord par prefixe
-    /// sur la location des devices découverts (source de vérité), puis repli
-    /// sur parse_upnp_uri.
-    pub fn browse_upnp(&self, uri: &str) -> Result<Vec<BrowseEntry>> {
-        let devs = upnp::discover(std::time::Duration::from_millis(500));
-        for dev in &devs {
-            let prefix = format!("upnp://{}/", dev.location);
-            if let Some(object_id) = uri.strip_prefix(&prefix) {
-                return upnp::browse(dev, object_id);
+    /// Force une nouvelle découverte SSDP et met le cache à jour.
+    pub fn refresh_upnp(&self) -> Vec<UpnpDevice> {
+        let devs = upnp::discover(std::time::Duration::from_secs(2));
+        *self.upnp_cache.lock().unwrap() = Some((std::time::Instant::now(), devs.clone()));
+        devs
+    }
+
+    /// Retrouve le device et l'object_id d'un URI `upnp://<location>[/<object_id>]`.
+    /// Les object_id UPnP contiennent des '/': on apparie par prefixe sur la
+    /// location des devices découverts (source de vérité), puis repli sur
+    /// parse_upnp_uri. Si aucun device n'est en cache, une découverte forcée
+    /// est tentée une fois.
+    fn resolve_upnp_uri(&self, uri: &str) -> Result<(UpnpDevice, String)> {
+        let mut devs = self.discover_upnp();
+        for attempt in 0..2 {
+            for dev in &devs {
+                let root = format!("upnp://{}", dev.location);
+                if uri == root {
+                    return Ok((dev.clone(), "0".to_string()));
+                }
+                if let Some(object_id) = uri.strip_prefix(&format!("{}/", root)) {
+                    return Ok((dev.clone(), object_id.to_string()));
+                }
+            }
+            if attempt == 0 && devs.is_empty() {
+                devs = self.refresh_upnp();
+            } else {
+                break;
             }
         }
         let (loc, object_id) =
@@ -203,22 +236,34 @@ impl SourcesManager {
         let dev = devs
             .into_iter()
             .find(|d| d.location == loc)
-            .or_else(|| {
-                upnp::discover(std::time::Duration::from_secs(2))
-                    .into_iter()
-                    .find(|d| d.location == loc)
-            })
             .ok_or_else(|| AurisError::Network(format!("serveur UPnP introuvable: {loc}")))?;
+        Ok((dev, object_id))
+    }
+
+    /// Browse UPnP: uri = upnp://<location>/<object_id> ("0" = racine).
+    pub fn browse_upnp(&self, uri: &str) -> Result<Vec<BrowseEntry>> {
+        let (dev, object_id) = self.resolve_upnp_uri(uri)?;
         upnp::browse(&dev, &object_id)
+    }
+
+    /// `stat` d'un URI UPnP (BrowseMetadata sur l'objet lui-même).
+    pub fn stat_upnp(&self, uri: &str) -> Result<BrowseEntry> {
+        let (dev, object_id) = self.resolve_upnp_uri(uri)?;
+        upnp::stat(&dev, &object_id)
     }
 
     pub fn http_source(&self) -> Arc<HttpSource> {
         self.http.clone()
     }
 
-    /// `stat` d'un URI `src://id/chemin`: retrouve l'entree en listant le parent.
-    /// La racine ("" ) est un dossier virtuel nomme d'apres la source.
+    /// `stat` d'un URI (`src://id/chemin` ou `upnp://<location>/<object_id>`).
+    /// Pour `src://`, retrouve l'entree en listant le parent ; la racine ("")
+    /// est un dossier virtuel nomme d'apres la source. Pour `upnp://`,
+    /// BrowseMetadata sur l'objet lui-même.
     pub async fn stat(&self, uri: &str) -> Result<BrowseEntry> {
+        if uri.starts_with("upnp://") {
+            return self.stat_upnp(uri);
+        }
         let (source_id, path) =
             crate::parse_src_uri(uri).ok_or_else(|| AurisError::InvalidUri(uri.into()))?;
         let src = self
@@ -234,6 +279,14 @@ impl SourcesManager {
                 format: None,
                 is_audio: false,
             });
+        }
+        // Le backend peut statuer directement (ex. object_id UPnP) ; sinon
+        // repli sur le listage du parent + match par nom.
+        let backend = self.backend(&source_id);
+        if let Some(b) = &backend {
+            if let Some(entry) = b.stat(rel).await? {
+                return Ok(entry);
+            }
         }
         let (dir, name) = match rel.rsplit_once('/') {
             Some((d, n)) => (d.to_string(), n.to_string()),

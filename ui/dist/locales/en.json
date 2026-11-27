@@ -155,5 +155,10 @@
   "Radios locales ({code})": "Local radios ({code})",
   "pays : {code}": "country: {code}",
   "votre pays": "your country",
-  "Pays indétectable depuis le navigateur — utilisez « Par pays ».": "Country not detected from the browser — use “By country”."
+  "Pays indétectable depuis le navigateur — utilisez « Par pays ».": "Country not detected from the browser — use “By country”.",
+  "Serveurs UPnP": "UPnP servers",
+  "Actualiser la découverte UPnP (SSDP)": "Refresh UPnP discovery (SSDP)",
+  "Aucun serveur UPnP détecté — bouton actualiser, ou ajoutez une URL UPnP dans Sources.": "No UPnP server found — try refresh, or add a UPnP URL in Sources.",
+  "Découverte UPnP en cours…": "Discovering UPnP servers…",
+  "UPnP/DLNA": "UPnP/DLNA"
 }

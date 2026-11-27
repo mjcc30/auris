@@ -148,6 +148,14 @@ export interface BrowseEntry {
   is_audio: boolean;
 }
 
+/** Serveur UPnP/DLNA découvert par SSDP (miroir du backend Rust `UpnpDevice`). */
+export interface UpnpDevice {
+  friendly_name: string;
+  location: string;
+  base_url: string;
+  content_directory_control: string;
+}
+
 export interface MountInfo {
   label: string;
   path: string;
@@ -619,6 +627,8 @@ export const api = {
     req<DirStation[]>(`/api/radios/dir/stations?kind=${encodeURIComponent(kind)}&value=${encodeURIComponent(value)}&limit=${limit}`),
   browseTree: (uri: string) => req<BrowseEntry[]>(`/api/browse/tree?uri=${encodeURIComponent(uri)}`),
   usbDevices: () => req<MountInfo[]>("/api/usb/devices"),
+  /** Découverte SSDP des serveurs UPnP/DLNA du LAN (cache 30 s côté serveur). */
+  upnpDiscover: (force?: boolean) => req<UpnpDevice[]>(`/api/upnp/discover${force ? "?force=true" : ""}`),
   copy: (from: string, to: string) => req<CopyReport>("/api/transfer/copy", post({ from, to })),
   exportUrl: (uri: string, name?: string) =>
     `/api/export?uri=${encodeURIComponent(uri)}${name ? `&name=${encodeURIComponent(name)}` : ""}`,

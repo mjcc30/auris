@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
 
 type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "favorites" | "sources" | "settings";
-type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http";
+type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp";
 /** Onglets du panneau lecture en cours (style Volumio: Pochette / Infos / Paroles). */
 type NpTab = "cover" | "infos" | "lyrics";
 
@@ -14,7 +14,7 @@ function kindIconName(kind: string): string {
   switch (kind) {
     case "usb": return "usb";
     case "smb": return "server";
-    case "upnp": return "radio";
+    case "upnp": return "server";
     case "radio": return "radio";
     case "http": return "link";
     default: return "folder";
@@ -109,6 +109,9 @@ export default function App() {
   const [, setLocaleTick] = useState(0);
   const [alarms, setAlarms] = useState<AlarmsInfo | null>(null);
   const [browseSrc, setBrowseSrc] = useState<string | null>(null);
+  // Serveurs UPnP/DLNA découverts sur le LAN (#11) — chargés en arrière-plan.
+  const [upnpDevs, setUpnpDevs] = useState<UpnpDevice[]>([]);
+  const [upnpScanning, setUpnpScanning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [searchNonce, setSearchNonce] = useState(0);
   const [searchQ, setSearchQ] = useState("");
@@ -143,8 +146,17 @@ export default function App() {
     } catch { /* backend indisponible pour l'instant */ }
   }, []);
 
+  // Découverte SSDP UPnP en arrière-plan (ne bloque pas le premier rendu) — #11.
+  const scanUpnp = useCallback(async (force = false) => {
+    setUpnpScanning(true);
+    try { setUpnpDevs(await api.upnpDiscover(force)); }
+    catch { /* SSDP indisponible : la section reste vide */ }
+    finally { setUpnpScanning(false); }
+  }, []);
+
   useEffect(() => {
     refresh();
+    scanUpnp();
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
     // Les événements « state » (horloge de position toutes les 500 ms) mettent à jour
     // l'état directement sans requêtes HTTP ; seuls les autres événements rechargent tout.
@@ -160,7 +172,7 @@ export default function App() {
     };
     const iv = setInterval(refresh, 10000);
     return () => { ws.close(); clearInterval(iv); };
-  }, [refresh, say]);
+  }, [refresh, say, scanUpnp]);
 
   // Applique l'apparence (thème, accent, fond) au document à chaque changement.
   const appearance = settings?.appearance;
@@ -253,6 +265,8 @@ export default function App() {
     });
   }, [act]);
   const openSource = (id: string) => { setBrowseSrc(id); setView("browse"); };
+  // Ouvre un serveur UPnP découvert à la racine de son ContentDirectory — #11.
+  const openUpnp = (location: string) => { setBrowseSrc(`upnp://${location}/0`); setView("browse"); };
   const globalSearch = () => { if (searchQ.trim()) { setSearchNonce((n) => n + 1); setView("library"); } };
   const refreshDevices = useCallback(async () => {
     try { setDevices(await api.devices()); } catch { /* inchangé si erreur */ }
@@ -261,7 +275,7 @@ export default function App() {
   return (
     <div className="app">
       <div className="main">
-        <Sidebar view={view} setView={setView} sources={sources} browseSrc={browseSrc} openSource={openSource} system={system} stats={stats} />
+        <Sidebar view={view} setView={setView} sources={sources} browseSrc={browseSrc} openSource={openSource} system={system} stats={stats} upnpDevs={upnpDevs} upnpScanning={upnpScanning} onScanUpnp={() => scanUpnp(true)} onOpenUpnp={openUpnp} />
         <main className="content">
           <div className="topbar">
             <div className="topbar-title">{view === "home" ? t("Accueil") : view === "library" ? t("Bibliothèque") : view === "browse" ? t("Parcourir") : view === "radios" ? t("Radios") : view === "queue" ? t("File d'attente") : view === "playlists" ? t("Listes de lecture") : view === "favorites" ? t("Favoris") : view === "sources" ? t("Sources") : t("Réglages")}</div>
@@ -288,7 +302,7 @@ export default function App() {
               openAlbum={(a) => { setPendingAlbum(a); setPendingArtist(null); setView("library"); }}
               openArtist={(a) => { setPendingArtist(a); setPendingAlbum(null); setView("library"); }} />
           )}
-          {view === "browse" && <Browse sources={sources} src={browseSrc} playUri={playUri} act={act} say={say} />}
+          {view === "browse" && <Browse sources={sources} src={browseSrc} upnpDevs={upnpDevs} playUri={playUri} act={act} say={say} />}
           {view === "radios" && <Radios state={state} act={act} say={say} pins={pins} onTogglePin={togglePin} />}
           {view === "queue" && <Queue state={state} act={act} say={say} playAll={playAll} />}
           {view === "playlists" && <Playlists act={act} say={say} playAll={playAll} playTrack={playTrack} pins={pins} onTogglePin={togglePin} />}
@@ -315,10 +329,11 @@ export default function App() {
   );
 }
 
-function Sidebar({ view, setView, sources, browseSrc, openSource, system, stats }: {
+function Sidebar({ view, setView, sources, browseSrc, openSource, system, stats, upnpDevs, upnpScanning, onScanUpnp, onOpenUpnp }: {
   view: View; setView: (v: View) => void; sources: Source[];
   browseSrc: string | null; openSource: (id: string) => void; system: SystemInfo | null;
-  stats: LibraryStats | null;
+  stats: LibraryStats | null; upnpDevs: UpnpDevice[]; upnpScanning: boolean;
+  onScanUpnp: () => void; onOpenUpnp: (location: string) => void;
 }) {
   const nav: [View, string, string][] = [
     ["home", t("Accueil"), "home"],
@@ -348,6 +363,25 @@ function Sidebar({ view, setView, sources, browseSrc, openSource, system, stats 
             <span className={`dot ${s.enabled ? "on" : ""}`} />
           </div>
         ))}
+      </div>
+      <div className="sep" />
+      <div className="sources-label">
+        {t("Serveurs UPnP")}
+        <button className="icon-btn" title={t("Actualiser la découverte UPnP (SSDP)")} disabled={upnpScanning} onClick={onScanUpnp}>
+          <Icon name="refresh" size={14} />
+        </button>
+      </div>
+      <div className="sources-list">
+        {upnpDevs.map((d) => (
+          <div key={d.location} className={`src-item ${view === "browse" && browseSrc?.startsWith(`upnp://${d.location}`) ? "active" : ""}`}
+            title={d.location} onClick={() => onOpenUpnp(d.location)}>
+            <span className="src-name"><Icon name="server" size={18} /> {d.friendly_name}</span>
+          </div>
+        ))}
+        {!upnpScanning && upnpDevs.length === 0 && (
+          <div className="src-empty">{t("Aucun serveur UPnP détecté — bouton actualiser, ou ajoutez une URL UPnP dans Sources.")}</div>
+        )}
+        {upnpScanning && <div className="src-empty">{t("Découverte UPnP en cours…")}</div>}
       </div>
       {system && (
         <div className="sysinfo">
@@ -1037,8 +1071,12 @@ function CoverImg({ uri, icon, size = 44 }: { uri: string; icon: string; size?: 
   return <img src={`/api/browse/cover?uri=${encodeURIComponent(uri)}`} alt="" loading="lazy" onError={() => setErr(true)} />;
 }
 
-function Browse({ sources, src, playUri, act, say }: { sources: Source[]; src: string | null; playUri: (u: string) => void; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void }) {
-  const [path, setPath] = useState<string[]>([]);
+/// Un segment de chemin de parcours : on navigue par URI (les object_id UPnP
+/// contiennent des '/', on ne peut pas reconstruire l'URI depuis les noms).
+type BrowseSeg = { name: string; uri: string };
+
+function Browse({ sources, src, upnpDevs, playUri, act, say }: { sources: Source[]; src: string | null; upnpDevs: UpnpDevice[]; playUri: (u: string) => void; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void }) {
+  const [path, setPath] = useState<BrowseSeg[]>([]);
   const [entries, setEntries] = useState<BrowseEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [grid, setGrid] = useState(true);
@@ -1047,24 +1085,28 @@ function Browse({ sources, src, playUri, act, say }: { sources: Source[]; src: s
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [copyTarget, setCopyTarget] = useState<BrowseEntry | null>(null);
   const id = src ?? sources[0]?.id ?? null;
+  // Racine « upnp://<location>/0 » (serveur découvert, #11) ou source configurée.
+  const isUpnp = !!id && id.startsWith("upnp://");
+  const rootUri = id ? (isUpnp ? id : `src://${id}/`) : null;
+  const curUri = path.length > 0 ? path[path.length - 1].uri : rootUri ?? "";
 
   useEffect(() => { setPath([]); }, [id]);
   useEffect(() => {
-    if (!id) return;
-    const uri = `src://${id}/${path.join("/")}`;
+    if (!rootUri) return;
     setLoading(true);
-    api.browse(uri).then(setEntries).catch((e) => say(e instanceof Error ? e.message : String(e))).finally(() => setLoading(false));
+    api.browse(curUri).then(setEntries).catch((e) => say(e instanceof Error ? e.message : String(e))).finally(() => setLoading(false));
     setMenu(null);
     setMenuSub(null);
-  }, [id, path, say]);
+  }, [id, curUri, say]);
 
-  if (!id) return <div className="empty">Aucune source configurée — ajoutez-en une dans « Sources &amp; réglages ».</div>;
+  if (!id || !rootUri) return <div className="empty">Aucune source configurée — ajoutez-en une dans « Sources &amp; réglages ».</div>;
   const source = sources.find((s) => s.id === id);
-  const curUri = `src://${id}/${path.join("/")}`;
+  const upnpDev = upnpDevs.find((d) => id.startsWith(`upnp://${d.location}`));
+  const rootName = source?.name ?? upnpDev?.friendly_name ?? t("UPnP/DLNA");
 
   // Un clic simple ouvre un dossier ou lance un fichier audio (plus de double clic).
   const openEntry = (e: BrowseEntry) => {
-    if (e.is_dir) setPath([...path, e.name]);
+    if (e.is_dir) setPath([...path, { name: e.name, uri: e.uri }]);
     else if (e.is_audio) playUri(e.uri);
   };
 
@@ -1113,7 +1155,7 @@ function Browse({ sources, src, playUri, act, say }: { sources: Source[]; src: s
           {path.map((p, i) => (
             <span key={i}>
               <span className="crumb-sep">/</span>
-              <button className="crumb-btn" onClick={() => setPath(path.slice(0, i + 1))}>{p}</button>
+              <button className="crumb-btn" onClick={() => setPath(path.slice(0, i + 1))}>{p.name}</button>
             </span>
           ))}
         </div>
@@ -1125,7 +1167,7 @@ function Browse({ sources, src, playUri, act, say }: { sources: Source[]; src: s
           <button className={`seg-btn icon ${!grid ? "active" : ""}`} onClick={() => setGrid(false)} title="Liste"><Icon name="list" size={16} /></button>
         </div>
       </div>
-      <h1><Icon name={kindIconName(source?.kind ?? "local")} size={28} /> {source?.name ?? id}{path.length > 0 && <span className="crumb-sep"> — {path.join(" / ")}</span>}</h1>
+      <h1><Icon name={source ? kindIconName(source.kind) : "server"} size={28} /> {rootName}{path.length > 0 && <span className="crumb-sep"> — {path.map((p) => p.name).join(" / ")}</span>}</h1>
       {loading && <div className="empty">Chargement…</div>}
       {!loading && grid && (
         <div className="grid">
@@ -1173,9 +1215,13 @@ function Browse({ sources, src, playUri, act, say }: { sources: Source[]; src: s
                 <div className="ctx-item" onClick={() => { act(() => api.queueAdd(menu.entry.uri), "Ajouté à la file d'attente"); closeMenu(); }}><Icon name="plus" size={16} /> Ajouter à la file d'attente</div>
                 <div className="ctx-item" onClick={() => { act(async () => { await api.clearQueue(); await api.play(menu.entry.uri); }, "File vidée, lecture lancée"); closeMenu(); }}><Icon name="queue" size={16} /> Vider la file et lire</div>
                 <div className="ctx-item" onClick={() => openPlaylistsSub(menu.entry)}><Icon name="playlist" size={16} /> Ajouter à une playlist…</div>
-                <div className="ctx-item" onClick={() => { act(async () => { await api.scan(id); }, "Mise à jour du dossier lancée"); closeMenu(); }}><Icon name="refresh" size={16} /> Mettre à jour le dossier</div>
-                <div className="ctx-item" onClick={() => { window.location.href = api.exportUrl(menu.entry.uri, menu.entry.name.replace(/\.[^.]+$/, "")); closeMenu(); }}><Icon name="download" size={16} /> Télécharger (ZIP)</div>
-                <div className="ctx-item" onClick={() => { setCopyTarget(menu.entry); closeMenu(); }}><Icon name="copy" size={16} /> Copier vers une autre source…</div>
+                {!isUpnp && (
+                  <>
+                    <div className="ctx-item" onClick={() => { act(async () => { await api.scan(id); }, "Mise à jour du dossier lancée"); closeMenu(); }}><Icon name="refresh" size={16} /> Mettre à jour le dossier</div>
+                    <div className="ctx-item" onClick={() => { window.location.href = api.exportUrl(menu.entry.uri, menu.entry.name.replace(/\.[^.]+$/, "")); closeMenu(); }}><Icon name="download" size={16} /> Télécharger (ZIP)</div>
+                    <div className="ctx-item" onClick={() => { setCopyTarget(menu.entry); closeMenu(); }}><Icon name="copy" size={16} /> Copier vers une autre source…</div>
+                  </>
+                )}
               </>
             )}
           </div>
@@ -1654,6 +1700,7 @@ function Sources({ sources, refresh, say }: { sources: Source[]; refresh: () => 
       case "local": case "usb": return String(r.path ?? "");
       case "smb": return `smb://${r.host}/${r.share}${r.base_path ? `/${r.base_path}` : ""}`;
       case "radio": case "http": return String(r.url ?? r.base_url ?? "");
+      case "upnp": return String(r.url ?? "");
       default: return "";
     }
   };
@@ -1718,6 +1765,7 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
       case "smb": return host.trim() && share.trim() ? makeSource(id, name.trim(), "smb", { host: host.trim(), share: share.trim(), user: user.trim(), password, base_path: basePath.trim() }) : null;
       case "radio": return url.trim() ? makeSource(id, name.trim(), "radio", { url: url.trim() }) : null;
       case "http": return makeSource(id, name.trim(), "http", { base_url: url.trim() || null });
+      case "upnp": return url.trim() ? makeSource(id, name.trim(), "upnp", { url: url.trim() }) : null;
     }
   };
 
@@ -1742,7 +1790,7 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
     finally { setDetecting(false); }
   };
 
-  const kinds: [SourceKindTab, string][] = [["local", "Dossier local"], ["usb", "USB"], ["smb", "NAS (SMB/CIFS)"], ["radio", "Radio"], ["http", "URL HTTP"]];
+  const kinds: [SourceKindTab, string][] = [["local", "Dossier local"], ["usb", "USB"], ["smb", "NAS (SMB/CIFS)"], ["radio", "Radio"], ["http", "URL HTTP"], ["upnp", "UPnP/DLNA"]];
 
   return (
     <div className="modal-bg" onClick={onClose}>
@@ -1794,6 +1842,9 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
           )}
           {(tab === "radio" || tab === "http") && (
             <label className="span2">URL{tab === "http" ? " (m3u/m3u8 ou fichier direct, facultatif)" : " du flux"}<input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" /></label>
+          )}
+          {tab === "upnp" && (
+            <label className="span2">URL de description du serveur UPnP/DLNA (ex. http://192.168.1.10:8200/desc.xml) — utile si la découverte SSDP est bloquée<input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://…/desc.xml" /></label>
           )}
         </div>
 

@@ -302,6 +302,17 @@ impl Source {
             enabled: true,
         }
     }
+
+    /// Serveur UPnP/DLNA branché manuellement par l'URL de sa description
+    /// (utile quand la découverte SSDP/multicast est bloquée).
+    pub fn new_upnp(name: &str, url: &str) -> Self {
+        Source {
+            id: Uuid::new_v4().to_string(),
+            name: name.into(),
+            kind: SourceKind::Upnp { url: url.into() },
+            enabled: true,
+        }
+    }
 }
 
 /// Une liste de lecture (file d'attente enregistree).

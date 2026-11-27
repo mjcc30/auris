@@ -1539,8 +1539,22 @@ async fn get_browse_cover(State(s): State<AppState>, Query(q): Query<BrowseQuery
     }
 }
 
-async fn get_upnp_discover(State(s): State<AppState>) -> Json<serde_json::Value> {
-    let devs = s.sources.discover_upnp();
+#[derive(serde::Deserialize)]
+struct UpnpDiscoverQuery {
+    force: Option<bool>,
+}
+
+async fn get_upnp_discover(
+    State(s): State<AppState>,
+    Query(q): Query<UpnpDiscoverQuery>,
+) -> Json<serde_json::Value> {
+    // force=1 : nouvelle découverte SSDP (bouton « actualiser » de l'UI) ;
+    // sinon le cache du manager (TTL 30 s) est utilisé.
+    let devs = if q.force.unwrap_or(false) {
+        s.sources.refresh_upnp()
+    } else {
+        s.sources.discover_upnp()
+    };
     Json(serde_json::to_value(devs).unwrap_or_default())
 }
 

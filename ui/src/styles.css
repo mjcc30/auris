@@ -95,7 +95,8 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-w
 .nav-item.active { background: rgba(255, 255, 255, 0.1); color: var(--text); }
 .nav-item.active svg { color: var(--accent); }
 .sep { height: 1px; background: var(--border); margin: 10px 12px; }
-.sources-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); padding: 8px 12px 6px; }
+.sources-label { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); padding: 8px 12px 6px; }
+.src-empty { padding: 4px 12px 8px; font-size: 12px; color: var(--text-dim); opacity: 0.7; }
 .sources-list { display: flex; flex-direction: column; gap: 2px; }
 .src-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-radius: 6px; cursor: pointer; color: var(--text-dim); font-size: 14px; transition: background 150ms var(--ease), color 150ms var(--ease); }
 .src-item:hover { background: rgba(255, 255, 255, 0.06); color: var(--text); }
