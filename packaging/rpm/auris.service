@@ -1,0 +1,18 @@
+[Unit]
+Description=Auris — lecteur audiophile (style Volumio)
+Documentation=https://auris.audio
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=auris
+Group=auris
+ExecStart=/usr/local/bin/auris serve --data-dir /var/lib/auris
+Restart=on-failure
+RestartSec=5
+AmbientCapabilities=CAP_SYS_NICE
+Nice=-10
+
+[Install]
+WantedBy=multi-user.target

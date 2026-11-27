@@ -31,6 +31,7 @@ nav:
       - Roadmap: ROADMAP.md
   - Développeurs:
       - API REST + WebSocket: API.md
+      - Packaging & distribution: PACKAGING.md
       - Charte graphique: CHARTE_GRAPHIQUE.md
       - Plugins communautaires: PLUGIN_SYSTEM.md
       - Kanban: BOARD.md

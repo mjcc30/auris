@@ -9,9 +9,56 @@ curl -fsSL https://raw.githubusercontent.com/mjcc30/auris/main/install.sh | sudo
 
 Le script installe le binaire `aarch64` dans `/usr/local/bin/auris`, crée
 l'utilisateur `auris`, le data-dir `/var/lib/auris` et l'unité systemd
-`auris.service` (démarrage auto au boot).
+`auris.service` (démarrage auto au boot). Désinstallation : `sudo bash uninstall.sh`.
 
-## Linux / macOS / Windows
+## Paquet .deb (Debian / Ubuntu / Raspberry Pi OS)
+
+```bash
+V=v0.8.0   # dernière version sur https://github.com/mjcc30/auris/releases
+curl -fsSLO "https://github.com/mjcc30/auris/releases/download/$V/auris_${V#v}-1_amd64.deb"   # ou _arm64.deb
+sudo apt install ./auris_*-1_amd64.deb
+# le service auris.service est activé et démarré automatiquement
+```
+
+Vérifiez l'intégrité avec le fichier `.sha256` publié à côté du paquet.
+Suppression : `sudo apt purge auris`.
+
+## Paquet .rpm (Fedora / RHEL / openSUSE)
+
+```bash
+V=v0.8.0
+curl -fsSLO "https://github.com/mjcc30/auris/releases/download/$V/auris-${V#v}-1.x86_64.rpm"  # ou .aarch64.rpm
+sudo dnf install ./auris-*-1.x86_64.rpm
+```
+
+## Homebrew (macOS Apple Silicon)
+
+```bash
+brew tap mjcc30/auris
+brew install auris
+brew services start auris    # service launchd, http://localhost:3000
+```
+
+## winget (Windows 10/11)
+
+```powershell
+winget install mjcc30.Auris
+auris serve --port 3000    # ou via le menu Démarrer
+```
+
+## Image disque prête à flasher
+
+Depuis les [releases](https://github.com/mjcc30/auris/releases), téléchargez :
+
+- `auris-pc-vX.Y.Z.img.xz` — PC x86_64 (Debian stable embarquée, bootable BIOS/UEFI)
+- `auris-rpi-vX.Y.Z.img.xz` — Raspberry Pi 4/5 (Raspberry Pi OS Lite arm64, ssh actif au premier boot)
+
+```bash
+xz -dkc auris-rpi-vX.Y.Z.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+# ou flashez directement le .img avec Raspberry Pi Imager
+```
+
+## Binaires seuls (Linux / macOS / Windows)
 
 Téléchargez l'asset de votre plateforme dans les
 [releases](https://github.com/mjcc30/auris/releases) :

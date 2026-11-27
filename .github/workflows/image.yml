@@ -1,0 +1,73 @@
+name: Images disque
+
+# Construit les images prêtes à flasher (voir packaging/image/build-image.sh) :
+#   - auris-pc-<ver>.img.xz   : PC x86_64 (Debian stable + Auris, bootable)
+#   - auris-rpi-<ver>.img.xz  : Raspberry Pi 4/5 (Raspberry Pi OS Lite arm64 + Auris)
+# Déclenchement manuel (bouton "Run workflow", input version) ou hebdo (lundi 03:00 UTC).
+# Les .img.xz sont publiés comme artefacts du workflow et, si la release existe,
+# attachés à la release GitHub correspondante.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Tag de la release à embarquer (ex: v0.8.0, ou latest)"
+        required: true
+        default: "latest"
+  schedule:
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  image:
+    name: Image ${{ matrix.type }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - type: pc
+            deps: debootstrap parted dosfstools xz-utils
+          - type: rpi
+            deps: qemu-user-static kpartx parted xz-utils
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: dépendances
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.deps }} curl ca-certificates
+      - name: résout la version
+        id: ver
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          v="${INPUT_VERSION:-latest}"
+          if [ "$v" = "latest" ]; then
+            v="$(curl -fsSL -H 'User-Agent: auris-image' \
+              https://api.github.com/repos/mjcc30/auris/releases/latest \
+              | grep -o '"tag_name":[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: construit l'image
+        run: sudo ./packaging/image/build-image.sh ${{ matrix.type }} ${{ steps.ver.outputs.version }}
+      - name: compresse
+        run: |
+          img="auris-${{ matrix.type }}-${{ steps.ver.outputs.version }}.img"
+          xz -T0 -k -9 "$img"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: auris-${{ matrix.type }}-${{ steps.ver.outputs.version }}
+          path: |
+            auris-${{ matrix.type }}-${{ steps.ver.outputs.version }}.img.xz
+            auris-${{ matrix.type }}-${{ steps.ver.outputs.version }}.img.sha256
+      - name: attache à la release GitHub
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          files: |
+            auris-${{ matrix.type }}-${{ steps.ver.outputs.version }}.img.xz
+            auris-${{ matrix.type }}-${{ steps.ver.outputs.version }}.img.sha256

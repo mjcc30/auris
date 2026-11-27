@@ -1,0 +1,54 @@
+# Manifeste winget pour Auris — à soumettre à microsoft/winget-pkgs :
+#   1. forker microsoft/winget-pkgs, créer la branche `mjcc30.Auris-<version>`
+#   2. copier ce fichier dans manifests/m/mjcc30/Auris/<version>/mjcc30.Auris.yaml
+#   3. `winget validate --manifest <chemin>` puis ouvrir la PR.
+# `packaging/winget/update-manifest.py vX.Y.Z` régénère version/URL/sha256 à chaque
+# release (le sha256 est celui de l'asset x86_64-pc-windows-msvc.zip).
+PackageIdentifier: mjcc30.Auris
+PackageVersion: 0.8.0
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0
+
+PackageName: Auris
+Publisher: mjcc30
+PublisherUrl: https://github.com/mjcc30
+PublisherSupportUrl: https://github.com/mjcc30/auris/issues
+PrivacyUrl: https://auris.audio
+License: AGPL-3.0-only
+LicenseUrl: https://github.com/mjcc30/auris/blob/main/LICENSE
+ShortDescription: Lecteur audiophile style Volumio (gapless, DSD/DoP, radios web, multiroom)
+Description: >-
+  Auris est un lecteur audiophile open source (AGPL-3.0) en un seul binaire Rust :
+  bibliothèque musicale indexée, lecture gapless et crossfade, DSD jusqu'au DSD256
+  en DoP, radios internet, sources NAS/UPnP/YouTube/Jamendo, multiroom, plugins
+  communautaires. L'interface web embarquée s'ouvre sur http://localhost:3000/.
+  Le service Windows (auris serve) tourne en arrière-plan.
+Tags:
+  - musique
+  - audio
+  - lecteur
+  - hifi
+  - music
+  - audio
+  - player
+Moniker: auris
+
+Installers:
+  - Architecture: x64
+    InstallerType: zip
+    InstallerUrl: https://github.com/mjcc30/auris/releases/download/v0.8.0/auris-x86_64-pc-windows-msvc.zip
+    InstallerSha256: b257860b318790ccb5ceceeeaadb6823466b6515a86c8fa6cbde29cb7003b02a
+    Scope: machine
+    InstallModes:
+      - interactive
+      - silent
+      - silentWithProgress
+    Commands:
+      - auris
+    PortableCommandAlias: auris
+
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress

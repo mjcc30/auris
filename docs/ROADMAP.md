@@ -123,11 +123,20 @@ Livré dans cette beta :
   DSP interne si l'instance est injoignable. UI : carte « CamillaDSP » dans
   Réglages (mode, URL ws, capture, sélecteur de profil, statut) + étage DSP dans
   le Signal Path. API : `/api/camilla/status|profile|refresh`.
+- **Packaging clé en main complet** (#12) : `install.sh`/`uninstall.sh` (RPi + systemd),
+  paquets `.deb` (amd64/arm64) et `.rpm` (x86_64/aarch64) publiés à chaque release avec
+  `checksums.txt` et `.sha256`, signature GPG optionnelle (secrets), formule Homebrew
+  (`packaging/brew/auris.rb` + tap `mjcc30/homebrew-auris`), manifeste winget
+  (`packaging/winget/mjcc30.Auris.yaml` → PR `microsoft/winget-pkgs`), scripts de mise à
+  jour auto (`update-formula.py`, `update-manifest.py`, `update-spec.py`), lint
+  `packaging/lint.py` en CI. Pipeline images disque prête (#46) : `packaging/image/build-image.sh`
+  + workflow `image.yml` (PC x86_64 Debian bootable, RPi arm64 Raspberry Pi OS Lite, artefacts
+  `.img.xz` attachés à la release) — build CI à valider sur une vraie exécution.
 - À part : **plugin YouTube Music (compte Google + cookies)** dans un repo plugin
   séparé (catégorie `source`, manifeste `auris-plugin.toml`) — voir issue dédiée.
 
-Reste du backlog embarqué dans cette beta (milestone v0.9.0) : #12/#46 packaging
-(install.sh + paquets/images), #24 Spotify Connect, #25 Tidal & Qobuz, #28 Cast
+Reste du backlog embarqué dans cette beta (milestone v0.9.0) : #46 images disque
+(artefact à produire/valider), #24 Spotify Connect, #25 Tidal & Qobuz, #28 Cast
 (Chromecast/AirPlay), #34 sortie Bluetooth, #42 affichage HDMI, #43 GPIO/IR,
 #44 Ethernet+Wi-Fi, #83 éditorial Qobuz, #88 plugin YT Music.
 

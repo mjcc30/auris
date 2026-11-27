@@ -82,7 +82,9 @@ jobs:
           fi
       - name: checksum
         shell: bash
-        run: sha256sum ${{ matrix.asset }} >> checksums.txt
+        # Nom de fichier unique par target : sinon le merge-multiple du job
+        # release écraserait tous les checksums.txt dans un seul fichier.
+        run: sha256sum ${{ matrix.asset }} > "checksums-${{ matrix.target }}.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
@@ -90,7 +92,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: checksums-${{ matrix.target }}
-          path: checksums.txt
+          path: checksums-${{ matrix.target }}.txt
 
   deb:
     name: Package .deb (${{ matrix.arch }})
@@ -210,9 +212,53 @@ jobs:
             auris_*.deb
             auris_*.deb.sha256
 
+  rpm:
+    name: Package .rpm (${{ matrix.arch }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-unknown-linux-gnu
+          - arch: aarch64
+            target: aarch64-unknown-linux-gnu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: auris-${{ matrix.target }}.tar.gz
+          path: pkg
+      - name: construit le .rpm
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          V="${VERSION#v}"
+          sudo apt-get update
+          sudo apt-get install -y rpm
+          top="$HOME/rpmbuild"
+          mkdir -p "$top"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          cp pkg/*.tar.gz "$top/SOURCES/auris-$V.tar.gz"
+          cp packaging/rpm/auris.service "$top/SOURCES/"
+          python3 packaging/rpm/update-spec.py "$VERSION"
+          cp packaging/rpm/auris.spec "$top/SPECS/"
+          rpmbuild -bb --define "_topdir $top" "$top/SPECS/auris.spec"
+          out="$top/RPMS/${{ matrix.arch }}/auris-$V-1.${{ matrix.arch }}.rpm"
+          cp "$out" .
+          sha256sum "$(basename "$out")" > "$(basename "$out").sha256"
+          echo "built $(basename "$out")"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm-${{ matrix.arch }}
+          path: |
+            auris_*.rpm
+            auris_*.rpm.sha256
+
   release:
     name: Publie la release GitHub
-    needs: [build, deb]
+    needs: [build, deb, rpm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -228,11 +274,32 @@ jobs:
           merge-multiple: true
       - uses: actions/download-artifact@v4
         with:
+          path: artifacts
+          pattern: rpm-*
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
           path: checksums
           pattern: checksums-*
           merge-multiple: true
       - name: concat checksums
         run: cat checksums/* > artifacts/checksums.txt
+      # Signature GPG des paquets (.deb/.rpm) quand la clé est fournie via
+      # les secrets du dépôt (GPG_PRIVATE_KEY + GPG_PASSPHRASE). Sans secret,
+      # les paquets sont publiés non signés.
+      - name: signe les paquets (si clé GPG disponible)
+        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y gnupg
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          for f in artifacts/*.deb artifacts/*.rpm; do
+            [ -f "$f" ] || continue
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+              --detach-sign --armor "$f"
+          done
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
