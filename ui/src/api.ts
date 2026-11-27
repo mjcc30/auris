@@ -492,6 +492,24 @@ export interface NetInterface {
   tx_bytes: number;
 }
 
+/** Plugin communautaire installé (#8 — docs/PLUGIN_SYSTEM.md). */
+export interface PluginInfo {
+  id: string;
+  name: string;
+  version: string;
+  category: string;
+  authors: string[];
+  license: string;
+  homepage: string | null;
+  description: string | null;
+  min_auris: string | null;
+  dir: string;
+  bin: string | null;
+  enabled: boolean;
+  running: boolean;
+  last_error?: string | null;
+}
+
 /** Pair Auris découvert sur le LAN (multiroom #23). */
 export interface PeerInfo {
   id: string;
@@ -716,6 +734,14 @@ export const api = {
   netInterfaces: () => req<NetInterface[]>("/api/network/interfaces"),
   netInterfaceAction: (name: string, action: "up" | "down") =>
     req<NetInterface[]>("/api/network/interfaces", post({ name, action })),
+  plugins: () => req<PluginInfo[]>("/api/plugins"),
+  pluginInstall: (path: string) => req<PluginInfo>("/api/plugins/install", post({ path })),
+  pluginEnable: (id: string) => req<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/enable`, post({})),
+  pluginDisable: (id: string) => req<PluginInfo>(`/api/plugins/${encodeURIComponent(id)}/disable`, post({})),
+  pluginUninstall: (id: string) => req<{ uninstalled: string }>(`/api/plugins/${encodeURIComponent(id)}`, del()),
+  pluginCall: (id: string, method: string, params: unknown) =>
+    req<unknown>(`/api/plugins/${encodeURIComponent(id)}/call`, post({ method, params: params ?? {} })),
+  pluginTest: (id: string) => req<unknown>(`/api/plugins/${encodeURIComponent(id)}/test`, post({})),
   packs: () => req<Packs>("/api/packs"),
   alarms: () => req<AlarmsInfo>("/api/alarms"),
   updateSettings: (s: Settings) =>

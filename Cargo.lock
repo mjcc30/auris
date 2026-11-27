@@ -164,6 +164,7 @@ dependencies = [
  "auris-core",
  "auris-library",
  "auris-player",
+ "auris-plugins",
  "auris-sources",
  "auris-updater",
  "auris-web",
@@ -232,6 +233,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "auris-plugins"
+version = "0.1.0"
+dependencies = [
+ "auris-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "auris-sources"
 version = "0.1.0"
 dependencies = [
@@ -272,6 +284,7 @@ dependencies = [
  "auris-core",
  "auris-library",
  "auris-player",
+ "auris-plugins",
  "auris-sources",
  "auris-updater",
  "axum",

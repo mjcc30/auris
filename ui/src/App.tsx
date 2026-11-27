@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
 
-type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "favorites" | "sources" | "multiroom" | "settings" | "display";
+type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "favorites" | "sources" | "multiroom" | "plugins" | "settings" | "display";
 type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp";
 /** Onglets du panneau lecture en cours (style Volumio: Pochette / Infos / Paroles). */
 type NpTab = "cover" | "infos" | "lyrics";
@@ -300,7 +300,7 @@ export default function App() {
         <Sidebar view={view} setView={setView} sources={sources} browseSrc={browseSrc} openSource={openSource} system={system} stats={stats} upnpDevs={upnpDevs} upnpScanning={upnpScanning} onScanUpnp={() => scanUpnp(true)} onOpenUpnp={openUpnp} />
         <main className="content">
           <div className="topbar">
-            <div className="topbar-title">{view === "home" ? t("Accueil") : view === "library" ? t("Bibliothèque") : view === "browse" ? t("Parcourir") : view === "radios" ? t("Radios") : view === "queue" ? t("File d'attente") : view === "playlists" ? t("Listes de lecture") : view === "favorites" ? t("Favoris") : view === "sources" ? t("Sources") : view === "multiroom" ? t("Multiroom") : t("Réglages")}</div>
+            <div className="topbar-title">{view === "home" ? t("Accueil") : view === "library" ? t("Bibliothèque") : view === "browse" ? t("Parcourir") : view === "radios" ? t("Radios") : view === "queue" ? t("File d'attente") : view === "playlists" ? t("Listes de lecture") : view === "favorites" ? t("Favoris") : view === "sources" ? t("Sources") : view === "multiroom" ? t("Multiroom") : view === "plugins" ? t("Plugins") : t("Réglages")}</div>
             <div className="topbar-search">
               <Icon name="search" size={18} />
               <input type="text" placeholder={t("Rechercher un titre, un artiste…")} value={searchQ}
@@ -330,6 +330,7 @@ export default function App() {
           {view === "playlists" && <Playlists act={act} say={say} playAll={playAll} playTrack={playTrack} pins={pins} onTogglePin={togglePin} />}
           {view === "sources" && <Sources sources={sources} refresh={refresh} say={say} />}
           {view === "multiroom" && <MultiroomView state={state} act={act} say={say} />}
+          {view === "plugins" && <PluginsView act={act} say={say} />}
           {view === "settings" && <SettingsView settings={settings} updateSettings={updateSettings} say={say} refresh={refresh} packs={packs} />}
         </main>
         {npOpen && state?.current && (
@@ -368,6 +369,7 @@ function Sidebar({ view, setView, sources, browseSrc, openSource, system, stats,
     ["favorites", t("Favoris"), "heart"],
     ["sources", t("Sources"), "server"],
     ["multiroom", t("Multiroom"), "group"],
+    ["plugins", t("Plugins"), "puzzle"],
     ["settings", t("Réglages"), "gear"],
   ];
   return (
@@ -1322,6 +1324,95 @@ type MenuTarget =
 type RadioMenuState = { x: number; y: number; target: MenuTarget } | null;
 
 type DirData = DirTag[] | DirCountry[] | DirStation[];
+
+// ---------- Plugins communautaires (#8) ----------
+
+function PluginsView({ act, say }: { act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void }) {
+  const [plugins, setPlugins] = useState<PluginInfo[] | null>(null);
+  const [path, setPath] = useState("");
+  const [testResult, setTestResult] = useState<Record<string, string>>({});
+
+  const reload = useCallback(async () => {
+    try { setPlugins(await api.plugins()); }
+    catch (e) { say(e instanceof Error ? e.message : String(e)); }
+  }, [say]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const catLabel = (c: string) =>
+    c === "source" ? t("Source") : c === "output" ? t("Sortie audio") : c === "metadata" ? t("Métadonnées") : c === "ui" ? t("Interface") : c;
+
+  return (
+    <div className="plugins-view">
+      <div className="section-head">
+        <h1><Icon name="puzzle" size={28} /> {t("Plugins")}</h1>
+        <button className="btn ghost sm" onClick={reload}><Icon name="refresh" size={16} /> {t("Actualiser")}</button>
+      </div>
+
+      <p className="empty" style={{ marginTop: 0 }}>
+        {t("Plugins communautaires Auris (manifeste auris-plugin.toml + binaire, JSON-RPC sur stdio). Installez depuis un répertoire local contenant le manifeste.")}
+      </p>
+
+      <div className="section-head">
+        <h2>{t("Installer depuis un dossier local")}</h2>
+        <div className="mr-newgroup">
+          <input type="text" value={path} placeholder={t("Chemin du dossier du plugin (ex: C:\\plugins\\mon-plugin)")} style={{ width: 320 }}
+            onChange={(e) => setPath(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && path.trim()) { act(async () => { await api.pluginInstall(path.trim()); setPath(""); await reload(); }, t("Plugin installé")); } }} />
+          <button className="btn sm" disabled={!path.trim()}
+            onClick={() => act(async () => { await api.pluginInstall(path.trim()); setPath(""); await reload(); }, t("Plugin installé"))}>
+            <Icon name="plus" size={16} /> {t("Installer")}
+          </button>
+        </div>
+      </div>
+
+      {plugins === null && <div className="empty">{t("Chargement…")}</div>}
+      {plugins?.length === 0 && <div className="empty">{t("Aucun plugin installé.")}</div>}
+
+      <div className="mr-peers" style={{ flexDirection: "column", alignItems: "stretch" }}>
+        {plugins?.map((p) => (
+          <div className="mr-peer" key={p.id} style={{ justifyContent: "space-between" }}>
+            <span className="row-ico"><Icon name="puzzle" size={20} /></span>
+            <div style={{ flex: 1 }}>
+              <div className="mr-name">
+                {p.name} <span className="badge">{catLabel(p.category)}</span>{" "}
+                <span className="badge">{p.version}</span>{" "}
+                {p.running && <span className="badge live">{t("en cours")}</span>}
+                {!p.enabled && <span className="badge">{t("désactivé")}</span>}
+              </div>
+              <div className="mr-base">
+                {p.id} · {p.license}{p.authors.length ? ` · ${p.authors.join(", ")}` : ""}
+                {p.description ? ` — ${p.description}` : ""}
+              </div>
+              <div className="mr-base" style={{ opacity: 0.7 }}>{p.dir}</div>
+              {p.last_error && <div className="mr-base" style={{ color: "#ff6b6b" }}>{p.last_error}</div>}
+              {testResult[p.id] && (
+                <pre style={{ margin: "6px 0 0", fontSize: 11, maxHeight: 120, overflow: "auto", background: "var(--bg)", padding: 8, borderRadius: 8 }}>
+                  {testResult[p.id]}
+                </pre>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <Switch checked={p.enabled} label={t("Activer / désactiver")}
+                onChange={(v) => act(async () => { v ? await api.pluginEnable(p.id) : await api.pluginDisable(p.id); await reload(); }, v ? t("Plugin activé") : t("Plugin désactivé"))} />
+              <button className="btn ghost sm" title={t("Tester le plugin (manifest.get + capabilities.list)")}
+                onClick={() => act(async () => {
+                  const r = await api.pluginTest(p.id) as Record<string, unknown>;
+                  setTestResult((tr) => ({ ...tr, [p.id]: JSON.stringify(r, null, 2).slice(0, 2000) }));
+                })}>
+                <Icon name="flame" size={15} /> {t("Tester")}
+              </button>
+              <button className="btn ghost sm" title={t("Désinstaller le plugin")}
+                onClick={() => act(async () => { await api.pluginUninstall(p.id); await reload(); }, t("Plugin désinstallé"))}>
+                <Icon name="trash" size={15} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function MultiroomView({ state, act, say }: { state: PlayerState | null; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void }) {
   const [mr, setMr] = useState<MultiroomState | null>(null);

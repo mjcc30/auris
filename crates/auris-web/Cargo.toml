@@ -11,6 +11,7 @@ auris-player.workspace = true
 auris-library.workspace = true
 auris-sources.workspace = true
 auris-updater.workspace = true
+auris-plugins.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tower-http.workspace = true

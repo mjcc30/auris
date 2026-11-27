@@ -14,6 +14,7 @@ auris-sources = { path = "crates/auris-sources" }
 auris-library = { path = "crates/auris-library" }
 auris-web = { path = "crates/auris-web" }
 auris-updater = { path = "crates/auris-updater" }
+auris-plugins = { path = "crates/auris-plugins" }
 
 # runtime / web
 tokio = { version = "1", features = ["full"] }

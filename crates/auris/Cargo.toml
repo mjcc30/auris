@@ -16,6 +16,7 @@ auris-sources.workspace = true
 auris-library.workspace = true
 auris-web.workspace = true
 auris-updater.workspace = true
+auris-plugins.workspace = true
 tokio.workspace = true
 clap.workspace = true
 serde.workspace = true

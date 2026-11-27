@@ -164,6 +164,7 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
             data_dir.clone(),
             auris_web::peer_id(&data_dir),
         )),
+        plugins: Arc::new(auris_plugins::PluginHost::new(&data_dir)),
     };
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)

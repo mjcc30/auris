@@ -38,6 +38,7 @@ mod lastfm;
 mod multiroom;
 mod network;
 mod packs;
+mod plugins;
 mod radios;
 
 pub use multiroom::{peer_id, MultiroomHub};
@@ -101,6 +102,8 @@ pub struct AppState {
     pub bound_addr: Arc<RwLock<Option<SocketAddr>>>,
     /// Multiroom : pairs découverts (balise multicast) + groupes persistés (#23).
     pub multiroom: Arc<multiroom::MultiroomHub>,
+    /// Hôte de plugins communautaires (#8 — docs/PLUGIN_SYSTEM.md).
+    pub plugins: Arc<auris_plugins::PluginHost>,
 }
 
 /// Action d'alimentation (redémarrer / éteindre la machine hôte).
@@ -136,6 +139,7 @@ impl AppState {
                 data_dir.clone(),
                 multiroom::peer_id(&data_dir),
             )),
+            plugins: Arc::new(auris_plugins::PluginHost::new(&data_dir)),
             data_dir,
             power_control: false,
             power_ops: None,
@@ -467,6 +471,14 @@ pub fn router(state: AppState) -> Router {
             "/api/network/interfaces",
             get(network::get_interfaces).post(network::post_interface),
         )
+        // plugins communautaires (#8)
+        .route("/api/plugins", get(plugins::get_plugins))
+        .route("/api/plugins/install", post(plugins::post_install))
+        .route("/api/plugins/{id}/enable", post(plugins::post_enable))
+        .route("/api/plugins/{id}/disable", post(plugins::post_disable))
+        .route("/api/plugins/{id}", delete(plugins::delete_plugin))
+        .route("/api/plugins/{id}/call", post(plugins::post_call))
+        .route("/api/plugins/{id}/test", post(plugins::post_test))
         .route("/api/multiroom/state", get(multiroom::get_state))
         .route("/api/multiroom/clock", get(multiroom::get_clock))
         .route("/api/multiroom/groups", post(multiroom::post_group))
