@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -2730,7 +2730,105 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
       {show("Rip CD", "Ripper un CD audio avec whipper (AccurateRip)") && (
         <RipCdCard say={say} />
       )}
+      {show("Spotify Connect", "Écouter Spotify sur Auris depuis l'app Spotify (librespot)") && (
+        <SpotifyCard settings={settings} updateSettings={updateSettings} say={say} />
+      )}
     </div>
+  );
+}
+
+// ---------- Spotify Connect (librespot) — #24 ----------
+
+function SpotifyCard({ settings, updateSettings, say }: {
+  settings: Settings;
+  updateSettings: (patch: (s: Settings) => Settings, ok?: string) => Promise<void>;
+  say: (m: string) => void;
+}) {
+  const sp = settings.spotify;
+  const [st, setSt] = useState<SpotStatus | null>(null);
+  const [busy, setBusy] = useState("");
+  const load = useCallback(() => { api.spotifyStatus().then(setSt).catch(() => {}); }, []);
+  useEffect(() => {
+    load();
+    const iv = setInterval(() => {
+      setSt((cur) => {
+        if (cur?.running) load();
+        return cur;
+      });
+    }, 3000);
+    return () => clearInterval(iv);
+  }, [load]);
+  const set = <K extends keyof SpotifySettings>(k: K, v: SpotifySettings[K]) =>
+    updateSettings((s) => ({ ...s, spotify: { ...s.spotify, [k]: v } }));
+
+  const run = async (label: string, fn: () => Promise<SpotStatus>) => {
+    setBusy(label);
+    try { setSt(await fn()); say(`${label} OK`); }
+    catch (e) { say(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(""); load(); }
+  };
+
+  return (
+    <section className="set-card">
+      <h2>{t("Spotify Connect")} — librespot</h2>
+      <SetRow label="Spotify Connect" desc="Auris apparaît comme enceinte dans l'app Spotify (compte Spotify requis). À la lecture, Auris met sa propre file en pause.">
+        <Switch checked={sp.enabled} label="Spotify Connect" onChange={(v) => set("enabled", v)} />
+      </SetRow>
+      <SetRow label="Compte Spotify" desc="Identifiants (auth legacy) ou chemin vers un credentials.json librespot (recommandé, OAuth)">
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+          <input type="text" value={sp.username} placeholder="nom d'utilisateur" style={{ width: 280 }}
+            onChange={(e) => set("username", e.target.value)} />
+          <input type="password" value={sp.password} placeholder="mot de passe (ou vide si credentials.json)" style={{ width: 280 }}
+            onChange={(e) => set("password", e.target.value)} />
+          <input type="text" value={sp.credentials_path} placeholder="chemin credentials.json (optionnel)" style={{ width: 280 }}
+            onChange={(e) => set("credentials_path", e.target.value)} />
+        </div>
+      </SetRow>
+      <SetRow label="Nom de l'enceinte" desc={`Affiché dans l'app Spotify (défaut : ${settings.system.device_name})`}>
+        <input type="text" value={sp.device_name} placeholder={settings.system.device_name} style={{ width: 220 }}
+          onChange={(e) => set("device_name", e.target.value)} />
+      </SetRow>
+      <SetRow label="Débit" desc="Qualité du flux Spotify">
+        <select value={sp.bitrate} onChange={(e) => set("bitrate", Number(e.target.value))} style={{ width: 120 }}>
+          <option value={96}>96 kbps</option>
+          <option value={160}>160 kbps</option>
+          <option value={320}>320 kbps</option>
+        </select>
+      </SetRow>
+      <SetRow label="Sortie audio de librespot" desc="Backend librespot (vide = auto) et périphérique ALSA (backend alsa)">
+        <div style={{ display: "flex", gap: 6 }}>
+          <input type="text" value={sp.backend} placeholder="auto (alsa/rodio)" style={{ width: 150 }}
+            onChange={(e) => set("backend", e.target.value)} />
+          <input type="text" value={sp.alsa_device} placeholder="default" style={{ width: 110 }}
+            onChange={(e) => set("alsa_device", e.target.value)} />
+        </div>
+      </SetRow>
+      <SetRow label="État" desc={!st
+          ? t("Chargement…")
+          : !st.available
+            ? "librespot introuvable dans le PATH — installez-le (ex. `apt install librespot` ou binaire GitHub) ou définissez AURIS_LIBRESPOT_BIN"
+            : `${st.version ? `librespot ${st.version} · ` : "librespot · "}${st.backend || "auto"} · ${st.bitrate} kbps${st.last_event ? ` · dernier événement : ${st.last_event}` : ""}${st.track_id ? ` · ${st.track_id}` : ""}${st.error ? ` · ${st.error}` : ""}`}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {st && (
+            <span className={`pill ${st.error ? "warn" : st.running ? "ok" : ""}`}>
+              {st.running ? `En ligne (pid ${st.pid ?? "?"})` : st.available ? "Arrêté" : "Indisponible"}
+            </span>
+          )}
+          <button className="btn sm" disabled={!sp.enabled || !st?.available || st?.running || busy !== ""}
+            onClick={() => run("Démarrage", () => api.spotifyStart())}>
+            <Icon name="play" size={16} /> {t("Démarrer")}
+          </button>
+          <button className="btn danger sm" disabled={!st?.running || busy !== ""} onClick={() => run("Arrêt", () => api.spotifyStop())}>
+            {t("Arrêter")}
+          </button>
+        </div>
+      </SetRow>
+      {st && st.log.length > 0 && (
+        <SetRow label="Journal librespot" desc="200 dernières lignes">
+          <pre className="logs" style={{ maxWidth: 560, maxHeight: 180, margin: 0 }}>{st.log.slice(-30).join("\n")}</pre>
+        </SetRow>
+      )}
+    </section>
   );
 }
 

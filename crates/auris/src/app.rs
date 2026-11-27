@@ -202,11 +202,23 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         plugins: Arc::new(auris_plugins::PluginHost::new(&data_dir)),
         socketio: auris_web::socketio::SocketIoHub::new(),
         ripcd,
+        spotify: auris_web::spotify::SpotHub::new(),
     };
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)
         .parse()
         .context("adresse d'écoute invalide (host:port)")?;
+
+    // Spotify Connect : démarrage automatique si activé dans les réglages (#24)
+    if state.settings.read().unwrap().spotify.enabled {
+        *state.bound_addr.write().unwrap() = Some(addr);
+        let st = state.clone();
+        tokio::spawn(async move {
+            if let Err(e) = st.spotify.start(&st).await {
+                tracing::warn!("Spotify Connect: démarrage auto impossible: {e}");
+            }
+        });
+    }
 
     // Ouverture automatique du navigateur une fois le serveur prêt.
     if !args.no_open {

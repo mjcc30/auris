@@ -248,6 +248,47 @@ pub struct LastfmSettings {
     pub api_url: Option<String>,
 }
 
+/// Réglages Spotify Connect (librespot en processus enfant) — #24.
+/// Auris apparaît comme enceinte dans l'app Spotify ; le flux est fourni
+/// par Spotify au client authentifié (aucun DRM contourné).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SpotifySettings {
+    pub enabled: bool,
+    /// Nom de l'enceinte affiché dans l'app Spotify (vide = nom du périphérique).
+    pub device_name: String,
+    /// Nom d'utilisateur Spotify (auth legacy, avec `password`).
+    pub username: String,
+    /// Mot de passe Spotify — laisser vide si `credentials_path` est renseigné.
+    pub password: String,
+    /// Chemin vers un `credentials.json` librespot (auth recommandée, OAuth).
+    pub credentials_path: String,
+    /// Débit du flux : 96, 160 ou 320 kbps.
+    pub bitrate: u16,
+    /// Backend librespot (vide = auto : `rodio` sur Windows, `alsa` sinon).
+    pub backend: String,
+    /// Périphérique ALSA (backend `alsa` ; « default » = sortie système).
+    pub alsa_device: String,
+    /// Dossier de cache librespot (vide = `<data-dir>/spotify-cache`).
+    pub cache_dir: String,
+}
+
+impl Default for SpotifySettings {
+    fn default() -> Self {
+        SpotifySettings {
+            enabled: false,
+            device_name: String::new(),
+            username: String::new(),
+            password: String::new(),
+            credentials_path: String::new(),
+            bitrate: 320,
+            backend: String::new(),
+            alsa_device: "default".to_string(),
+            cache_dir: String::new(),
+        }
+    }
+}
+
 /// Réglages MusicBrainz (fiche recording : sortie, label, tags, ISRC, note) — #26.
 /// L'API WS2 est publique, sans clé ; 1 requête/s max (rate-limit côté client).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,6 +319,7 @@ pub struct Settings {
     pub sources: SourcesSettings,
     pub lastfm: LastfmSettings,
     pub musicbrainz: MusicBrainzSettings,
+    pub spotify: SpotifySettings,
 }
 
 impl Settings {
@@ -382,6 +424,24 @@ impl Settings {
                 ));
             }
         }
+        // Spotify Connect (#24) : débit autorisé, nom d'enceinte borné, et
+        // si activé il faut un compte (identifiants ou credentials.json).
+        let sp = &self.spotify;
+        if ![96, 160, 320].contains(&sp.bitrate) {
+            return Err(format!(
+                "spotify.bitrate doit être 96, 160 ou 320 (reçu: {})",
+                sp.bitrate
+            ));
+        }
+        let sdn = sp.device_name.trim();
+        if sdn.len() > 64 {
+            return Err("spotify.device_name doit faire au plus 64 caractères".into());
+        }
+        if sp.enabled && sp.username.trim().is_empty() && sp.credentials_path.trim().is_empty() {
+            return Err(
+                "Spotify Connect activé : renseignez username+password ou credentials_path".into(),
+            );
+        }
         Ok(())
     }
 }
@@ -408,6 +468,27 @@ mod tests {
         assert_eq!(s.appearance.accent, "#1ED760");
         assert_eq!(s.system.device_name, "auris");
         assert!(s.sources.metadata_discovery);
+        assert!(!s.spotify.enabled);
+        assert_eq!(s.spotify.bitrate, 320);
+        s.validate().unwrap();
+    }
+
+    #[test]
+    fn spotify_validation() {
+        let mut s = Settings::default();
+        s.spotify.enabled = true;
+        // activé mais aucun compte renseigné
+        assert!(s.validate().is_err());
+        s.spotify.username = "user".into();
+        s.spotify.password = "secret".into();
+        s.validate().unwrap();
+        // débit non autorisé
+        s.spotify.bitrate = 128;
+        assert!(s.validate().is_err());
+        s.spotify.bitrate = 96;
+        // credentials_path seul suffit
+        s.spotify.username.clear();
+        s.spotify.credentials_path = "/tmp/credentials.json".into();
         s.validate().unwrap();
     }
 

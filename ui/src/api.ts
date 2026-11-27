@@ -108,6 +108,33 @@ export interface RipStatus {
   error: string | null;
 }
 
+/** Spotify Connect (librespot) — #24 */
+export interface SpotifySettings {
+  enabled: boolean;
+  device_name: string;
+  username: string;
+  password: string;
+  credentials_path: string;
+  bitrate: number;
+  backend: string;
+  alsa_device: string;
+  cache_dir: string;
+}
+export interface SpotStatus {
+  available: boolean;
+  version: string;
+  running: boolean;
+  pid: number | null;
+  device_name: string;
+  backend: string;
+  bitrate: number;
+  last_event: string | null;
+  track_id: string | null;
+  position_ms: string | null;
+  log: string[];
+  error: string | null;
+}
+
 /** Piste de l'historique d'écoute (#69) : Track + `last_played` (timestamp Unix). */
 export type HistoryTrack = Track & { last_played: number };
 
@@ -588,6 +615,7 @@ export interface Settings {
   sources: SourcesSettings;
   lastfm: LastfmSettings;
   musicbrainz: MusicBrainzSettings;
+  spotify: SpotifySettings;
 }
 
 export interface StorageInfo {
@@ -814,6 +842,9 @@ export const api = {
   ripStart: (device?: string | null) => req<RipStatus>("/api/ripcd/rip", post({ device: device ?? null })),
   ripStop: () => req<RipStatus>("/api/ripcd/stop", post({})),
   ripEject: (device?: string | null) => req<{ ok: boolean; stderr: string }>("/api/ripcd/eject", post({ device: device ?? null })),
+  spotifyStatus: () => req<SpotStatus>("/api/spotify/status"),
+  spotifyStart: () => req<SpotStatus>("/api/spotify/start", post({})),
+  spotifyStop: () => req<SpotStatus>("/api/spotify/stop", post({})),
   coverUrl: (trackId: string) => `/api/library/cover/${encodeURIComponent(trackId)}`,
   lyrics: (trackId: string) => req<LyricsResponse>(`/api/lyrics/${encodeURIComponent(trackId)}`),
   infos: (trackId: string) => req<InfosResponse>(`/api/infos/${encodeURIComponent(trackId)}`),

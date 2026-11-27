@@ -42,6 +42,7 @@ mod plugins;
 mod radios;
 pub mod ripcd;
 pub mod socketio;
+pub mod spotify;
 
 pub use multiroom::{peer_id, MultiroomHub};
 
@@ -110,6 +111,8 @@ pub struct AppState {
     pub socketio: Arc<socketio::SocketIoHub>,
     /// Rip CD via whipper (#27).
     pub ripcd: Arc<ripcd::RipCdHub>,
+    /// Spotify Connect via librespot (#24).
+    pub spotify: Arc<spotify::SpotHub>,
 }
 
 /// Action d'alimentation (redémarrer / éteindre la machine hôte).
@@ -148,6 +151,7 @@ impl AppState {
             plugins: Arc::new(auris_plugins::PluginHost::new(&data_dir)),
             socketio: socketio::SocketIoHub::new(),
             ripcd: ripcd::RipCdHub::new(),
+            spotify: spotify::SpotHub::new(),
             data_dir,
             power_control: false,
             power_ops: None,
@@ -186,6 +190,11 @@ impl AppState {
 
 /// Erreur API -> JSON {"error": ...}.
 pub struct ApiError(pub(crate) AurisError);
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let msg = self.0.to_string();
@@ -443,6 +452,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/ripcd/rip", post(ripcd::post_rip))
         .route("/api/ripcd/stop", post(ripcd::post_stop))
         .route("/api/ripcd/eject", post(ripcd::post_eject))
+        // Spotify Connect (librespot) — #24
+        .route("/api/spotify/status", get(spotify::get_status))
+        .route("/api/spotify/start", post(spotify::post_start))
+        .route("/api/spotify/stop", post(spotify::post_stop))
+        .route("/api/spotify/event", post(spotify::post_event))
         .route("/api/radios/{id}", delete(radios::delete_radio))
         .route("/api/radios/{id}/play", post(radios::post_radio_play))
         // packs d'interface (thèmes CSS + langues) embarqués ou communautaires
