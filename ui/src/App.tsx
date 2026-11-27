@@ -5,7 +5,7 @@ import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
 
-type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "favorites" | "sources" | "multiroom" | "settings";
+type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "favorites" | "sources" | "multiroom" | "settings" | "display";
 type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp";
 /** Onglets du panneau lecture en cours (style Volumio: Pochette / Infos / Paroles). */
 type NpTab = "cover" | "infos" | "lyrics";
@@ -272,6 +272,28 @@ export default function App() {
     try { setDevices(await api.devices()); } catch { /* inchangé si erreur */ }
   }, []);
 
+  // Mode affichage plein écran « de loin » (#42) : #display dans l'URL à l'ouverture, Échap pour sortir.
+  const hashInit = useRef(false);
+  useEffect(() => {
+    const h = location.hash.replace(/^#\/?/, "");
+    if (!hashInit.current) {
+      hashInit.current = true;
+      if (h === "display") setView("display");
+      return;
+    }
+    if (view === "display" && h !== "display") history.replaceState(null, "", "#display");
+    else if (view !== "display" && h === "display") history.replaceState(null, "", location.pathname + location.search);
+  }, [view]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && view === "display") setView("home"); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view]);
+
+  if (view === "display") {
+    return <DisplayView state={state} act={act} onExit={() => setView("home")} />;
+  }
+
   return (
     <div className="app">
       <div className="main">
@@ -324,7 +346,7 @@ export default function App() {
         <DopBanner carrier={dsdCarrier} dop={dop} deviceName={state?.audio_device ?? null} backend={state?.output_backend ?? null} say={say}
           onChanged={() => api.dopStatus().then(setDop).catch(() => {})} />
       )}
-      <PlayerBar state={state} devices={devices} act={act} say={say} alarms={alarms} refreshDevices={refreshDevices} npOpen={npOpen} onToggleNp={() => setNpOpen((v) => !v)} />
+      <PlayerBar state={state} devices={devices} act={act} say={say} alarms={alarms} refreshDevices={refreshDevices} npOpen={npOpen} onToggleNp={() => setNpOpen((v) => !v)} onToggleDisplay={() => setView("display")} />
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
@@ -2599,7 +2621,73 @@ function DopBanner({ carrier, dop, deviceName, backend, say, onChanged }: { carr
 
 // ---------- Barre de lecture ----------
 
-function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, onToggleNp }: { state: PlayerState | null; devices: AudioDevice[]; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; alarms: AlarmsInfo | null; refreshDevices: () => Promise<void>; npOpen: boolean; onToggleNp: () => void }) {
+/// Mode affichage plein écran « de loin » pour écran HDMI (#42) :
+/// pochette XXL + horloge + contrôles tactiles, curseur masqué après 3 s d'inactivité.
+function DisplayView({ state, act, onExit }: { state: PlayerState | null; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; onExit: () => void }) {
+  const [now, setNow] = useState(new Date());
+  const [cursorOn, setCursorOn] = useState(true);
+  const hideTimer = useRef<number | null>(null);
+  const poke = useCallback(() => {
+    setCursorOn(true);
+    if (hideTimer.current) window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => setCursorOn(false), 3000);
+  }, []);
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 1000);
+    poke();
+    return () => { window.clearInterval(id); if (hideTimer.current) window.clearTimeout(hideTimer.current); };
+  }, [poke]);
+
+  const cur = state?.current;
+  const playing = state?.status === "playing";
+  const live = state?.is_live ?? false;
+  const pos = state?.position_secs ?? 0;
+  const dur = state?.duration_secs ?? cur?.duration_secs ?? 0;
+  const vol = state?.volume ?? 0;
+
+  return (
+    <div className={`display${cursorOn ? "" : " nocursor"}`} onMouseMove={poke} onTouchStart={poke}>
+      <div className="display-cover">
+        {cur?.has_cover ? <img src={api.coverUrl(cur.id)} alt="" /> : <Icon name={live ? "radio" : "note"} size={160} />}
+      </div>
+      <div className="display-info">
+        <div className="display-clock">{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+        <div className="display-date">{now.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" })}</div>
+        <div className="display-title">{cur ? cur.title : t("Aucune lecture")}</div>
+        {cur && <div className="display-artist">{live && state?.stream_title ? state.stream_title : cur.artist}</div>}
+        {cur?.album && <div className="display-album">{cur.album}</div>}
+        {live ? (
+          <div className="display-live"><span className="badge live">{t("EN DIRECT")}</span><span className="num-time">{fmtTime(pos)}</span></div>
+        ) : (
+          dur > 0 && (
+            <div className="display-seek">
+              <span>{fmtTime(pos)}</span>
+              <input type="range" min={0} max={dur} step={0.1} value={Math.min(pos, dur)} aria-label="Progression"
+                onChange={(e) => act(() => api.seek(Number(e.target.value)))} />
+              <span>{fmtTime(dur)}</span>
+            </div>
+          )
+        )}
+        <div className="display-controls">
+          <button title={t("Précédent")} onClick={() => act(() => api.prev())}><Icon name="prev" size={36} /></button>
+          <button className="big" title={playing ? t("Pause") : t("Lecture")} onClick={() => act(() => (playing ? api.pause() : api.resume()))}>
+            {playing ? <Icon name="pause" size={44} /> : <Icon name="play" size={44} />}
+          </button>
+          <button title={t("Suivant")} onClick={() => act(() => api.next())}><Icon name="next" size={36} /></button>
+          <button title={state?.muted ? t("Réactiver le son") : t("Couper le son")} onClick={() => act(() => api.mute(!state?.muted))}>
+            <Icon name="speaker" size={30} />
+          </button>
+          <button title={t("Volume -")} onClick={() => act(() => api.volume(Math.max(0, vol - 5)))}><Icon name="minus" size={28} /></button>
+          <span className="display-vol">{vol}%</span>
+          <button title={t("Volume +")} onClick={() => act(() => api.volume(Math.min(100, vol + 5)))}><Icon name="plus" size={28} /></button>
+          <button title={t("Quitter le mode affichage (Échap)")} onClick={onExit}><Icon name="close" size={30} /></button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, onToggleNp, onToggleDisplay }: { state: PlayerState | null; devices: AudioDevice[]; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; alarms: AlarmsInfo | null; refreshDevices: () => Promise<void>; npOpen: boolean; onToggleNp: () => void; onToggleDisplay: () => void }) {
   const playing = state?.status === "playing";
   const [menuOpen, setMenuOpen] = useState(false);
   const cur = state?.current;
@@ -2655,6 +2743,9 @@ function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, o
             say(`Lien de partage copié : ${url}`);
           } catch (e) { say(e instanceof Error ? e.message : String(e)); }
         }}><Icon name="share" size={20} /></button>}
+        <button className="icon-btn-out" title="Mode affichage plein écran « de loin » (écran HDMI — #display)" onClick={onToggleDisplay}>
+          <Icon name="display" size={20} />
+        </button>
         <button className={`icon-btn-out ${state?.output_mode === "browser" ? "active" : ""}`} title="Choisir la sortie (Jouer ici, Caster…)" onClick={() => { setMenuOpen((v) => !v); refreshDevices(); }}>
           <Icon name="cast" size={20} />
         </button>
