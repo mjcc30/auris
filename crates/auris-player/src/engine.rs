@@ -1302,6 +1302,12 @@ impl PlayerEngine {
         *self.loudness_lookup.write().unwrap() = f;
     }
 
+    /// Gain loudness (linéaire) du flux d'URI donné, si mesuré et activé (#77).
+    pub fn loudness_gain(&self, uri: &str) -> Option<f32> {
+        let lk = self.loudness_lookup.read().unwrap();
+        lk.as_ref().and_then(|f| f(uri))
+    }
+
     fn send(&self, cmd: Command) {
         let _ = self.cmd_tx.send(cmd);
     }

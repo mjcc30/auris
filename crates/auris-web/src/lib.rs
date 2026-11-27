@@ -41,6 +41,7 @@ mod packs;
 mod plugins;
 mod radios;
 pub mod ripcd;
+pub mod signal_path;
 pub mod socketio;
 pub mod spotify;
 mod volumio_v1;
@@ -555,6 +556,8 @@ pub fn router(state: AppState) -> Router {
         .merge(api)
         // compatibilité REST v1 façon Volumio (clients tiers) — #76
         .merge(volumio_v1::router())
+        // chaîne du signal façon Roon « Signal Path » — #77
+        .merge(signal_path::router())
         .route("/", get(index_html))
         .route("/{*path}", get(static_asset))
         .layer(CorsLayer::permissive())

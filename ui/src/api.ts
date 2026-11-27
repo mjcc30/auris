@@ -186,6 +186,37 @@ export interface Source {
   [k: string]: unknown;
 }
 
+/** Chaîne du signal en cours, façon « Signal Path » Roon (#77). */
+export interface SignalPath {
+  service: string;
+  uri: string;
+  title: string;
+  live: boolean;
+  stream_title: string | null;
+  format_kind: string;
+  sample_rate: number | null;
+  bits: number | null;
+  channels: number | null;
+  resampling: boolean;
+  dsd_mode: "dop" | "pcm";
+  exclusive: boolean;
+  output_backend: string;
+  output_mode: "local" | "browser";
+  device: string | null;
+  volume_mode: "software" | "disabled";
+  volume_curve: "logarithmic" | "linear";
+  volume: number;
+  max_volume: number;
+  muted: boolean;
+  loudness: boolean;
+  loudness_target_lufs: number;
+  loudness_gain_db: number | null;
+  eq_enabled: boolean;
+  eq_bands: { freq_hz: number; gain_db: number }[];
+  crossfade_secs: number;
+  gapless: boolean;
+}
+
 export interface BrowseEntry {
   name: string;
   uri: string;
@@ -785,6 +816,7 @@ export const api = {
   system: () => req<SystemInfo>("/api/system/info"),
   updateCheck: () => req<UpdateInfo>("/api/system/update"),
   settings: () => req<Settings>("/api/settings"),
+  signalPath: () => req<SignalPath>("/api/signal-path"),
   netInterfaces: () => req<NetInterface[]>("/api/network/interfaces"),
   netInterfaceAction: (name: string, action: "up" | "down") =>
     req<NetInterface[]>("/api/network/interfaces", post({ name, action })),

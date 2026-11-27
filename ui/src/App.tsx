@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -225,6 +225,7 @@ export default function App() {
   // Statut DoP/WASAPI du DAC : on ne sonde que pendant la lecture d'une piste
   // DSD (c'est le seul cas où le réglage du DAC importe pour l'UI).
   const [dop, setDop] = useState<DopStatus | null>(null);
+  const [spOpen, setSpOpen] = useState(false);
   const dsdCarrier = dopCarrier(state?.current_format ?? state?.current?.format);
   useEffect(() => {
     if (!dsdCarrier) { setDop(null); return; }
@@ -351,7 +352,8 @@ export default function App() {
         <DopBanner carrier={dsdCarrier} dop={dop} deviceName={state?.audio_device ?? null} backend={state?.output_backend ?? null} say={say}
           onChanged={() => api.dopStatus().then(setDop).catch(() => {})} />
       )}
-      <PlayerBar state={state} devices={devices} act={act} say={say} alarms={alarms} refreshDevices={refreshDevices} npOpen={npOpen} onToggleNp={() => setNpOpen((v) => !v)} onToggleDisplay={() => setView("display")} />
+      <PlayerBar state={state} devices={devices} act={act} say={say} alarms={alarms} refreshDevices={refreshDevices} npOpen={npOpen} onToggleNp={() => setNpOpen((v) => !v)} onToggleDisplay={() => setView("display")} onOpenSignalPath={() => setSpOpen(true)} />
+      {spOpen && <SignalPathModal onClose={() => setSpOpen(false)} onOpenSettings={() => { setSpOpen(false); setView("settings"); }} />}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
@@ -3081,7 +3083,63 @@ function DisplayView({ state, act, onExit }: { state: PlayerState | null; act: (
   );
 }
 
-function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, onToggleNp, onToggleDisplay }: { state: PlayerState | null; devices: AudioDevice[]; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; alarms: AlarmsInfo | null; refreshDevices: () => Promise<void>; npOpen: boolean; onToggleNp: () => void; onToggleDisplay: () => void }) {
+/// Modale « Signal path » façon Roon (#77) : la chaîne de traitement appliquée
+/// au flux en cours (source → format → bit-perfect → DSD → loudness → EQ →
+/// volume → sortie), rafraîchie en direct.
+function SignalPathModal({ onClose, onOpenSettings }: { onClose: () => void; onOpenSettings: () => void }) {
+  const [sp, setSp] = useState<SignalPath | null>(null);
+  useEffect(() => {
+    let dead = false;
+    const load = async () => { try { const d = await api.signalPath(); if (!dead) setSp(d); } catch { /* ignore */ } };
+    load();
+    const iv = setInterval(load, 2000);
+    return () => { dead = true; clearInterval(iv); };
+  }, []);
+  const fmt = sp && sp.format_kind
+    ? { kind: sp.format_kind, sample_rate: sp.sample_rate ?? undefined, bits: sp.bits ?? undefined, channels: sp.channels ?? undefined }
+    : null;
+  const stages: { label: string; detail: string; on: boolean }[] = !sp ? [] : [
+    { label: t("Source"), detail: sp.live ? `Radio web — ${sp.uri}` : sp.uri, on: true },
+    { label: t("Format natif"), detail: fmt ? fmtFormat(fmt) : "—", on: fmt != null },
+    { label: t("Bit-perfect"), detail: sp.resampling ? t("Rééchantillonnage autorisé vers la cadence de la sortie") : t("Aucun rééchantillonnage — flux bit-perfect"), on: !sp.resampling },
+    ...(sp.format_kind === "dsd" ? [{ label: "DSD", detail: sp.dsd_mode === "dop" ? "DSD over PCM (DoP) vers le DAC" : "DSD converti en PCM haute fréquence", on: true }] : []),
+    ...(sp.output_mode === "local" ? [{ label: t("WASAPI exclusif"), detail: sp.exclusive ? t("Actif — le flux prend le DAC en exclusif") : t("Inactif — mode partagé"), on: sp.exclusive }] : []),
+    { label: "Loudness R128", detail: sp.loudness ? `Cible ${sp.loudness_target_lufs} LUFS${sp.loudness_gain_db != null ? ` · gain ${sp.loudness_gain_db.toFixed(1)} dB sur ce morceau` : ""}` : t("Désactivée"), on: sp.loudness },
+    { label: t("Égaliseur"), detail: sp.eq_enabled && sp.eq_bands.length > 0 ? sp.eq_bands.map((b) => `${b.freq_hz} Hz ${b.gain_db > 0 ? "+" : ""}${b.gain_db} dB`).join(", ") : t("Plat / désactivé"), on: sp.eq_enabled && sp.eq_bands.length > 0 },
+    { label: t("Enchaînements"), detail: [sp.gapless ? "gapless" : null, sp.crossfade_secs > 0 ? `crossfade ${sp.crossfade_secs} s` : null].filter(Boolean).join(" · ") || t("direct"), on: sp.gapless || sp.crossfade_secs > 0 },
+    { label: t("Volume"), detail: sp.volume_mode === "disabled" ? t("Bit-perfect — volume réglé sur l'ampli") : `${t("logiciel")} · ${sp.volume_curve === "logarithmic" ? t("courbe logarithmique") : t("courbe linéaire")} · ${sp.muted ? t("muet") : `${sp.volume}/${sp.max_volume}`}`, on: sp.volume_mode === "software" && !sp.muted },
+    { label: t("Sortie"), detail: `${sp.device || t("DAC par défaut")} · ${sp.output_backend}${sp.output_mode === "browser" ? " · navigateur" : ""}`, on: true },
+  ];
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h2><Icon name="sliders" size={20} /> Signal path</h2>
+          <button className="icon-btn" title={t("Fermer")} onClick={onClose}><Icon name="close" size={18} /></button>
+        </div>
+        {sp ? (
+          <>
+            <div className="sp-track" title={sp.uri}>{sp.live ? t("EN DIRECT") : sp.title}{sp.stream_title ? ` — ${sp.stream_title}` : ""}</div>
+            <div className="sp-stages">
+              {stages.map((s) => (
+                <div key={s.label} className={`sp-stage ${s.on ? "on" : ""}`}>
+                  <span className="sp-dot" />
+                  <span className="sp-label">{s.label}</span>
+                  <span className="sp-detail" title={s.detail}>{s.detail}</span>
+                </div>
+              ))}
+            </div>
+            <div className="modal-foot">
+              <button className="btn primary" onClick={onOpenSettings}>{t("Réglages de lecture")}</button>
+            </div>
+          </>
+        ) : <div className="empty">{t("Chargement…")}</div>}
+      </div>
+    </div>
+  );
+}
+
+function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, onToggleNp, onToggleDisplay, onOpenSignalPath }: { state: PlayerState | null; devices: AudioDevice[]; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; alarms: AlarmsInfo | null; refreshDevices: () => Promise<void>; npOpen: boolean; onToggleNp: () => void; onToggleDisplay: () => void; onOpenSignalPath: () => void }) {
   const playing = state?.status === "playing";
   const [menuOpen, setMenuOpen] = useState(false);
   const cur = state?.current;
@@ -3170,6 +3228,9 @@ function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, o
             </div>
           </>
         )}
+        {cur && <button className="badge badge-btn" title="Signal path — chaîne de traitement appliquée au flux en cours (#77)" onClick={onOpenSignalPath}>
+          <Icon name="sliders" size={12} /> Signal path
+        </button>}
         {state?.current_format && <span className="badge">{fmtFormat(state.current_format)}</span>}
         {state?.output_backend && <span className="badge" title="Backend de sortie audio actuellement utilisé">{state.output_backend}</span>}
         <select value={state?.audio_device ?? ""} onChange={(e) => act(() => api.selectDevice(e.target.value || null))} aria-label="Périphérique audio"
