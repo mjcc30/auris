@@ -6,8 +6,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use auris_core::{
-    Album, Artist, AurisError, DecadeFacet, FavKind, Favorites, GenreFacet, Playlist, Result,
-    ShareKind, ShareLink, Source, Track,
+    Album, Artist, AurisError, DecadeFacet, FavKind, Favorites, GenreFacet, LibraryStats, Playlist,
+    Result, ShareKind, ShareLink, Source, Track,
 };
 use auris_player::probe_meta;
 use auris_sources::{make_uri, SourcesManager};
@@ -302,6 +302,27 @@ impl Library {
             .collect();
         out.sort_by_key(|a| a.name.to_lowercase());
         out
+    }
+
+    /// Stats globales calculées depuis les pistes (clés dédupliquées) — #74.
+    pub fn stats(&self) -> LibraryStats {
+        let tracks = self.tracks();
+        let artists = tracks
+            .iter()
+            .map(|t| t.artist_key.to_lowercase())
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        let albums = tracks
+            .iter()
+            .map(|t| t.album_key.to_lowercase())
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        LibraryStats {
+            artists,
+            albums,
+            tracks: tracks.len(),
+            playtime_secs: tracks.iter().map(|t| t.duration_secs.unwrap_or(0.0)).sum(),
+        }
     }
 
     pub fn artist(&self, artist_id: &str) -> Option<(Artist, Vec<Album>)> {

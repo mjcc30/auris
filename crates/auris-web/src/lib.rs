@@ -20,8 +20,9 @@ use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 
 use auris_core::{
-    lyrics, Alarm, AlarmState, AurisError, BrowseEntry, FavKind, Favorites, OutputMode, PlayStatus,
-    Playlist, RepeatMode, Settings, ShareKind, ShareLink, Source, Track, WsEvent, ZipWriter,
+    lyrics, Alarm, AlarmState, AurisError, BrowseEntry, FavKind, Favorites, LibraryStats,
+    OutputMode, PlayStatus, Playlist, RepeatMode, Settings, ShareKind, ShareLink, Source, Track,
+    WsEvent, ZipWriter,
 };
 use auris_library::Library;
 use auris_player::{
@@ -345,6 +346,7 @@ pub fn router(state: AppState) -> Router {
         // bibliotheque
         .route("/api/library/tracks", get(get_tracks))
         .route("/api/library/facets", get(get_facets))
+        .route("/api/library/stats", get(get_library_stats))
         .route("/api/favorites", get(get_favorites))
         .route("/api/favorites/toggle", post(post_favorite_toggle))
         .route("/api/favorites/resolved", get(get_favorites_resolved))
@@ -773,6 +775,11 @@ async fn get_facets(State(s): State<AppState>) -> Json<serde_json::Value> {
         })
         .collect();
     Json(serde_json::json!({ "genres": genres, "decades": decades }))
+}
+
+/// `GET /api/library/stats` — compteurs globaux de l'index (équivalent Volumio `collectionstats`, #74).
+async fn get_library_stats(State(s): State<AppState>) -> Json<LibraryStats> {
+    Json(s.library.stats())
 }
 
 /// `GET /api/favorites` — IDs des favoris (pistes / albums / artistes).

@@ -67,6 +67,14 @@ export interface Facets {
   decades: DecadeFacet[];
 }
 
+/** Stats globales de la bibliothèque (#74) —équivalent Volumio `collectionstats`. */
+export interface LibraryStats {
+  artists: number;
+  albums: number;
+  tracks: number;
+  playtime_secs: number;
+}
+
 export interface PlayerState {
   status: "stopped" | "playing" | "paused";
   current: Track | null;
@@ -445,6 +453,7 @@ export const api = {
     return req<Track[]>(`/api/library/tracks${qs ? `?${qs}` : ""}`);
   },
   facets: () => req<Facets>("/api/library/facets"),
+  libraryStats: () => req<LibraryStats>("/api/library/stats"),
   favorites: () => req<Favorites>("/api/favorites"),
   favoritesResolved: () => req<FavoritesResolved>("/api/favorites/resolved"),
   toggleFavorite: (kind: FavKind, id: string) =>

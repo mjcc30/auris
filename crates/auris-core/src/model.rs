@@ -326,6 +326,15 @@ pub struct Favorites {
     pub artists: Vec<String>,
 }
 
+/// Statistiques globales de la bibliothèque (équivalent Volumio `/api/v1/collectionstats`, #74).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LibraryStats {
+    pub artists: usize,
+    pub albums: usize,
+    pub tracks: usize,
+    pub playtime_secs: f64,
+}
+
 /// Entree de navigation dans une source (dossier ou fichier).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowseEntry {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type InfosResponse, type LyricsResponse, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type InfosResponse, type LibraryStats, type LyricsResponse, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -101,6 +101,7 @@ export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [packs, setPacks] = useState<Packs | null>(null);
   const [favs, setFavs] = useState<Favorites>({ tracks: [], albums: [], artists: [] });
+  const [stats, setStats] = useState<LibraryStats | null>(null);
   const [, setLocaleTick] = useState(0);
   const [alarms, setAlarms] = useState<AlarmsInfo | null>(null);
   const [browseSrc, setBrowseSrc] = useState<string | null>(null);
@@ -124,13 +125,15 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, srcs, devs, sys, st, pk, fv] = await Promise.all([
+      const [s, srcs, devs, sys, st, pk, fv, libStats] = await Promise.all([
         api.state(), api.sources(), api.devices(), api.system(), api.settings(),
         api.packs().catch(() => null),
         api.favorites().catch(() => null),
+        api.libraryStats().catch(() => null),
       ]);
       setState(s); setSources(srcs); setDevices(devs); setSystem(sys); setSettings(st); setPacks(pk);
       if (fv) setFavs(fv);
+      if (libStats) setStats(libStats);
     } catch { /* backend indisponible pour l'instant */ }
   }, []);
 
@@ -235,7 +238,7 @@ export default function App() {
   return (
     <div className="app">
       <div className="main">
-        <Sidebar view={view} setView={setView} sources={sources} browseSrc={browseSrc} openSource={openSource} system={system} />
+        <Sidebar view={view} setView={setView} sources={sources} browseSrc={browseSrc} openSource={openSource} system={system} stats={stats} />
         <main className="content">
           <div className="topbar">
             <div className="topbar-title">{view === "home" ? t("Accueil") : view === "library" ? t("Bibliothèque") : view === "browse" ? t("Parcourir") : view === "radios" ? t("Radios") : view === "queue" ? t("File d'attente") : view === "playlists" ? t("Listes de lecture") : view === "favorites" ? t("Favoris") : view === "sources" ? t("Sources") : t("Réglages")}</div>
@@ -289,9 +292,10 @@ export default function App() {
   );
 }
 
-function Sidebar({ view, setView, sources, browseSrc, openSource, system }: {
+function Sidebar({ view, setView, sources, browseSrc, openSource, system, stats }: {
   view: View; setView: (v: View) => void; sources: Source[];
   browseSrc: string | null; openSource: (id: string) => void; system: SystemInfo | null;
+  stats: LibraryStats | null;
 }) {
   const nav: [View, string, string][] = [
     ["home", t("Accueil"), "home"],
@@ -322,9 +326,27 @@ function Sidebar({ view, setView, sources, browseSrc, openSource, system }: {
           </div>
         ))}
       </div>
-      {system && <div className="sysinfo">v{system.version} · {cl(system.track_count, "titre", "titres")}</div>}
+      {system && (
+        <div className="sysinfo">
+          v{system.version}
+          {stats && stats.tracks > 0 && (
+            <>
+              <br />{cl(stats.artists, "artiste", "artistes")} · {cl(stats.albums, "album", "albums")} · {cl(stats.tracks, "titre", "titres")} · {fmtPlaytime(stats.playtime_secs)}
+            </>
+          )}
+        </div>
+      )}
     </nav>
   );
+}
+
+/// Durée longue façon Volumio collectionstats : « 1220:17:22 » (h:mm:ss).
+function fmtPlaytime(secs: number): string {
+  if (!isFinite(secs) || secs < 0) secs = 0;
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = Math.floor(secs % 60);
+  return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
 /// Une rangée horizontale de grandes cartes (façon Nova/Spotify).

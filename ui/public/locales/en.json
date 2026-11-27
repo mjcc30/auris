@@ -96,5 +96,11 @@
   "Favoris": "Favorites",
   "Artistes favoris": "Favorite artists",
   "Retirer des favoris": "Remove from favorites",
-  "Aucun favori pour l’instant — touchez le cœur sur un titre, un album ou un artiste.": "No favorites yet — tap the heart on a track, album or artist."
+  "Aucun favori pour l’instant — touchez le cœur sur un titre, un album ou un artiste.": "No favorites yet — tap the heart on a track, album or artist.",
+  "artiste": "artist",
+  "artistes": "artists",
+  "album": "album",
+  "albums": "albums",
+  "titre": "track",
+  "titres": "tracks"
 }
