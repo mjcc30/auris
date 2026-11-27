@@ -1270,7 +1270,9 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
         if (view === "genres") data = await api.radiosDirGenres();
         else if (view === "countries") data = await api.radiosDirCountries();
         else if (view === "top") data = await api.radiosDirStations("top");
+        else if (view === "top500") data = await api.radiosDirStations("top", "", 500);
         else if (view === "popular") data = await api.radiosDirStations("popular");
+        else if (view.startsWith("local:")) data = await api.radiosDirStations("country", view.slice(6));
         else if (view.startsWith("genre:")) data = await api.radiosDirStations("genre", view.slice(6));
         else if (view.startsWith("country:")) data = await api.radiosDirStations("country", view.slice(8));
         else if (view.startsWith("search:")) data = await api.radiosDirStations("search", view.slice(7));
@@ -1376,9 +1378,11 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
   const viewTitle = () => {
     if (view === "pinned") return t("Radios épinglées");
     if (view === "fav") return t("Mes radios");
+    if (view === "top") return t("Top radios");
+    if (view === "top500") return t("Top 500 radios");
+    if (view.startsWith("local:")) return t("Radios locales ({code})", { code: view.slice(6) });
     if (view === "builtin") return t("Radios par défaut");
     if (view === "sources") return t("Sources radio");
-    if (view === "top") return t("Top radios");
     if (view === "popular") return t("Radios populaires");
     if (view === "genres") return t("Par genre");
     if (view === "countries") return t("Par pays");
@@ -1388,12 +1392,24 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
     return t("Radios");
   };
 
+  /// Code pays du navigateur (fr-FR -> FR) pour la tuile « Radios locales ».
+  const localCountryCode = () => {
+    try {
+      const region = new Intl.Locale(navigator.language || "en").maximize().region;
+      return (region || "").toUpperCase();
+    } catch {
+      return "";
+    }
+  };
+
   const tiles = [
     { id: "pinned", icon: "pin", label: t("Épinglées"), sub: t("{count} radio(s)", { count: pins.radios.length }) },
     { id: "fav", icon: "heart", label: t("Mes radios"), sub: t("{count} radio(s)", { count: list?.favorites.length ?? 0 }) },
     { id: "builtin", icon: "radio", label: t("Radios par défaut"), sub: t("{count} radio(s)", { count: list?.builtin.length ?? 0 }) },
     { id: "sources", icon: "server", label: t("Sources radio"), sub: t("{count} source(s)", { count: list?.sources.length ?? 0 }) },
     { id: "top", icon: "star", label: t("Top radios"), sub: t("les mieux notées") },
+    { id: "top500", icon: "trophy", label: t("Top 500 radios"), sub: t("les mieux votées") },
+    { id: "local", icon: "marker", label: t("Radios locales"), sub: localCountryCode() ? t("pays : {code}", { code: localCountryCode() }) : t("votre pays") },
     { id: "popular", icon: "flame", label: t("Radios populaires"), sub: t("les plus écoutées") },
     { id: "genres", icon: "note", label: t("Par genre"), sub: t("rock, jazz, classique…") },
     { id: "countries", icon: "globe", label: t("Par pays"), sub: t("du monde entier") },
@@ -1407,6 +1423,14 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
       if (q && q.trim()) setView(`search:${q.trim()}`);
     } else if (id === "__add") {
       setShowAdd((v) => !v);
+    } else if (id === "local") {
+      const code = localCountryCode();
+      if (!code) {
+        say(t("Pays indétectable depuis le navigateur — utilisez « Par pays »."));
+        setView("countries");
+      } else {
+        setView(`local:${code}`);
+      }
     } else {
       setView(id);
     }

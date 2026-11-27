@@ -148,5 +148,12 @@
   "Note": "Rating",
   "Fondu enchaîné (crossfade)": "Gapless crossfade",
   "Superposition de la fin et du début des pistes (même format uniquement)": "Blend the end of one track with the start of the next (same format only)",
-  "Durée du crossfade entre deux pistes": "Crossfade duration between two tracks"
+  "Durée du crossfade entre deux pistes": "Crossfade duration between two tracks",
+  "Top 500 radios": "Top 500 radios",
+  "les mieux votées": "most voted",
+  "Radios locales": "Local radios",
+  "Radios locales ({code})": "Local radios ({code})",
+  "pays : {code}": "country: {code}",
+  "votre pays": "your country",
+  "Pays indétectable depuis le navigateur — utilisez « Par pays ».": "Country not detected from the browser — use “By country”."
 }
