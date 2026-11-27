@@ -164,6 +164,23 @@ Les liens expirés sont purgés à la lecture ; le reset usine les supprime (sto
 la bibliothèque, arbre sled `shares`). Boutons « Partager » : barre de lecture (piste
 en cours), fiche album, détail de playlist ; gestion dans Réglages > Partage.
 
+## API Subsonic (serveur, v1 lecture seule — #79)
+
+`GET|POST /rest/{méthode}[.view]` — réponses JSON `{"subsonic-response": {"status":"ok","version":"1.16.1", …}}`
+(paramètre `f=json` ; erreurs applicatives en HTTP 200 + `status:"failed"`). Authentification
+acceptée mais ignorée en v1 (`u`/`p`/`t`+`s`). Méthodes : `ping`, `getLicense`,
+`getMusicFolders`, `getScanStatus`, `getGenres`, `getArtists`, `getArtist`, `getAlbumList`,
+`getAlbumList2` (types `alphabeticalByName`, `alphabeticalByArtist`, `byGenre`, `recent`,
+`random`), `getAlbum`, `getSong`, `search3`, `getSongsByGenre`, `getPlaylists`, `getPlaylist`,
+`getNowPlaying`, `getCoverArt?id=<track_id>` (JPEG), `stream?id=<track_id>` (binaire, `Range`
+supporté → 206). L'écriture (scrobble, star, playlists) est refusée en v1.
+
+```bash
+curl 'localhost:3000/rest/ping.view?f=json&u=moi&p=secret'
+curl 'localhost:3000/rest/search3.view?f=json&query=daft&songCount=10'
+curl -o track.flac 'localhost:3000/rest/stream.view?f=json&id=<track_id>'
+```
+
 ## WebSocket `/ws`
 
 Connexion upgrade → l'UI reçoit immédiatement `{"type":"state","payload":{...}}`,

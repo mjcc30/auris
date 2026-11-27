@@ -45,6 +45,7 @@ pub mod ripcd;
 pub mod signal_path;
 pub mod socketio;
 pub mod spotify;
+pub mod subsonic;
 mod volumio_v1;
 
 pub use multiroom::{peer_id, MultiroomHub};
@@ -585,6 +586,7 @@ pub fn router(state: AppState) -> Router {
         .merge(api)
         // compatibilité REST v1 façon Volumio (clients tiers) — #76
         .merge(volumio_v1::router())
+        .merge(subsonic::router())
         // chaîne du signal façon Roon « Signal Path » — #77
         .merge(signal_path::router())
         .route("/", get(index_html))
@@ -2443,7 +2445,7 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn audio_content_type(uri: &str) -> &'static str {
+pub(crate) fn audio_content_type(uri: &str) -> &'static str {
     let after_dot = uri.rsplit('.').next().unwrap_or("");
     let ext = after_dot
         .split(['?', '#'])
@@ -2464,7 +2466,7 @@ fn audio_content_type(uri: &str) -> &'static str {
 }
 
 /// Lit le fichier audio d'une piste en memoire (morceaux de taille raisonnable).
-async fn stream_track_bytes(s: &AppState, t: &Track) -> Result<Vec<u8>, AurisError> {
+pub(crate) async fn stream_track_bytes(s: &AppState, t: &Track) -> Result<Vec<u8>, AurisError> {
     let mut reader = s.sources.open_uri(&t.uri).await?;
     let mut buf = Vec::new();
     std::io::Read::read_to_end(&mut reader, &mut buf).map_err(AurisError::Io)?;

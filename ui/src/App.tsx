@@ -2960,6 +2960,11 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
             <button className="btn ghost sm" onClick={loadShares}><Icon name="refresh" size={16} /> Actualiser</button>
           </SetRow>
         ),
+        show("API Subsonic", "Serveur compatible Subsonic (lecture seule) pour clients tiers : DSub, Ultrasonic, Strawberry…") && (
+          <SetRow key="subsonic" label="API Subsonic" desc="Serveur compatible Subsonic (lecture seule) pour clients tiers : DSub, Ultrasonic, Strawberry…">
+            <code>{window.location.origin}/rest</code>
+          </SetRow>
+        ),
       ].filter(Boolean) as React.ReactNode[],
     },
   ].map((sec) => ({ ...sec, rows: sec.rows.filter(Boolean) }));
