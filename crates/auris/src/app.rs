@@ -258,6 +258,17 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         });
     }
 
+    // Serveur MPD (clients tiers, #80) : port TCP dédié, 0 = désactivé.
+    if config.mpd_port > 0 {
+        let st = state.clone();
+        let mpd_port = config.mpd_port;
+        tokio::spawn(async move {
+            if let Err(e) = auris_web::mpd::serve(st, mpd_port).await {
+                tracing::warn!("serveur MPD: {e}");
+            }
+        });
+    }
+
     let shutdown = async {
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("arrêt demandé (Ctrl-C)...");

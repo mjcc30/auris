@@ -32,6 +32,8 @@ pub struct AppConfig {
     pub settings: Settings,
     /// Autorise redémarrer/éteindre la machine depuis l'UI (POST /api/system/reboot|shutdown).
     pub power_control: bool,
+    /// Port du serveur MPD (clients tiers : Cantata, Mpdroid, MALP…). 0 = désactivé.
+    pub mpd_port: u16,
 }
 
 impl Default for AppConfig {
@@ -50,6 +52,7 @@ impl Default for AppConfig {
             sources: Vec::new(),
             settings: Settings::default(),
             power_control: false,
+            mpd_port: 6600,
         }
     }
 }

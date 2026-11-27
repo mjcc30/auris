@@ -2965,6 +2965,11 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
             <code>{window.location.origin}/rest</code>
           </SetRow>
         ),
+        show("Serveur MPD", "Protocole MPD sur port 6600 pour clients tiers : Cantata, Mpdroid, MALP, mconnectHD…") && (
+          <SetRow key="mpd" label="Serveur MPD" desc="Protocole MPD (Music Player Daemon) pour clients tiers : Cantata, Mpdroid, MALP, mconnectHD…">
+            <code>{window.location.hostname}:6600</code>
+          </SetRow>
+        ),
       ].filter(Boolean) as React.ReactNode[],
     },
   ].map((sec) => ({ ...sec, rows: sec.rows.filter(Boolean) }));

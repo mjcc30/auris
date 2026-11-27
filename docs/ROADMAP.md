@@ -94,7 +94,10 @@ ouverts ou des intégrations communautaires avec compte utilisateur :
 - **API Subsonic serveur v1 lecture seule** (#79) sur `/rest/*` : ping, artists,
   albums, search3, playlists, coverArt, stream (Range/206) — DSub, Ultrasonic,
   Strawberry… se connectent à Auris comme à un serveur perso.
-- API socket.io Volumio v1.7.4 (#45) et protocole MPD (#80) : en backlog.
+- **Serveur MPD v1** (#80) sur port TCP dédié (`mpd_port`, défaut 6600) : ~40 commandes
+  (play/pause/stop/seek/setvol/playlistinfo/add/lsinfo/search/outputs…) — Cantata,
+  Mpdroid, MALP, mconnectHD… pilotent Auris.
+- API socket.io Volumio v1.7.4 (#45) : en backlog.
 
 ## Au-delà (idées, non planifiées)
 

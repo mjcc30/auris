@@ -35,6 +35,7 @@ use auris_updater::Updater;
 
 mod dlna_renderer;
 mod lastfm;
+pub mod mpd;
 mod multiroom;
 mod network;
 mod packs;

@@ -181,6 +181,23 @@ curl 'localhost:3000/rest/search3.view?f=json&query=daft&songCount=10'
 curl -o track.flac 'localhost:3000/rest/stream.view?f=json&id=<track_id>'
 ```
 
+## Serveur MPD (protocole ligne, port dédié — #80)
+
+`TCP 0.0.0.0:6600` (config `mpd_port`, `0` = désactivé) — sous-ensemble du protocole
+MPD 0.24 pour clients tiers (Cantata, Mpdroid, MALP, mconnectHD…) : salutation
+`OK MPD 0.24.0`, une commande par ligne, réponse en paires `clé: valeur` terminée
+par `OK` (ou `ACK [code@0] {cmd} msg`). Commandes : `ping`, `close`, `commands`,
+`notcommands`, `tagtypes`, `urlhandlers`, `status`, `currentsong`, `stats`,
+`play [pos]`, `playid`, `pause [0|1]`, `stop`, `next`, `previous`, `seek`, `seekid`,
+`setvol`, `volume`, `repeat`, `random`, `single`, `consume`, `clear`, `add`, `addid`,
+`delete`, `deleteid`, `playlistinfo`, `plchanges`, `listplaylists`, `listplaylist`,
+`listplaylistinfo`, `load`, `lsinfo`, `list`, `find`, `search`, `outputs`,
+`enableoutput`, `disableoutput`, `idle`, `noidle` (`idle` répond `OK` sans push en v1).
+
+```bash
+printf 'status\nplaylistinfo\nplay 0\n' | nc <ip> 6600
+```
+
 ## WebSocket `/ws`
 
 Connexion upgrade → l'UI reçoit immédiatement `{"type":"state","payload":{...}}`,
