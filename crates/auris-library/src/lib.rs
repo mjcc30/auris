@@ -393,6 +393,10 @@ impl Library {
                 total: 0,
                 items: Vec::new(),
             },
+            sources: SearchGroup {
+                total: 0,
+                items: Vec::new(),
+            },
         }
     }
 

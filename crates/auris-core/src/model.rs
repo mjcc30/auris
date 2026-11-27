@@ -232,6 +232,27 @@ pub enum SourceKind {
     Upnp { url: String },
     /// Webradio: flux HTTP(S) joue directement.
     Radio { url: String },
+    /// Qobuz (API communautaire + compte perso) — #25.
+    Qobuz {
+        user: String,
+        password: String,
+        /// Qualité demandée : « mp3 » (320), « flac » (16 bits) ou « hires » (24 bits).
+        #[serde(default = "default_qobuz_quality")]
+        quality: String,
+        /// app_id/app_secret du lecteur web (surcharge facultative ; sinon
+        /// extraction automatique depuis play.qobuz.com).
+        #[serde(default)]
+        app_id: Option<String>,
+        #[serde(default)]
+        app_secret: Option<String>,
+        /// Base API (surcharge facultative, ex. miroir de test).
+        #[serde(default)]
+        api_base: Option<String>,
+    },
+}
+
+fn default_qobuz_quality() -> String {
+    "hires".to_string()
 }
 
 impl SourceKind {
@@ -342,6 +363,10 @@ pub struct SearchResults {
     /// compatible avec les anciennes réponses.
     #[serde(default = "empty_search_group")]
     pub radios: SearchGroup<RadioEntry>,
+    /// Résultats des sources externes (Qobuz #25) — default pour rester
+    /// compatible avec les anciennes réponses.
+    #[serde(default = "empty_search_group")]
+    pub sources: SearchGroup<BrowseEntry>,
 }
 
 fn empty_search_group<T>() -> SearchGroup<T> {

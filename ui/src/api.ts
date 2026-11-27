@@ -293,6 +293,8 @@ export interface SearchResults {
   playlists: SearchGroup<Playlist>;
   /** Groupe radios (#38) — optionnel pour compatibilité anciennes réponses. */
   radios?: SearchGroup<RadioEntry>;
+  /** Résultats des sources externes (Qobuz #25) — optionnel pour compatibilité. */
+  sources?: SearchGroup<BrowseEntry>;
 }
 
 /** Lien de partage public (v0.6) : /share/<token>. */
@@ -380,7 +382,7 @@ export interface MusicBrainzInfo {
 export function makeSource(
   id: string,
   name: string,
-  kind: "local" | "usb" | "smb" | "http" | "radio" | "upnp",
+  kind: "local" | "usb" | "smb" | "http" | "radio" | "upnp" | "qobuz",
   fields: Record<string, unknown>,
 ): Source {
   return { id, name, enabled: true, kind, ...fields };

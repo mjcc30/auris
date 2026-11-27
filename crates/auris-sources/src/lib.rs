@@ -5,6 +5,7 @@ pub mod http_raw;
 pub mod live;
 pub mod local;
 pub mod manager;
+pub mod qobuz;
 pub mod radio;
 pub mod smb;
 pub mod transfer;
@@ -54,10 +55,14 @@ pub fn percent_decode(s: &str) -> String {
 
 /// Parse un URI `src://<source_id>/<chemin>` (le chemin est percent-decode,
 /// donc `Black%20Sabbath` et `Black Sabbath` designent le meme dossier).
+/// `src://<id>` sans slash = racine de la source (chemin vide).
 pub fn parse_src_uri(uri: &str) -> Option<(String, String)> {
     let rest = uri.strip_prefix("src://")?;
-    let (id, path) = rest.split_once('/')?;
-    Some((id.to_string(), percent_decode(path)))
+    match rest.split_once('/') {
+        Some((id, path)) => Some((id.to_string(), percent_decode(path))),
+        None if !rest.is_empty() => Some((rest.to_string(), String::new())),
+        None => None,
+    }
 }
 
 pub fn is_src_uri(uri: &str) -> bool {
@@ -115,6 +120,10 @@ pub trait SourceBackend: Send + Sync {
     async fn stat(&self, _rel_path: &str) -> Result<Option<BrowseEntry>> {
         Ok(None)
     }
+    /// Recherche globale dans la source (Qobuz, etc.). Par défaut : rien.
+    async fn search(&self, _query: &str) -> Result<Vec<BrowseEntry>> {
+        Ok(vec![])
+    }
 
     // ---------- ecriture (import / copie vers la source) ----------
 
@@ -160,5 +169,10 @@ mod tests {
         let (_, p2) = parse_src_uri("src://nas/1970/Black Sabbath").unwrap();
         assert_eq!(p2, "1970/Black Sabbath");
         assert!(parse_src_uri("http://x/y").is_none());
+        // racine de la source : src://id sans slash = chemin vide
+        let (id, p3) = parse_src_uri("src://nas").unwrap();
+        assert_eq!(id, "nas");
+        assert_eq!(p3, "");
+        assert!(parse_src_uri("src://").is_none());
     }
 }

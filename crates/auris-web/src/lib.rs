@@ -1250,6 +1250,17 @@ async fn get_search(
             .map(|(_, r)| r)
             .collect(),
     };
+    // Groupe sources externes (Qobuz #25) : recherche déléguée aux backends
+    // qui la supportent (les autres renvoient une liste vide).
+    let src_items = s.sources.search_sources(&query).await;
+    let total = src_items.len();
+    res.sources = SearchGroup {
+        total,
+        items: src_items
+            .into_iter()
+            .take(auris_library::SEARCH_CAP)
+            .collect(),
+    };
     Json(res)
 }
 async fn get_cover(State(s): State<AppState>, Path(track_id): Path<String>) -> Response {

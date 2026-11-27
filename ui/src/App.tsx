@@ -6,7 +6,7 @@ import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
 
 type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "favorites" | "sources" | "multiroom" | "plugins" | "settings" | "display";
-type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp";
+type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp" | "qobuz";
 /** Onglets du panneau lecture en cours (style Volumio: Pochette / Infos / Paroles). */
 type NpTab = "cover" | "infos" | "lyrics";
 
@@ -17,6 +17,7 @@ function kindIconName(kind: string): string {
     case "upnp": return "server";
     case "radio": return "radio";
     case "http": return "link";
+    case "qobuz": return "note";
     default: return "folder";
   }
 }
@@ -28,6 +29,7 @@ function kindLabel(kind: string): string {
     case "upnp": return "UPnP/DLNA";
     case "radio": return "Radio";
     case "http": return "HTTP";
+    case "qobuz": return "Qobuz";
     default: return "Dossier local";
   }
 }
@@ -314,7 +316,7 @@ export default function App() {
               openAlbum={(a) => { setPendingAlbum(a); setPendingArtist(null); setView("library"); }} />
           )}
           {view === "library" && (
-            <Library playTrack={playTrack} playAll={playAll} say={say} refresh={refresh} searchNonce={searchNonce} searchQ={searchQ}
+            <Library playTrack={playTrack} playAll={playAll} playUri={playUri} openSource={openSource} say={say} refresh={refresh} searchNonce={searchNonce} searchQ={searchQ}
               favs={favs} onToggleFav={toggleFav} pins={pins} onTogglePin={togglePin}
               pendingArtist={pendingArtist} onPendingArtistDone={() => setPendingArtist(null)}
               pendingAlbum={pendingAlbum} onPendingAlbumDone={() => setPendingAlbum(null)} />
@@ -687,7 +689,7 @@ function FacetView({ facet, playTrack, playAll, favs, onToggleFav, pins, onToggl
   );
 }
 
-function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendingArtist, onPendingArtistDone, pendingAlbum, onPendingAlbumDone, favs, onToggleFav, pins, onTogglePin }: { playTrack: (t: Track) => void; playAll: (t: Track[]) => void; say: (m: string) => void; refresh: () => Promise<void>; searchNonce: number; searchQ: string; pendingArtist: { id: string; name: string } | null; onPendingArtistDone: () => void; pendingAlbum: { id: string; title: string; artist: string } | null; onPendingAlbumDone: () => void } & LibProps) {
+function Library({ playTrack, playAll, playUri, openSource, say, refresh, searchNonce, searchQ, pendingArtist, onPendingArtistDone, pendingAlbum, onPendingAlbumDone, favs, onToggleFav, pins, onTogglePin }: { playTrack: (t: Track) => void; playAll: (t: Track[]) => void; playUri: (u: string) => void; openSource: (id: string) => void; say: (m: string) => void; refresh: () => Promise<void>; searchNonce: number; searchQ: string; pendingArtist: { id: string; name: string } | null; onPendingArtistDone: () => void; pendingAlbum: { id: string; title: string; artist: string } | null; onPendingAlbumDone: () => void } & LibProps) {
   const [tab, setTab] = useState<"tracks" | "albums" | "artists">("tracks");
   const [tracks, setTracks] = useState<Track[]>([]);
   const [albums, setAlbums] = useState<Album[]>([]);
@@ -695,7 +697,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
   const [q, setQ] = useState("");
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<SearchResults | null>(null);
-  const [kind, setKind] = useState<"all" | "tracks" | "albums" | "artists" | "playlists" | "radios">("all");
+  const [kind, setKind] = useState<"all" | "tracks" | "albums" | "artists" | "playlists" | "radios" | "sources">("all");
   const [srcFilter, setSrcFilter] = useState("");
   const [sources, setSources] = useState<Source[]>([]);
   const [plDetail, setPlDetail] = useState<PlaylistDetail | null>(null);
@@ -789,7 +791,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
         results ? (
         <div>
           <div className="chips" style={{ marginTop: 0, marginBottom: 4 }}>
-            {([["all", t("Tous")], ["tracks", `${t("Titres")} (${results.tracks.total})`], ["albums", `${t("Albums")} (${results.albums.total})`], ["artists", `${t("Artistes")} (${results.artists.total})`], ["playlists", `${t("Listes")} (${results.playlists.total})`], ["radios", `${t("Radios")} (${results.radios?.total ?? 0})`]] as const).map(([k, label]) => (
+            {([["all", t("Tous")], ["tracks", `${t("Titres")} (${results.tracks.total})`], ["albums", `${t("Albums")} (${results.albums.total})`], ["artists", `${t("Artistes")} (${results.artists.total})`], ["playlists", `${t("Listes")} (${results.playlists.total})`], ["radios", `${t("Radios")} (${results.radios?.total ?? 0})`], ["sources", `${t("Sources")} (${results.sources?.total ?? 0})`]] as const).map(([k, label]) => (
               <button key={k} className={`chip chip-btn ${kind === k ? "active" : ""}`} onClick={() => setKind(k)}>{label}</button>
             ))}
           </div>
@@ -801,7 +803,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
               ))}
             </div>
           )}
-          {results.tracks.total + results.albums.total + results.artists.total + results.playlists.total + (results.radios?.total ?? 0) === 0 && (
+          {results.tracks.total + results.albums.total + results.artists.total + results.playlists.total + (results.radios?.total ?? 0) + (results.sources?.total ?? 0) === 0 && (
             <div className="empty">{t("Aucun résultat pour « {q} »", { q })}</div>
           )}
           {(kind === "all" || kind === "artists") && results.artists.items.length > 0 && (
@@ -850,6 +852,19 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
                   <tr key={r.id} className="link" onClick={() => api.playRadio(r.id).catch(() => {})}>
                     <td><Icon name="radio" size={16} /> {r.name}</td>
                     <td className="meta">{r.origin === "favorite" ? t("Favori") : r.origin === "builtin" ? t("Intégrée") : t("Source")}</td>
+                  </tr>
+                ))}
+              </tbody></table>
+            </>
+          )}
+          {(kind === "all" || kind === "sources") && (results.sources?.items.length ?? 0) > 0 && results.sources && (
+            <>
+              <h2>{t("Sources externes")} ({results.sources.total})</h2>
+              <table className="tracks"><tbody>
+                {results.sources.items.map((e) => (
+                  <tr key={e.uri} className="link" onClick={() => e.is_audio ? playUri(e.uri) : openSource(e.uri.replace(/^src:\/\/([^/]+)\/.*$/, "$1"))}>
+                    <td><Icon name={e.is_dir ? "folder" : "note"} size={16} /> {e.name}</td>
+                    <td className="meta">{e.is_dir ? t("Dossier — ouvrir dans Parcourir") : e.format?.kind === "pcm" ? `${e.format.bits} bits / ${Math.round((e.format.sample_rate ?? 0) / 1000)} kHz` : t("Piste")}</td>
                   </tr>
                 ))}
               </tbody></table>
@@ -1943,6 +1958,7 @@ function Sources({ sources, refresh, say }: { sources: Source[]; refresh: () => 
       case "smb": return `smb://${r.host}/${r.share}${r.base_path ? `/${r.base_path}` : ""}`;
       case "radio": case "http": return String(r.url ?? r.base_url ?? "");
       case "upnp": return String(r.url ?? "");
+      case "qobuz": return `${String(r.user ?? "")} · ${String(r.quality ?? "hires")}`;
       default: return "";
     }
   };
@@ -1987,6 +2003,7 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
   const [password, setPassword] = useState("");
   const [basePath, setBasePath] = useState(String((editing as Record<string, unknown> | null)?.base_path ?? ""));
   const [url, setUrl] = useState(String((editing as Record<string, unknown> | null)?.url ?? (editing as Record<string, unknown> | null)?.base_url ?? ""));
+  const [quality, setQuality] = useState(String((editing as Record<string, unknown> | null)?.quality ?? "hires"));
   const [mounts, setMounts] = useState<MountInfo[]>([]);
   const [detecting, setDetecting] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -2008,6 +2025,7 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
       case "radio": return url.trim() ? makeSource(id, name.trim(), "radio", { url: url.trim() }) : null;
       case "http": return makeSource(id, name.trim(), "http", { base_url: url.trim() || null });
       case "upnp": return url.trim() ? makeSource(id, name.trim(), "upnp", { url: url.trim() }) : null;
+      case "qobuz": return user.trim() && password ? makeSource(id, name.trim(), "qobuz", { user: user.trim(), password, quality }) : null;
     }
   };
 
@@ -2032,7 +2050,7 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
     finally { setDetecting(false); }
   };
 
-  const kinds: [SourceKindTab, string][] = [["local", "Dossier local"], ["usb", "USB"], ["smb", "NAS (SMB/CIFS)"], ["radio", "Radio"], ["http", "URL HTTP"], ["upnp", "UPnP/DLNA"]];
+  const kinds: [SourceKindTab, string][] = [["local", "Dossier local"], ["usb", "USB"], ["smb", "NAS (SMB/CIFS)"], ["radio", "Radio"], ["http", "URL HTTP"], ["upnp", "UPnP/DLNA"], ["qobuz", "Qobuz"]];
 
   return (
     <div className="modal-bg" onClick={onClose}>
@@ -2087,6 +2105,20 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
           )}
           {tab === "upnp" && (
             <label className="span2">URL de description du serveur UPnP/DLNA (ex. http://192.168.1.10:8200/desc.xml) — utile si la découverte SSDP est bloquée<input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://…/desc.xml" /></label>
+          )}
+          {tab === "qobuz" && (
+            <>
+              <label>Identifiant Qobuz (e-mail)<input type="text" value={user} onChange={(e) => setUser(e.target.value)} placeholder="prenom@exemple.com" /></label>
+              <label>Mot de passe<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••" autoComplete="new-password" /></label>
+              <label>Qualité de lecture
+                <select value={quality} onChange={(e) => setQuality(e.target.value)}>
+                  <option value="hires">Hi-Res (jusqu'à 24 bits / 192 kHz)</option>
+                  <option value="flac">FLAC 16 bits / 44,1 kHz</option>
+                  <option value="mp3">MP3 320 kbps</option>
+                </select>
+              </label>
+              <div className="span2 meta">La lecture passe par l'API Qobuz avec votre compte ; les pistes sont résolues en URL signée à la lecture. La navigation (favoris, playlists, recherche) est disponible dans « Parcourir ».</div>
+            </>
           )}
         </div>
 

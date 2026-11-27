@@ -63,6 +63,7 @@ impl SourcesManager {
             SourceKind::Http { .. } => Ok(Arc::new(HttpSource::new(src.clone())?)),
             SourceKind::Upnp { .. } => Ok(Arc::new(crate::upnp::UpnpSource::new(src.clone())?)), // ContentDirectory + lecture http des <res>
             SourceKind::Radio { .. } => Ok(Arc::new(RadioSource::new(src.clone())?)),
+            SourceKind::Qobuz { .. } => Ok(Arc::new(crate::qobuz::QobuzSource::new(src.clone())?)),
         }
     }
 
@@ -134,6 +135,21 @@ impl SourcesManager {
 
     pub fn backend(&self, id: &str) -> Option<Arc<dyn SourceBackend>> {
         self.backends.read().unwrap().get(id).cloned()
+    }
+
+    /// Recherche dans toutes les sources actives qui la supportent (Qobuz #25 ;
+    /// les autres backends renvoient une liste vide via le défaut du trait).
+    /// Une source en panne est ignorée (pas d'erreur globale).
+    pub async fn search_sources(&self, query: &str) -> Vec<BrowseEntry> {
+        let mut out = Vec::new();
+        for s in self.list().into_iter().filter(|s| s.enabled) {
+            if let Some(b) = self.backend(&s.id) {
+                if let Ok(items) = b.search(query).await {
+                    out.extend(items);
+                }
+            }
+        }
+        out
     }
 
     /// Liste le contenu d'un URI (`src://id/dossier`, `upnp://...`, ou URL playlist).

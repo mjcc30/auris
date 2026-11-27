@@ -251,6 +251,7 @@ dependencies = [
  "auris-core",
  "bytes",
  "futures-util",
+ "md-5 0.10.6",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
