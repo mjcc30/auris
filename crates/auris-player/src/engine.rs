@@ -16,6 +16,7 @@ use tokio::sync::broadcast;
 
 use crate::decoder::{open_decoder_with_path, Chunk, Decoder, OutputSpec, TrackMeta};
 use crate::eq::{EqBandParams, EqConfig};
+use crate::mixer::{spawn_mixer, MixerCmd, MixerHandle};
 use crate::output::{make_ring, AudioOutput, Cons, Prod};
 
 const RING_CHUNKS: usize = 96;
@@ -69,6 +70,13 @@ struct WorkerHandle {
     msg_rx: mpsc::Receiver<WorkerMsg>,
     cmd_tx: mpsc::Sender<WorkerCmd>,
     join: Option<JoinHandle<()>>,
+}
+
+/// Piste suivante préchargée (crossfade / gapless) en attente de promotion.
+struct PendingNext {
+    worker: WorkerHandle,
+    index: usize,
+    uri: String,
 }
 
 impl WorkerHandle {
@@ -131,11 +139,13 @@ fn track_from_uri(uri: &str, meta: &TrackMeta, duration: Option<f64>) -> Track {
     t
 }
 
-/// Lance le worker de decode d'une piste.
+/// Lance le worker de decode d'une piste. Les chunks poussés par le worker
+/// sont tagués avec la génération *courante* (lue à chaque push) : un seek
+/// qui bump la génération purge ainsi les vieux chunks encore dans l'anneau.
 fn spawn_worker(
     sources: Arc<SourcesManager>,
     uri: String,
-    gen: u64,
+    gen: Arc<AtomicU64>,
 ) -> (
     mpsc::Receiver<WorkerMsg>,
     mpsc::Sender<WorkerCmd>,
@@ -210,7 +220,10 @@ fn spawn_worker(
             match decoder.next_chunk(CHUNK_FRAMES) {
                 Ok(Some(data)) => {
                     pushed_frames += data.frames(spec.channels as usize);
-                    let mut chunk = Chunk { gen, data };
+                    let mut chunk = Chunk {
+                        gen: gen.load(Ordering::SeqCst),
+                        data,
+                    };
                     loop {
                         match prod.try_push(chunk) {
                             Ok(()) => break,
@@ -286,9 +299,19 @@ struct Engine {
     /// Config de l'égaliseur paramétrique, poussée à chaud (versionnée).
     eq: Arc<RwLock<EqConfig>>,
     worker: Option<WorkerHandle>,
+    /// Mixer de la piste courante (crossfade / gapless vers la suivante).
+    mixer: Option<MixerHandle>,
+    /// EndOfTrack reçu mais en attente que l'anneau de sortie soit drainé.
+    pending_eot: bool,
+    /// Piste suivante préchargée, en attente de promotion.
+    pending_next: Option<PendingNext>,
     cur_spec: Option<OutputSpec>,
     pending_uri: Option<String>,
     seek_after_ready: Option<f64>,
+    /// Durée du fondu enchaîné en ms (0 = enchaînement direct).
+    crossfade_ms: Arc<AtomicU64>,
+    /// Préchargement de la piste suivante (gapless).
+    gapless: Arc<AtomicBool>,
     rng: XorShift,
 }
 
@@ -311,16 +334,22 @@ impl Engine {
         self.frames_out.store(0, Ordering::SeqCst);
         self.seek_after_ready = seek_after;
         self.pending_uri = Some(uri.clone());
+        self.pending_eot = false;
         {
             let mut st = self.state.write().unwrap();
             st.is_live = false;
             st.stream_title = None;
         }
+        if let Some(p) = self.pending_next.take() {
+            p.worker.stop();
+        }
+        if let Some(m) = self.mixer.take() {
+            m.stop();
+        }
         if let Some(w) = self.worker.take() {
             w.stop();
         }
-        let gen = self.gen.load(Ordering::SeqCst);
-        let (msg_rx, cmd_tx, join) = spawn_worker(self.sources.clone(), uri, gen);
+        let (msg_rx, cmd_tx, join) = spawn_worker(self.sources.clone(), uri, self.gen.clone());
         self.worker = Some(WorkerHandle {
             msg_rx,
             cmd_tx,
@@ -329,6 +358,13 @@ impl Engine {
     }
 
     fn stop_playback(&mut self) {
+        self.pending_eot = false;
+        if let Some(p) = self.pending_next.take() {
+            p.worker.stop();
+        }
+        if let Some(m) = self.mixer.take() {
+            m.stop();
+        }
         if let Some(w) = self.worker.take() {
             w.stop();
         }
@@ -357,6 +393,33 @@ impl Engine {
             self.start_track(uri, None);
             self.set_status(PlayStatus::Playing);
             self.publish();
+        }
+    }
+
+    /// Enchaînement après EndOfTrack réellement consommé (anneau de sortie
+    /// drainé) : repeat one, piste suivante, ou stop.
+    fn advance_after_eot(&mut self) {
+        // la piste s'est terminée avant que le préchargement de B soit prêt :
+        // on abandonne le fondu, enchaînement normal
+        if let Some(p) = self.pending_next.take() {
+            p.worker.stop();
+        }
+        let repeat = self.state.read().unwrap().repeat;
+        if repeat == RepeatMode::One {
+            let uri = self
+                .state
+                .read()
+                .unwrap()
+                .current
+                .as_ref()
+                .map(|t| t.uri.clone());
+            if let Some(uri) = uri {
+                self.start_track(uri, Some(0.0));
+            }
+        } else if let Some(i) = self.next_index() {
+            self.play_queue_index(i);
+        } else {
+            self.stop_playback();
         }
     }
 
@@ -487,10 +550,24 @@ impl Engine {
                 }
                 let dur = self.state.read().unwrap().duration_secs;
                 let secs = secs.max(0.0).min(if dur > 0.0 { dur } else { f64::MAX });
+                // préchargement en cours : on l'annule (le seek casse le fondu)
+                if let Some(p) = self.pending_next.take() {
+                    p.worker.stop();
+                }
+                self.pending_eot = false;
+                let rate = self.cur_rate.load(Ordering::SeqCst).max(1);
+                if let Some(m) = &self.mixer {
+                    let _ = m.cmd_tx.send(MixerCmd::CancelCrossfade);
+                    let _ = m
+                        .cmd_tx
+                        .send(MixerCmd::SetCount((secs * rate as f64) as u64));
+                }
+                // bump de génération : les chunks encore bufferisés (vieux gen)
+                // sont purgés par le mixer et le callback
+                self.gen.fetch_add(1, Ordering::SeqCst);
                 if let Some(w) = &self.worker {
                     let _ = w.cmd_tx.send(WorkerCmd::Seek(secs));
                 }
-                let rate = self.cur_rate.load(Ordering::SeqCst).max(1);
                 self.frames_out
                     .store((secs * rate as f64) as u64, Ordering::SeqCst);
                 self.state.write().unwrap().position_secs = secs;
@@ -532,6 +609,11 @@ impl Engine {
                 st.volume = v;
                 drop(st);
                 self.volume.store(v, Ordering::SeqCst);
+                self.crossfade_ms.store(
+                    (p.crossfade_secs.clamp(0.0, 12.0) * 1000.0) as u64,
+                    Ordering::SeqCst,
+                );
+                self.gapless.store(p.gapless, Ordering::SeqCst);
                 // EQ paramétrique : maj à chaud (bump de version -> chaîne reconstruite)
                 {
                     let mut eq = self.eq.write().unwrap();
@@ -712,11 +794,21 @@ impl Engine {
                         }
                     }
                 }
+                // Pont worker -> mixer -> callback : le mixer gère le crossfade
+                // vers la piste suivante dans le même anneau de sortie.
+                let (mixer, cons_out) =
+                    spawn_mixer(self.gen.clone(), RING_CHUNKS, self.frames_out.clone());
+                let _ = mixer.cmd_tx.send(MixerCmd::SetSource {
+                    cons,
+                    channels: spec.channels as usize,
+                    rate: spec.rate,
+                });
+                self.mixer = Some(mixer);
                 let build_res = {
                     let out = self.output.as_mut().unwrap();
                     out.build_stream(
                         &spec,
-                        cons,
+                        cons_out,
                         self.volume.clone(),
                         self.muted.clone(),
                         self.frames_out.clone(),
@@ -830,27 +922,15 @@ impl Engine {
             }
             WorkerMsg::EndOfTrack => {
                 tracing::debug!(
-                    "engine: EndOfTrack recu, frames_out={} pos={:.2}",
+                    "engine: EndOfTrack recu, frames_out={} pos={:.2} — attente drain anneau de sortie",
                     self.frames_out.load(Ordering::SeqCst),
                     self.state.read().unwrap().position_secs
                 );
-                let repeat = self.state.read().unwrap().repeat;
-                if repeat == RepeatMode::One {
-                    let uri = self
-                        .state
-                        .read()
-                        .unwrap()
-                        .current
-                        .as_ref()
-                        .map(|t| t.uri.clone());
-                    if let Some(uri) = uri {
-                        self.start_track(uri, Some(0.0));
-                    }
-                } else if let Some(i) = self.next_index() {
-                    self.play_queue_index(i);
-                } else {
-                    self.stop_playback();
-                }
+                // Le worker signale EOF quand SON anneau est vide, mais le
+                // mixer a pu bufferiser la suite dans l'anneau de sortie :
+                // on attend que celui-ci soit réellement consommé (drained)
+                // avant d'enchaîner, sinon on couperait la fin de la piste.
+                self.pending_eot = true;
             }
             WorkerMsg::Error(e) => {
                 tracing::error!("worker: {e}");
@@ -864,6 +944,159 @@ impl Engine {
         }
     }
 
+    /// Précharge la piste suivante quand la position source atteint
+    /// `durée - crossfade - marge` (crossfade) ou `durée - 1 s` (gapless seul).
+    fn maybe_preload(&mut self) {
+        if self.pending_next.is_some() {
+            return;
+        }
+        let gapless = self.gapless.load(Ordering::SeqCst);
+        let xf_ms = self.crossfade_ms.load(Ordering::SeqCst);
+        if !gapless && xf_ms == 0 {
+            return;
+        }
+        if self.state.read().unwrap().status != PlayStatus::Playing {
+            return;
+        }
+        let Some(mixer) = &self.mixer else { return };
+        let rate = self.cur_rate.load(Ordering::SeqCst).max(1);
+        let dur = self.state.read().unwrap().duration_secs;
+        if dur <= 0.0 {
+            return; // flux live : pas de préchargement
+        }
+        let total = dur * rate as f64;
+        let xf_frames = (xf_ms as f64 / 1000.0) * rate as f64;
+        // marge d'ouverture/décodage de la piste suivante
+        let threshold = total - xf_frames - rate as f64;
+        if (mixer.frames_pushed.load(Ordering::SeqCst) as f64) < threshold {
+            return;
+        }
+        let Some(idx) = self.next_index() else { return };
+        let uri = self
+            .state
+            .read()
+            .unwrap()
+            .queue
+            .get(idx)
+            .map(|t| t.uri.clone());
+        let Some(uri) = uri else { return };
+        // même format uniquement : le crossfade ne resample pas
+        if let Some(cur) = self.cur_spec {
+            if cur.is_dsd_dop {
+                return;
+            }
+        }
+        tracing::debug!("engine: préchargement piste suivante #{idx} ({uri})");
+        let (msg_rx, cmd_tx, join) =
+            spawn_worker(self.sources.clone(), uri.clone(), self.gen.clone());
+        self.pending_next = Some(PendingNext {
+            worker: WorkerHandle {
+                msg_rx,
+                cmd_tx,
+                join: Some(join),
+            },
+            index: idx,
+            uri,
+        });
+    }
+
+    /// Messages du worker de la piste préchargée (B).
+    fn handle_pending_msg(&mut self, msg: WorkerMsg) {
+        match msg {
+            WorkerMsg::Ready {
+                spec,
+                meta,
+                duration,
+                cons,
+            } => {
+                let Some(p) = self.pending_next.take() else {
+                    return;
+                };
+                let cur = self.cur_spec;
+                let xf_ms = self.crossfade_ms.load(Ordering::SeqCst);
+                let compat = cur
+                    .map(|c| {
+                        c.rate == spec.rate
+                            && c.channels == spec.channels
+                            && !c.is_dsd_dop
+                            && !spec.is_dsd_dop
+                    })
+                    .unwrap_or(false)
+                    && self.state.read().unwrap().status == PlayStatus::Playing;
+                if !compat || (xf_ms == 0 && !self.gapless.load(Ordering::SeqCst)) {
+                    // pas de fondu possible : B est abandonné, l'enchaînement
+                    // se fera à EndOfTrack de A comme avant
+                    p.worker.stop();
+                    return;
+                }
+                // démarre le fondu. PAS de bump de génération ici : le contenu
+                // déjà bufferisé dans l'anneau de sortie (fin de A) reste valide.
+                // Le mixer distingue A et B via gen_a/gen_b ; c'est le bump au
+                // seek (ou au prochain start_track) qui purgera les vieux chunks.
+                let gen_cur = self.gen.load(Ordering::SeqCst);
+                let gen_a = gen_cur;
+                let gen_b = gen_cur;
+                let rate = spec.rate.max(1);
+                let xf_frames = ((xf_ms as f64 / 1000.0) * rate as f64) as usize;
+                let dur_a = self.state.read().unwrap().duration_secs;
+                let start_at = ((dur_a * rate as f64).max(0.0) - xf_frames as f64).max(0.0) as u64;
+                tracing::debug!(
+                    "engine: crossfade {xf_ms} ms vers #{} (start_at={start_at}, xf_frames={xf_frames})",
+                    p.index
+                );
+                if let Some(m) = &self.mixer {
+                    let _ = m.cmd_tx.send(MixerCmd::StartCrossfade {
+                        cons_b: cons,
+                        xf_frames,
+                        channels: spec.channels as usize,
+                        gen_a,
+                        gen_b,
+                        start_at,
+                    });
+                }
+                // promotion : B devient la piste courante du worker principal,
+                // A est stoppé (le mixer draine ce qui reste de A pour le fondu)
+                if let Some(w) = self.worker.take() {
+                    w.stop();
+                }
+                self.worker = Some(p.worker);
+                let uri = p.uri.clone();
+                let idx = p.index;
+                let queued = self.state.read().unwrap().queue.get(idx).cloned();
+                let mut track = queued.unwrap_or_else(|| track_from_uri(&uri, &meta, duration));
+                if track.duration_secs.is_none() {
+                    track.duration_secs = duration.or(meta.duration_secs);
+                }
+                if meta.format.is_some() {
+                    track.format = meta.format;
+                }
+                self.cur_spec = Some(spec);
+                self.cur_rate.store(spec.rate as u64, Ordering::SeqCst);
+                // l'UI repart à 0 sur la nouvelle piste (comme Spotify au
+                // démarrage du fondu) ; l'audio, lui, reste continu
+                self.frames_out.store(0, Ordering::SeqCst);
+                {
+                    let mut st = self.state.write().unwrap();
+                    st.queue_index = Some(idx);
+                    st.current = Some(track);
+                    st.duration_secs = duration.unwrap_or(0.0);
+                    st.is_live = duration.is_none() && meta.duration_secs.is_none();
+                    st.stream_title = None;
+                    st.position_secs = 0.0;
+                    st.status = PlayStatus::Playing;
+                    st.current_format = meta.format;
+                }
+                self.publish();
+            }
+            WorkerMsg::Seeked(_) => {}
+            WorkerMsg::EndOfTrack | WorkerMsg::Error(_) => {
+                if let Some(p) = self.pending_next.take() {
+                    p.worker.stop();
+                }
+            }
+        }
+    }
+
     fn run(mut self) {
         loop {
             match self.cmd_rx.recv_timeout(Duration::from_millis(200)) {
@@ -871,15 +1104,38 @@ impl Engine {
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
-            let mut msgs = Vec::new();
+            let mut msgs: Vec<(bool, WorkerMsg)> = Vec::new();
             if let Some(w) = &self.worker {
                 while let Ok(m) = w.msg_rx.try_recv() {
-                    msgs.push(m);
+                    msgs.push((false, m));
                 }
             }
-            for m in msgs {
-                self.handle_worker_msg(m);
+            if let Some(p) = &self.pending_next {
+                while let Ok(m) = p.worker.msg_rx.try_recv() {
+                    msgs.push((true, m));
+                }
             }
+            for (pending, m) in msgs {
+                if pending {
+                    self.handle_pending_msg(m);
+                } else {
+                    self.handle_worker_msg(m);
+                }
+            }
+            // EndOfTrack en attente : on enchaîne seulement quand l'anneau de
+            // sortie est réellement drainé (fin de piste jouée jusqu'au bout).
+            if self.pending_eot {
+                let drained = self
+                    .mixer
+                    .as_ref()
+                    .map(|m| m.drained.load(Ordering::SeqCst))
+                    .unwrap_or(true);
+                if drained {
+                    self.pending_eot = false;
+                    self.advance_after_eot();
+                }
+            }
+            self.maybe_preload();
         }
     }
 }
@@ -922,6 +1178,8 @@ impl PlayerEngine {
         let exclusive = Arc::new(AtomicBool::new(exclusive));
         let browser_spec = Arc::new(RwLock::new(None::<(u32, u16)>));
         let eq = Arc::new(RwLock::new(EqConfig::default()));
+        let crossfade_ms = Arc::new(AtomicU64::new(0));
+        let gapless = Arc::new(AtomicBool::new(true));
 
         // horloge de position: 2x / seconde
         {
@@ -969,9 +1227,14 @@ impl PlayerEngine {
             browser_spec: browser_spec.clone(),
             eq,
             worker: None,
+            mixer: None,
+            pending_next: None,
+            pending_eot: false,
             cur_spec: None,
             pending_uri: None,
             seek_after_ready: None,
+            crossfade_ms,
+            gapless,
             rng: XorShift(
                 0x9E3779B97F4A7C15
                     ^ std::time::SystemTime::now()

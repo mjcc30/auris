@@ -421,6 +421,8 @@ export interface PlaybackSettings {
   max_volume: number;
   volume_mode: "software" | "disabled";
   gapless: boolean;
+  /** Fondu enchaîné entre pistes en secondes (0 = direct, max 12). */
+  crossfade_secs: number;
   resampling: boolean;
   dsd_mode: "dop" | "pcm";
   /** Minuterie de sommeil en minutes (null = désactivée, one-shot). */

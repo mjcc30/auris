@@ -110,6 +110,9 @@ pub struct PlaybackSettings {
     pub volume_mode: VolumeMode,
     /// Lecture sans trou entre pistes de même format (gapless).
     pub gapless: bool,
+    /// Fondu enchaîné (crossfade) entre deux pistes, en secondes (0 = direct,
+    /// max 12). Uniquement entre pistes de même format (cadence/canaux).
+    pub crossfade_secs: f64,
     /// Rééchantillonnage autorisé (false = bit-perfect, aucun resample).
     pub resampling: bool,
     pub dsd_mode: DsdMode,
@@ -129,6 +132,7 @@ impl Default for PlaybackSettings {
             max_volume: 100,
             volume_mode: VolumeMode::Software,
             gapless: true,
+            crossfade_secs: 0.0,
             resampling: false,
             dsd_mode: DsdMode::Dop,
             sleep_timer: None,
@@ -262,6 +266,10 @@ impl Settings {
     pub fn validate(&self) -> Result<(), String> {
         if self.playback.max_volume == 0 || self.playback.max_volume > 100 {
             return Err("max_volume doit être entre 1 et 100".into());
+        }
+        let xf = self.playback.crossfade_secs;
+        if !xf.is_finite() || xf < 0.0 || xf > 12.0 {
+            return Err("crossfade_secs doit être entre 0 et 12".into());
         }
         let a = self.appearance.accent.trim();
         let hex_ok =

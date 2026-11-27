@@ -1952,6 +1952,15 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
             <Switch checked={p.gapless} label="gapless" onChange={(v) => setPlayback("gapless", v)} />
           </SetRow>
         ),
+        show("Fondu enchaîné", "Durée du crossfade entre deux pistes") && (
+          <SetRow key="crossfade" label="Fondu enchaîné (crossfade)" desc="Superposition de la fin et du début des pistes (même format uniquement)">
+            <div className="range-ctrl">
+              <input type="range" min={0} max={12} step={0.5} value={p.crossfade_secs} aria-label="Fondu enchaîné"
+                onChange={(e) => setPlayback("crossfade_secs", Number(e.target.value))} />
+              <span className="vol">{p.crossfade_secs}s</span>
+            </div>
+          </SetRow>
+        ),
         show("Rééchantillonnage", "Autoriser la conversion de fréquence d'échantillonnage") && (
           <SetRow key="resampling" label="Rééchantillonnage" desc="Désactivé = bit-perfect, aucun resample (recommandé)">
             <Switch checked={p.resampling} label="rééchantillonnage" onChange={(v) => setPlayback("resampling", v)} />
