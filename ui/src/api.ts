@@ -466,7 +466,7 @@ export interface MusicBrainzInfo {
 export function makeSource(
   id: string,
   name: string,
-  kind: "local" | "usb" | "smb" | "http" | "radio" | "upnp" | "qobuz" | "tidal" | "linein" | "archive" | "deezer",
+  kind: "local" | "usb" | "smb" | "http" | "radio" | "upnp" | "qobuz" | "tidal" | "linein" | "archive" | "deezer" | "jamendo",
   fields: Record<string, unknown>,
 ): Source {
   return { id, name, enabled: true, kind, ...fields };

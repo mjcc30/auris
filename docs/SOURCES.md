@@ -13,6 +13,11 @@ depuis l'onglet **Parcourir** de l'UI.
 | `http` | `base_url?` (m3u/m3u8 ou fichier direct) | oui | non |
 | `upnp` | `url` (serveur DLNA découvert) | oui | non |
 | `radio` | `url` (flux webradio) | oui | non |
+| `archive` | — (Internet Archive, audio libre, sans compte — #84) | oui | non |
+| `deezer` | — (extraits 30 s, API publique keyless — #85) | oui (30 s) | non |
+| `jamendo` | `client_id?` (gratuit, developer.jamendo.com — #86) | oui (CC) | non |
+| `qobuz` / `tidal` | credentials perso (#25) | oui | non |
+| `linein` | `device?` (entrée audio live — #75) | oui | non |
 
 - **USB** : bouton « Détecter les disques USB » (`GET /api/usb/devices`) liste
   les montages amovibles connus de l'OS (`/media`, `/run/media`, `/mnt` sous

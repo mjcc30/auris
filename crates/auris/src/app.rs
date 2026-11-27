@@ -74,6 +74,16 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
                 });
             }
         }
+        // Jamendo (CC) : source ajoutée désactivée — elle requiert un client_id perso
+        // (gratuit, developer.jamendo.com) à renseigner dans config.toml (#86).
+        if !config.sources.iter().any(|s| s.id == "jamendo") {
+            config.sources.push(auris_core::Source {
+                id: "jamendo".into(),
+                name: "Jamendo · CC (client_id requis)".into(),
+                kind: auris_core::SourceKind::Jamendo { client_id: None },
+                enabled: false,
+            });
+        }
         config.save().context("écriture de la config par défaut")?;
         tracing::info!("config créée: {}", config.config_path().display());
     }

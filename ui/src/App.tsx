@@ -6,7 +6,7 @@ import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
 
 type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "favorites" | "sources" | "multiroom" | "plugins" | "settings" | "display";
-type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp" | "qobuz" | "tidal" | "linein" | "archive" | "deezer";
+type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp" | "qobuz" | "tidal" | "linein" | "archive" | "deezer" | "jamendo";
 /** Onglets du panneau lecture en cours (style Volumio: Pochette / Infos / Paroles). */
 type NpTab = "cover" | "infos" | "lyrics";
 
@@ -22,6 +22,7 @@ function kindIconName(kind: string): string {
     case "linein": return "link";
     case "archive": return "globe";
     case "deezer": return "note";
+    case "jamendo": return "globe";
     default: return "folder";
   }
 }
@@ -38,6 +39,7 @@ function kindLabel(kind: string): string {
     case "linein": return "Line-in / optique / HDMI";
     case "archive": return "Internet Archive";
     case "deezer": return "Deezer (extraits 30 s)";
+    case "jamendo": return "Jamendo (Creative Commons)";
     default: return "Dossier local";
   }
 }
@@ -2206,6 +2208,7 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
   const [url, setUrl] = useState(String((editing as Record<string, unknown> | null)?.url ?? (editing as Record<string, unknown> | null)?.base_url ?? ""));
   const [quality, setQuality] = useState(String((editing as Record<string, unknown> | null)?.quality ?? "hires"));
   const [token, setToken] = useState("");
+  const [clientId, setClientId] = useState(String((editing as Record<string, unknown> | null)?.client_id ?? ""));
   const [sessionId, setSessionId] = useState(String((editing as Record<string, unknown> | null)?.session_id ?? ""));
   const [mounts, setMounts] = useState<MountInfo[]>([]);
   const [detecting, setDetecting] = useState(false);
@@ -2235,6 +2238,7 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
       case "linein": return makeSource(id, name.trim(), "linein", { device: inDevice || null });
       case "archive": return makeSource(id, name.trim(), "archive", {});
       case "deezer": return makeSource(id, name.trim(), "deezer", {});
+      case "jamendo": return makeSource(id, name.trim(), "jamendo", { client_id: clientId.trim() || null });
     }
   };
 
@@ -2259,7 +2263,7 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
     finally { setDetecting(false); }
   };
 
-  const kinds: [SourceKindTab, string][] = [["local", "Dossier local"], ["usb", "USB"], ["smb", "NAS (SMB/CIFS)"], ["radio", "Radio"], ["http", "URL HTTP"], ["upnp", "UPnP/DLNA"], ["qobuz", "Qobuz"], ["tidal", "Tidal"], ["linein", "Line-in"], ["archive", "Internet Archive"], ["deezer", "Deezer (30 s)"]];
+  const kinds: [SourceKindTab, string][] = [["local", "Dossier local"], ["usb", "USB"], ["smb", "NAS (SMB/CIFS)"], ["radio", "Radio"], ["http", "URL HTTP"], ["upnp", "UPnP/DLNA"], ["qobuz", "Qobuz"], ["tidal", "Tidal"], ["linein", "Line-in"], ["archive", "Internet Archive"], ["deezer", "Deezer (30 s)"], ["jamendo", "Jamendo (CC)"]];
 
   useEffect(() => {
     if (tab === "linein") api.inputDevices().then(setInDevices).catch(() => {});
@@ -2321,6 +2325,12 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
           )}
           {tab === "deezer" && (
             <div className="span2 meta">Extraits 30 s via l'API publique Deezer — recherche et top du chart jouables directement, sans compte ni clé.</div>
+          )}
+          {tab === "jamendo" && (
+            <>
+              <div className="span2 meta">Musique Creative Commons (Jamendo) — lecture complète, sans compte. Inscrivez-vous gratuitement sur developer.jamendo.com pour obtenir un client_id.</div>
+              <label className="span2">client_id Jamendo<input type="text" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="votre client_id (developer.jamendo.com)" /></label>
+            </>
           )}
           {tab === "upnp" && (
             <label className="span2">URL de description du serveur UPnP/DLNA (ex. http://192.168.1.10:8200/desc.xml) — utile si la découverte SSDP est bloquée<input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://…/desc.xml" /></label>

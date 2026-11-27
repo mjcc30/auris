@@ -4,6 +4,7 @@ pub mod archive;
 pub mod deezer;
 pub mod http;
 pub mod http_raw;
+pub mod jamendo;
 pub mod linein;
 pub mod live;
 pub mod local;

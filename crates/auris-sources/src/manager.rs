@@ -70,6 +70,9 @@ impl SourcesManager {
             SourceKind::Tidal { .. } => Ok(Arc::new(crate::tidal::TidalSource::new(src.clone())?)),
             SourceKind::Archive => Ok(Arc::new(crate::archive::ArchiveSource::new(src.clone())?)), // #84
             SourceKind::Deezer => Ok(Arc::new(crate::deezer::DeezerSource::new(src.clone())?)), // #85
+            SourceKind::Jamendo { .. } => {
+                Ok(Arc::new(crate::jamendo::JamendoSource::new(src.clone())?))
+            } // #86
         }
     }
 

@@ -275,6 +275,13 @@ pub enum SourceKind {
     Archive,
     /// Deezer — extraits 30 s via l'API publique (sans clé ni compte) — #85.
     Deezer,
+    /// Jamendo — musique Creative Commons, API v3.0 avec `client_id` perso
+    /// (inscription gratuite sur developer.jamendo.com). Sans `client_id`,
+    /// la source reste désactivée avec un message clair — #86.
+    Jamendo {
+        #[serde(default)]
+        client_id: Option<String>,
+    },
 }
 
 fn default_qobuz_quality() -> String {

@@ -97,6 +97,11 @@ ouverts ou des intégrations communautaires avec compte utilisateur :
 - **Serveur MPD v1** (#80) sur port TCP dédié (`mpd_port`, défaut 6600) : ~40 commandes
   (play/pause/stop/seek/setvol/playlistinfo/add/lsinfo/search/outputs…) — Cantata,
   Mpdroid, MALP, mconnectHD… pilotent Auris.
+- **Source Jamendo** (#86) `kind = "jamendo"` : musique Creative Commons en lecture
+  complète via l'API v3.0 (`client_id` perso gratuit, developer.jamendo.com) —
+  recherche + populaires du mois ; sans `client_id` la source reste désactivée
+  avec un message clair. Ajoutée désactivée par défaut, onglet « Jamendo (CC) »
+  dans le formulaire de source.
 - API socket.io Volumio v1.7.4 (#45) : en backlog.
 
 ## Au-delà (idées, non planifiées)
