@@ -6,8 +6,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use auris_core::{
-    Album, Artist, AurisError, DecadeFacet, FavKind, Favorites, GenreFacet, LibraryStats, Playlist,
-    Result, ShareKind, ShareLink, Source, Track,
+    Album, Artist, AurisError, DecadeFacet, FavKind, Favorites, GenreFacet, HistoryEntry,
+    LibraryStats, Playlist, Result, ShareKind, ShareLink, Source, Track,
 };
 use auris_player::probe_meta;
 use auris_sources::{make_uri, SourcesManager};
@@ -38,6 +38,10 @@ const TREE_SHARES: &str = "shares";
 const TREE_BIOS: &str = "bios";
 const TREE_FAVS: &str = "favs";
 const FAVS_KEY: &str = "all";
+const TREE_HISTORY: &str = "history";
+const HISTORY_KEY: &str = "all";
+/// Historique d'écoute : nombre max d'entrées conservées (#69).
+const HISTORY_CAP: usize = 500;
 
 pub struct Library {
     db: sled::Db,
@@ -73,6 +77,7 @@ impl Library {
             TREE_SHARES,
             TREE_BIOS,
             TREE_FAVS,
+            TREE_HISTORY,
         ] {
             db.open_tree(t)
                 .map_err(|e| AurisError::Storage(e.to_string()))?;
@@ -606,6 +611,52 @@ impl Library {
             .artists
             .iter()
             .filter_map(|id| self.artist(id).map(|(a, _)| a))
+            .collect()
+    }
+
+    // ---------- historique d'écoute (#69) ----------
+
+    fn history_entries(&self) -> Vec<HistoryEntry> {
+        self.tree(TREE_HISTORY)
+            .get(HISTORY_KEY)
+            .ok()
+            .flatten()
+            .and_then(|b| dec::<Vec<HistoryEntry>>(&b).ok())
+            .unwrap_or_default()
+    }
+
+    /// Enregistre le début d'une lecture (dédup consécutifs, cap à HISTORY_CAP).
+    pub fn record_play(&self, track_id: &str) -> Result<()> {
+        let mut h = self.history_entries();
+        if h.last().map(|e| e.track_id.as_str()) == Some(track_id) {
+            return Ok(()); // même piste enchaînée (tick d'horloge) : on ne duplique pas
+        }
+        h.push(HistoryEntry {
+            track_id: track_id.to_string(),
+            played_at: chrono::Utc::now().timestamp(),
+        });
+        if h.len() > HISTORY_CAP {
+            h.drain(..h.len() - HISTORY_CAP);
+        }
+        self.tree(TREE_HISTORY)
+            .insert(HISTORY_KEY, enc(&h)?)
+            .map_err(se)?;
+        Ok(())
+    }
+
+    /// Entrées récentes (plus récente d'abord), limitées à `limit`.
+    pub fn history(&self, limit: usize) -> Vec<HistoryEntry> {
+        let mut h = self.history_entries();
+        h.reverse();
+        h.truncate(limit.max(1));
+        h
+    }
+
+    /// Historique résolu en pistes complètes (les IDs inconnus sont ignorés).
+    pub fn history_tracks(&self, limit: usize) -> Vec<(Track, i64)> {
+        self.history(limit)
+            .into_iter()
+            .filter_map(|e| self.track(&e.track_id).map(|t| (t, e.played_at)))
             .collect()
     }
 

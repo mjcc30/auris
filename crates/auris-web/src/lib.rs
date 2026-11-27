@@ -347,6 +347,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/library/tracks", get(get_tracks))
         .route("/api/library/facets", get(get_facets))
         .route("/api/library/stats", get(get_library_stats))
+        .route("/api/library/history", get(get_history))
         .route("/api/favorites", get(get_favorites))
         .route("/api/favorites/toggle", post(post_favorite_toggle))
         .route("/api/favorites/resolved", get(get_favorites_resolved))
@@ -437,6 +438,38 @@ pub fn router(state: AppState) -> Router {
 
 pub async fn serve(state: AppState, addr: SocketAddr) -> anyhow::Result<()> {
     let app = router(state.clone());
+    // tâche de fond : historique d'écoute (#69) — enregistre chaque piste qui démarre
+    // (dédup consécutifs géré par Library::record_play).
+    {
+        let mut events = state.engine.events.subscribe();
+        let library = state.library.clone();
+        tokio::spawn(async move {
+            let mut last: Option<String> = None;
+            loop {
+                match events.recv().await {
+                    Ok(ev) if ev.kind == "state" => {
+                        let cur = ev
+                            .payload
+                            .get("current")
+                            .and_then(|c| c.get("id"))
+                            .and_then(|i| i.as_str())
+                            .map(|s| s.to_string());
+                        if cur != last {
+                            if let Some(id) = &cur {
+                                if let Err(e) = library.record_play(id) {
+                                    tracing::warn!("historique: {e}");
+                                }
+                            }
+                            last = cur;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
     // tâche de fond : minuterie de sommeil + réveil (vérification 1x/s)
     tokio::spawn(async move {
         loop {
@@ -780,6 +813,32 @@ async fn get_facets(State(s): State<AppState>) -> Json<serde_json::Value> {
 /// `GET /api/library/stats` — compteurs globaux de l'index (équivalent Volumio `collectionstats`, #74).
 async fn get_library_stats(State(s): State<AppState>) -> Json<LibraryStats> {
     Json(s.library.stats())
+}
+
+/// `GET /api/library/history?limit=50` — pistes récemment jouées (plus récente d'abord),
+/// chacune avec `last_played` (timestamp Unix) — #69.
+async fn get_history(
+    State(s): State<AppState>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Json<Vec<serde_json::Value>> {
+    let limit = q
+        .get("limit")
+        .and_then(|l| l.parse::<usize>().ok())
+        .unwrap_or(50)
+        .clamp(1, 500);
+    let out = s
+        .library
+        .history_tracks(limit)
+        .into_iter()
+        .map(|(t, played_at)| {
+            let mut v = serde_json::to_value(&t).unwrap_or_default();
+            if let Some(m) = v.as_object_mut() {
+                m.insert("last_played".into(), played_at.into());
+            }
+            v
+        })
+        .collect();
+    Json(out)
 }
 
 /// `GET /api/favorites` — IDs des favoris (pistes / albums / artistes).

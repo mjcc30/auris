@@ -335,6 +335,13 @@ pub struct LibraryStats {
     pub playtime_secs: f64,
 }
 
+/// Une lecture enregistrée dans l'historique (#69) : piste + timestamp Unix.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub track_id: String,
+    pub played_at: i64,
+}
+
 /// Entree de navigation dans une source (dossier ou fichier).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowseEntry {

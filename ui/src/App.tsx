@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type InfosResponse, type LibraryStats, type LyricsResponse, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -393,12 +393,14 @@ function Home({ state, sources, favs, onToggleFav, playTrack, playAll, openSourc
   const [tracks, setTracks] = useState<Track[]>([]);
   const [artists, setArtists] = useState<Artist[]>([]);
   const [facets, setFacets] = useState<Facets | null>(null);
+  const [history, setHistory] = useState<HistoryTrack[]>([]);
   const [facet, setFacet] = useState<Facet | null>(null);
   useEffect(() => {
     api.albums().then(setAlbums).catch(() => {});
     api.tracks().then((t) => setTracks(t.slice(0, 20))).catch(() => {});
     api.artists().then(setArtists).catch(() => {});
     api.facets().then(setFacets).catch(() => {});
+    api.history(14).then(setHistory).catch(() => {});
   }, []);
 
   if (facet) {
@@ -429,6 +431,17 @@ function Home({ state, sources, favs, onToggleFav, playTrack, playAll, openSourc
             <div className="t">{state.current.title}</div>
             <div className="s">{state.current.artist} — {state.current.album}</div>
           </div>
+        </Rail>
+      )}
+      {history.length > 0 && (
+        <Rail title={t("Écoutés récemment")}>
+          {history.map((tr) => (
+            <FacetCard key={`${tr.id}-${tr.last_played}`} coverUrl={tr.has_cover ? api.coverUrl(tr.id) : null} icon="note" title={tr.title}
+              sub={`${tr.artist} — ${tr.album}`}
+              fav={favs.tracks.includes(tr.id)}
+              onToggleFav={() => onToggleFav("track", tr.id)}
+              onClick={() => playTrack(tr)} />
+          ))}
         </Rail>
       )}
       {favAlbums.length > 0 && (
