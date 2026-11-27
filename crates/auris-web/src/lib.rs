@@ -344,6 +344,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/queue/{index}", delete(delete_queue_item))
         // bibliotheque
         .route("/api/library/tracks", get(get_tracks))
+        .route("/api/library/facets", get(get_facets))
         .route("/api/library/albums", get(get_albums))
         .route("/api/library/albums/{id}", get(get_album))
         .route("/api/library/artists", get(get_artists))
@@ -731,8 +732,44 @@ async fn delete_queue_item(
     Json(s.engine.state())
 }
 
-async fn get_tracks(State(s): State<AppState>) -> Json<Vec<Track>> {
-    Json(s.library.tracks())
+async fn get_tracks(
+    State(s): State<AppState>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Json<Vec<Track>> {
+    let genre = q.get("genre").map(|s| s.as_str());
+    let decade = q.get("decade").and_then(|d| d.parse::<u32>().ok());
+    Json(s.library.tracks_filtered(genre, decade))
+}
+
+/// `GET /api/library/facets` — facettes genre/décennie pour l'accueil façon Nova.
+async fn get_facets(State(s): State<AppState>) -> Json<serde_json::Value> {
+    let genres: Vec<serde_json::Value> = s
+        .library
+        .genres()
+        .into_iter()
+        .map(|g| {
+            serde_json::json!({
+                "name": g.name,
+                "track_count": g.track_count,
+                "album_count": g.album_count,
+                "cover_url": g.cover_track_id.as_ref().map(|c| format!("/api/library/cover/{c}")),
+            })
+        })
+        .collect();
+    let decades: Vec<serde_json::Value> = s
+        .library
+        .decades()
+        .into_iter()
+        .map(|d| {
+            serde_json::json!({
+                "decade": d.decade,
+                "track_count": d.track_count,
+                "album_count": d.album_count,
+                "cover_url": d.cover_track_id.as_ref().map(|c| format!("/api/library/cover/{c}")),
+            })
+        })
+        .collect();
+    Json(serde_json::json!({ "genres": genres, "decades": decades }))
 }
 async fn get_albums(State(s): State<AppState>) -> Json<serde_json::Value> {
     let albums = s.library.albums();
@@ -775,10 +812,31 @@ async fn get_artist(
         .artist(&id)
         .ok_or_else(|| AurisError::ArtistNotFound(id.clone()))?;
     let tracks = s.library.artist_tracks(&id).unwrap_or_default();
+    // Enrichissements pour la page artiste : genres, plage d'années, durée totale, bio en cache.
+    let mut genres: Vec<String> = tracks
+        .iter()
+        .filter_map(|t| t.genre.clone())
+        .flat_map(|g| {
+            g.split(';')
+                .map(|s| s.trim().to_string())
+                .collect::<Vec<_>>()
+        })
+        .filter(|g| !g.is_empty())
+        .collect();
+    genres.sort();
+    genres.dedup();
+    let years: Vec<u32> = tracks.iter().filter_map(|t| t.year).collect();
+    let duration_secs: f64 = tracks.iter().filter_map(|t| t.duration_secs).sum();
+    let bio = s.library.bio_get(&artist.name.to_lowercase());
     Ok(Json(serde_json::json!({
         "artist": artist,
         "albums": albums,
         "tracks": tracks,
+        "genres": genres,
+        "year_min": years.iter().min().copied(),
+        "year_max": years.iter().max().copied(),
+        "duration_secs": duration_secs,
+        "bio": bio,
         "cover_url": albums
             .iter()
             .find_map(|a| a.cover_track_id.as_ref())

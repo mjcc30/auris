@@ -153,6 +153,25 @@ pub struct Artist {
     pub album_count: usize,
 }
 
+/// Facette « genre » pour l'accueil façon Nova (agrégée depuis les tags des pistes).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenreFacet {
+    pub name: String,
+    pub track_count: usize,
+    pub album_count: usize,
+    /// Piste avec pochette servant d'illustration, si trouvée.
+    pub cover_track_id: Option<String>,
+}
+
+/// Facette « décennie » (ex. 1990 pour les années 1990-1999).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecadeFacet {
+    pub decade: u32,
+    pub track_count: usize,
+    pub album_count: usize,
+    pub cover_track_id: Option<String>,
+}
+
 /// Kinds de sources musicales.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]

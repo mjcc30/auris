@@ -6,7 +6,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use auris_core::{
-    Album, Artist, AurisError, Playlist, Result, ShareKind, ShareLink, Source, Track,
+    Album, Artist, AurisError, DecadeFacet, GenreFacet, Playlist, Result, ShareKind, ShareLink,
+    Source, Track,
 };
 use auris_player::probe_meta;
 use auris_sources::{make_uri, SourcesManager};
@@ -336,6 +337,92 @@ impl Library {
         Some(tracks)
     }
 
+    /// Facettes « genre » agrégées depuis les tags des pistes (triées par nombre de pistes).
+    pub fn genres(&self) -> Vec<GenreFacet> {
+        let mut by_key: HashMap<String, GenreFacet> = HashMap::new();
+        let mut album_keys: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+        for t in self.tracks() {
+            for g in genre_tags(&t) {
+                let key = g.to_lowercase();
+                let e = by_key.entry(key.clone()).or_insert_with(|| GenreFacet {
+                    name: g,
+                    track_count: 0,
+                    album_count: 0,
+                    cover_track_id: None,
+                });
+                e.track_count += 1;
+                album_keys
+                    .entry(key)
+                    .or_default()
+                    .insert(t.album_key.clone());
+                if e.cover_track_id.is_none() && t.has_cover {
+                    e.cover_track_id = Some(t.id.clone());
+                }
+            }
+        }
+        let mut out: Vec<GenreFacet> = by_key
+            .into_iter()
+            .map(|(k, mut f)| {
+                f.album_count = album_keys.remove(&k).map(|s| s.len()).unwrap_or(0);
+                f
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            b.track_count
+                .cmp(&a.track_count)
+                .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        out
+    }
+
+    /// Facettes « décennie » agrégées depuis l'année des pistes (triées de la plus récente à la plus ancienne).
+    pub fn decades(&self) -> Vec<DecadeFacet> {
+        let mut by_decade: HashMap<u32, DecadeFacet> = HashMap::new();
+        let mut album_keys: HashMap<u32, std::collections::HashSet<String>> = HashMap::new();
+        for t in self.tracks() {
+            let Some(year) = t.year else { continue };
+            let decade = year / 10 * 10;
+            let e = by_decade.entry(decade).or_insert_with(|| DecadeFacet {
+                decade,
+                track_count: 0,
+                album_count: 0,
+                cover_track_id: None,
+            });
+            e.track_count += 1;
+            album_keys
+                .entry(decade)
+                .or_default()
+                .insert(t.album_key.clone());
+            if e.cover_track_id.is_none() && t.has_cover {
+                e.cover_track_id = Some(t.id.clone());
+            }
+        }
+        let mut out: Vec<DecadeFacet> = by_decade
+            .into_iter()
+            .map(|(d, mut f)| {
+                f.album_count = album_keys.remove(&d).map(|s| s.len()).unwrap_or(0);
+                f
+            })
+            .collect();
+        out.sort_by_key(|a| std::cmp::Reverse(a.decade));
+        out
+    }
+
+    /// Pistes filtrées par genre (insensible à la casse) et/ou décennie (ex. 1990).
+    pub fn tracks_filtered(&self, genre: Option<&str>, decade: Option<u32>) -> Vec<Track> {
+        self.tracks()
+            .into_iter()
+            .filter(|t| {
+                genre
+                    .map(|g| genre_tags(t).iter().any(|x| x.eq_ignore_ascii_case(g)))
+                    .unwrap_or(true)
+                    && decade
+                        .map(|d| t.year.map(|y| y / 10 * 10 == d).unwrap_or(false))
+                        .unwrap_or(true)
+            })
+            .collect()
+    }
+
     /// Biographie mise en cache pour une cle d'artiste (None = non cachee).
     pub fn bio_get(&self, artist_key: &str) -> Option<String> {
         self.tree(TREE_BIOS)
@@ -489,6 +576,20 @@ impl Library {
 
 fn album_key_of(a: &Album) -> String {
     format!("{}|{}", a.artist.to_lowercase(), a.title.to_lowercase())
+}
+
+/// Découpe un tag de genre en facettes (séparateur `;`), nettoyées et non vides.
+fn genre_tags(t: &Track) -> Vec<String> {
+    t.genre
+        .as_deref()
+        .map(|g| {
+            g.split(';')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Scan bloquant d'une source: parcours recursif + probe de chaque fichier audio.

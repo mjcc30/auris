@@ -40,7 +40,31 @@ export interface ArtistDetail {
   artist: Artist;
   albums: Album[];
   tracks: Track[];
+  genres: string[];
+  year_min: number | null;
+  year_max: number | null;
+  duration_secs: number;
+  bio: string | null;
   cover_url: string | null;
+}
+
+export interface GenreFacet {
+  name: string;
+  track_count: number;
+  album_count: number;
+  cover_url: string | null;
+}
+
+export interface DecadeFacet {
+  decade: number;
+  track_count: number;
+  album_count: number;
+  cover_url: string | null;
+}
+
+export interface Facets {
+  genres: GenreFacet[];
+  decades: DecadeFacet[];
 }
 
 export interface PlayerState {
@@ -397,7 +421,14 @@ export const api = {
   queueAdd: (uri: string) => req<PlayerState>("/api/queue/add", post({ uri })),
   queueAddNext: (uri: string) => req<PlayerState>("/api/queue/add-next", post({ uri })),
   removeQueueItem: (index: number) => req<PlayerState>(`/api/queue/${index}`, del()),
-  tracks: () => req<Track[]>("/api/library/tracks"),
+  tracks: (genre?: string, decade?: number) => {
+    const p = new URLSearchParams();
+    if (genre) p.set("genre", genre);
+    if (decade != null) p.set("decade", String(decade));
+    const qs = p.toString();
+    return req<Track[]>(`/api/library/tracks${qs ? `?${qs}` : ""}`);
+  },
+  facets: () => req<Facets>("/api/library/facets"),
   albums: () => req<Album[]>("/api/library/albums"),
   artists: () => req<Artist[]>("/api/library/artists"),
   artist: (id: string) => req<ArtistDetail>(`/api/library/artists/${encodeURIComponent(id)}`),

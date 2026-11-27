@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type InfosResponse, type LyricsResponse, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type InfosResponse, type LyricsResponse, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -39,6 +39,11 @@ function slugify(s: string): string {
     .replace(/[̀-ͯ]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "") || "source";
+}
+
+/// Compte traduit avec singulier/pluriel : cl(1, "titre", "titres") → « 1 titre ».
+function cl(n: number, one: string, many: string): string {
+  return t(`{count} ${n === 1 ? one : many}`, { count: n });
 }
 
 /// Assombrit/éclaircit une couleur `#RRGGBB` (amt en [-255, 255]).
@@ -104,6 +109,9 @@ export default function App() {
   // Panneau « lecture en cours » (Pochette / Infos / Paroles) à droite de la vue.
   const [npOpen, setNpOpen] = useState(false);
   const [npTab, setNpTab] = useState<NpTab>("cover");
+  // Navigation différée vers la bibliothèque (depuis l'accueil) : artiste/album à ouvrir.
+  const [pendingArtist, setPendingArtist] = useState<{ id: string; name: string } | null>(null);
+  const [pendingAlbum, setPendingAlbum] = useState<{ id: string; title: string; artist: string } | null>(null);
   const toastTimer = useRef<number | null>(null);
   const browserAudio = useRef(new BrowserAudio());
 
@@ -227,8 +235,16 @@ export default function App() {
               <button className="icon-btn" title={t("Rechercher")} onClick={globalSearch}><Icon name="search" size={18} /></button>
             </div>
           </div>
-          {view === "home" && <Home state={state} sources={sources} playTrack={playTrack} playAll={playAll} openSource={openSource} />}
-          {view === "library" && <Library playTrack={playTrack} playAll={playAll} say={say} refresh={refresh} searchNonce={searchNonce} searchQ={searchQ} />}
+          {view === "home" && (
+            <Home state={state} sources={sources} playTrack={playTrack} playAll={playAll} openSource={openSource}
+              openArtist={(a) => { setPendingArtist(a); setPendingAlbum(null); setView("library"); }}
+              openAlbum={(a) => { setPendingAlbum(a); setPendingArtist(null); setView("library"); }} />
+          )}
+          {view === "library" && (
+            <Library playTrack={playTrack} playAll={playAll} say={say} refresh={refresh} searchNonce={searchNonce} searchQ={searchQ}
+              pendingArtist={pendingArtist} onPendingArtistDone={() => setPendingArtist(null)}
+              pendingAlbum={pendingAlbum} onPendingAlbumDone={() => setPendingAlbum(null)} />
+          )}
           {view === "browse" && <Browse sources={sources} src={browseSrc} playUri={playUri} act={act} say={say} />}
           {view === "radios" && <Radios state={state} act={act} say={say} />}
           {view === "queue" && <Queue state={state} act={act} say={say} playAll={playAll} />}
@@ -288,61 +304,167 @@ function Sidebar({ view, setView, sources, browseSrc, openSource, system }: {
           </div>
         ))}
       </div>
-      {system && <div className="sysinfo">v{system.version} · {t("{count} titres", { count: system.track_count })}</div>}
+      {system && <div className="sysinfo">v{system.version} · {cl(system.track_count, "titre", "titres")}</div>}
     </nav>
   );
 }
 
-function Home({ state, sources, playTrack, playAll, openSource }: { state: PlayerState | null; sources: Source[]; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; openSource: (id: string) => void }) {
+/// Une rangée horizontale de grandes cartes (façon Nova/Spotify).
+function Rail({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="rail-sec">
+      <h2>{title}</h2>
+      <div className="rail">{children}</div>
+    </section>
+  );
+}
+
+function FacetCard({ coverUrl, icon, title, sub, round, onClick }: { coverUrl: string | null; icon: string; title: string; sub: string; round?: boolean; onClick: () => void }) {
+  return (
+    <div className={`card${round ? " round" : ""}`} onClick={onClick}>
+      <div className="cover">{coverUrl ? <img src={coverUrl} alt="" loading="lazy" /> : <Icon name={icon} size={44} />}</div>
+      <div className="t">{title}</div>
+      <div className="s">{sub}</div>
+    </div>
+  );
+}
+
+type Facet = { kind: "genre"; name: string } | { kind: "decade"; decade: number };
+
+function Home({ state, sources, playTrack, playAll, openSource, openArtist, openAlbum }: { state: PlayerState | null; sources: Source[]; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; openSource: (id: string) => void; openArtist: (a: { id: string; name: string }) => void; openAlbum: (a: { id: string; title: string; artist: string }) => void }) {
   const [albums, setAlbums] = useState<Album[]>([]);
   const [tracks, setTracks] = useState<Track[]>([]);
+  const [artists, setArtists] = useState<Artist[]>([]);
+  const [facets, setFacets] = useState<Facets | null>(null);
+  const [facet, setFacet] = useState<Facet | null>(null);
   useEffect(() => {
     api.albums().then(setAlbums).catch(() => {});
     api.tracks().then((t) => setTracks(t.slice(0, 20))).catch(() => {});
+    api.artists().then(setArtists).catch(() => {});
+    api.facets().then(setFacets).catch(() => {});
   }, []);
+
+  if (facet) {
+    return (
+      <FacetView
+        facet={facet}
+        playTrack={playTrack}
+        playAll={playAll}
+        onBack={() => setFacet(null)}
+        onOpenAlbum={openAlbum}
+      />
+    );
+  }
+
   return (
     <div>
       {state?.current && (
-        <div>
-          <h2>En lecture</h2>
-          <div className="grid">
-            <div className="card" onClick={() => playTrack(state.current!)}>
-              <div className="cover">{state.current.has_cover ? <img src={api.coverUrl(state.current.id)} alt="" /> : <Icon name="note" size={44} />}</div>
-              <div className="t">{state.current.title}</div>
-              <div className="s">{state.current.artist} — {state.current.album}</div>
-            </div>
+        <Rail title={t("En lecture")}>
+          <div className="card" onClick={() => playTrack(state.current!)}>
+            <div className="cover">{state.current.has_cover ? <img src={api.coverUrl(state.current.id)} alt="" /> : <Icon name="note" size={44} />}</div>
+            <div className="t">{state.current.title}</div>
+            <div className="s">{state.current.artist} — {state.current.album}</div>
           </div>
-        </div>
+        </Rail>
       )}
-      <h2>{t("Vos sources")}</h2>
-      <div className="grid">
+      {facets && facets.genres.length > 0 && (
+        <Rail title={t("Genres")}>
+          {facets.genres.slice(0, 14).map((g) => (
+            <FacetCard key={g.name} coverUrl={g.cover_url} icon="note" title={g.name}
+              sub={cl(g.track_count, "titre", "titres")}
+              onClick={() => setFacet({ kind: "genre", name: g.name })} />
+          ))}
+        </Rail>
+      )}
+      {facets && facets.decades.length > 0 && (
+        <Rail title={t("Décennies")}>
+          {facets.decades.slice(0, 10).map((d) => (
+            <FacetCard key={d.decade} coverUrl={d.cover_url} icon="alarm" title={t("Années {y}", { y: d.decade })}
+              sub={cl(d.track_count, "titre", "titres")}
+              onClick={() => setFacet({ kind: "decade", decade: d.decade })} />
+          ))}
+        </Rail>
+      )}
+      {artists.length > 0 && (
+        <Rail title={t("Artistes")}>
+          {artists.slice(0, 14).map((a) => (
+            <FacetCard key={a.id} coverUrl={null} icon="group" title={a.name} round
+              sub={cl(a.album_count, "album", "albums")}
+              onClick={() => openArtist({ id: a.id, name: a.name })} />
+          ))}
+        </Rail>
+      )}
+      <Rail title={t("Albums récents")}>
+        {albums.slice(0, 14).map((a) => (
+          <FacetCard key={a.id} coverUrl={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} icon="note" title={a.title}
+            sub={`${a.artist}${a.year ? ` · ${a.year}` : ""}`}
+            onClick={() => openAlbum({ id: a.id, title: a.title, artist: a.artist })} />
+        ))}
+        {albums.length === 0 && <div className="empty">{t("Scannez une source pour remplir la bibliothèque.")}</div>}
+      </Rail>
+      <Rail title={t("Vos sources")}>
         {sources.map((s) => (
-          <div key={s.id} className="card" onClick={() => openSource(s.id)}>
-            <div className="cover"><Icon name={kindIconName(s.kind)} size={44} /></div>
-            <div className="t">{s.name}</div>
-            <div className="s">{kindLabel(s.kind)}{s.enabled ? "" : " · désactivée"}</div>
-          </div>
+          <FacetCard key={s.id} coverUrl={null} icon={kindIconName(s.kind)} title={s.name}
+            sub={`${kindLabel(s.kind)}${s.enabled ? "" : ` · ${t("désactivée")}`}`}
+            onClick={() => openSource(s.id)} />
         ))}
-        {sources.length === 0 && <div className="empty">Aucune source — ajoutez-en une dans « Sources &amp; réglages ».</div>}
-      </div>
-      <h2>Albums récents</h2>
-      <div className="grid">
-        {albums.slice(0, 12).map((a) => (
-          <div key={a.id} className="card">
-            <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}</div>
-            <div className="t">{a.title}</div>
-            <div className="s">{a.artist}{a.year ? ` · ${a.year}` : ""}</div>
-          </div>
-        ))}
-        {albums.length === 0 && <div className="empty">Scannez une source pour remplir la bibliothèque.</div>}
-      </div>
-      <h2>Titres</h2>
+        {sources.length === 0 && <div className="empty">{t("Aucune source — ajoutez-en une dans « Sources & réglages ».")}</div>}
+      </Rail>
+      <h2>{t("Titres récents")}</h2>
       <TrackTable tracks={tracks} current={state?.current?.id} playTrack={playTrack} playAll={playAll} />
     </div>
   );
 }
 
-function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ }: { playTrack: (t: Track) => void; playAll: (t: Track[]) => void; say: (m: string) => void; refresh: () => Promise<void>; searchNonce: number; searchQ: string }) {
+/// Vue d'une facette (genre ou décennie) : en-tête + albums concernés + titres.
+function FacetView({ facet, playTrack, playAll, onBack, onOpenAlbum }: { facet: Facet; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; onBack: () => void; onOpenAlbum: (a: { id: string; title: string; artist: string }) => void }) {
+  const [tracks, setTracks] = useState<Track[] | null>(null);
+  const [albums, setAlbums] = useState<Album[]>([]);
+  const title = facet.kind === "genre" ? facet.name : t("Années {y}", { y: facet.decade });
+  useEffect(() => {
+    setTracks(null);
+    api.tracks(facet.kind === "genre" ? facet.name : undefined, facet.kind === "decade" ? facet.decade : undefined)
+      .then(setTracks).catch(() => setTracks([]));
+    api.albums().then(setAlbums).catch(() => {});
+  }, [facet]);
+  const keys = new Set((tracks ?? []).map((t) => `${t.album_artist}|${t.album}`.toLowerCase()));
+  const facetAlbums = albums.filter((a) => keys.has(`${a.artist}|${a.title}`.toLowerCase()));
+  const coverTrack = (tracks ?? []).find((t) => t.has_cover);
+  return (
+    <div>
+      <div className="toolbar">
+        <button className="btn ghost sm" onClick={onBack}><Icon name="back" size={16} /> {t("Retour")}</button>
+        <button className="btn sm" disabled={!tracks?.length} onClick={() => tracks && playAll(tracks)}><Icon name="play" size={14} filled /> {t("Tout lire")}</button>
+      </div>
+      <div className="artist-head">
+        <div className="cover big">{coverTrack ? <img src={api.coverUrl(coverTrack.id)} alt="" /> : <Icon name="note" size={44} />}</div>
+        <div>
+          <div className="s" style={{ textTransform: "uppercase", letterSpacing: 1 }}>{facet.kind === "genre" ? t("Genre") : t("Décennie")}</div>
+          <h1 style={{ margin: "4px 0" }}>{title}</h1>
+          <div className="s">{cl(facetAlbums.length, "album", "albums")} · {cl(tracks?.length ?? 0, "titre", "titres")}</div>
+        </div>
+      </div>
+      {facetAlbums.length > 0 && (
+        <>
+          <h2>{t("Albums")}</h2>
+          <div className="grid">
+            {facetAlbums.map((a) => (
+              <div key={a.id} className="card" onClick={() => onOpenAlbum({ id: a.id, title: a.title, artist: a.artist })}>
+                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}</div>
+                <div className="t">{a.title}</div>
+                <div className="s">{a.artist}{a.year ? ` · ${a.year}` : ""} · {cl(a.track_count, "titre", "titres")}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      <h2>{t("Titres")}</h2>
+      {tracks === null ? <div className="empty">{t("Chargement…")}</div> : <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} />}
+    </div>
+  );
+}
+
+function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendingArtist, onPendingArtistDone, pendingAlbum, onPendingAlbumDone }: { playTrack: (t: Track) => void; playAll: (t: Track[]) => void; say: (m: string) => void; refresh: () => Promise<void>; searchNonce: number; searchQ: string; pendingArtist: { id: string; name: string } | null; onPendingArtistDone: () => void; pendingAlbum: { id: string; title: string; artist: string } | null; onPendingAlbumDone: () => void }) {
   const [tab, setTab] = useState<"tracks" | "albums" | "artists">("tracks");
   const [tracks, setTracks] = useState<Track[]>([]);
   const [albums, setAlbums] = useState<Album[]>([]);
@@ -352,6 +474,13 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ }: { p
   const [scanning, setScanning] = useState(false);
   const [albumDetail, setAlbumDetail] = useState<{ id: string; title: string; artist: string } | null>(null);
   const [artistDetail, setArtistDetail] = useState<{ id: string; name: string } | null>(null);
+  // Ouverture demandée depuis l'accueil (carte artiste/album) : on ouvre la vue correspondante.
+  useEffect(() => {
+    if (pendingArtist) { setArtistDetail(pendingArtist); setAlbumDetail(null); onPendingArtistDone(); }
+  }, [pendingArtist, onPendingArtistDone]);
+  useEffect(() => {
+    if (pendingAlbum) { setAlbumDetail(pendingAlbum); setArtistDetail(null); onPendingAlbumDone(); }
+  }, [pendingAlbum, onPendingAlbumDone]);
   useEffect(() => {
     api.tracks().then(setTracks).catch(() => {});
     api.albums().then(setAlbums).catch(() => {});
@@ -410,7 +539,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ }: { p
           <h2>Artistes ({hitArtists.length})</h2>
           {hitArtists.length === 0 && <div className="empty">Aucun artiste ne correspond.</div>}
           <table className="tracks"><tbody>
-            {hitArtists.map((a) => <tr key={a.id} className="link" onClick={() => setArtistDetail({ id: a.id, name: a.name })}><td>{a.name}</td><td className="meta">{a.album_count} album(s)</td></tr>)}
+            {hitArtists.map((a) => <tr key={a.id} className="link" onClick={() => setArtistDetail({ id: a.id, name: a.name })}><td>{a.name}</td><td className="meta">{cl(a.album_count, "album", "albums")}</td></tr>)}
           </tbody></table>
           <h2>Albums ({hitAlbums.length})</h2>
           {hitAlbums.length === 0 && <div className="empty">Aucun album ne correspond.</div>}
@@ -419,7 +548,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ }: { p
               <div key={a.id} className="card" onClick={() => setAlbumDetail({ id: a.id, title: a.title, artist: a.artist })}>
                 <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}</div>
                 <div className="t">{a.title}</div>
-                <div className="s">{a.artist} · {a.track_count} titres · {fmtTime(a.duration_secs)}</div>
+                <div className="s">{a.artist} · {cl(a.track_count, "titre", "titres")} · {fmtTime(a.duration_secs)}</div>
               </div>
             ))}
           </div>
@@ -447,7 +576,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ }: { p
       )}
       {tab === "artists" && (
         <table className="tracks"><tbody>
-          {artists.map((a) => <tr key={a.id} className="link" onClick={() => setArtistDetail({ id: a.id, name: a.name })}><td>{a.name}</td><td className="meta">{a.album_count} album(s)</td></tr>)}
+          {artists.map((a) => <tr key={a.id} className="link" onClick={() => setArtistDetail({ id: a.id, name: a.name })}><td>{a.name}</td><td className="meta">{cl(a.album_count, "album", "albums")}</td></tr>)}
         </tbody></table>
       )}
         </>
@@ -462,34 +591,47 @@ function ArtistView({ id, name, playAll, playTrack, onBack, onOpenAlbum }: { id:
   useEffect(() => { api.artist(id).then(setDetail).catch(() => {}); }, [id]);
   const tracks = detail?.tracks ?? [];
   const albums = detail?.albums ?? [];
+  const genres = detail?.genres ?? [];
+  const years = detail?.year_min != null && detail?.year_max != null
+    ? (detail.year_min === detail.year_max ? `${detail.year_min}` : `${detail.year_min}–${detail.year_max}`)
+    : null;
   return (
     <div>
       <div className="toolbar">
-        <button className="btn ghost sm" onClick={onBack}><Icon name="back" size={16} /> Retour</button>
-        <button className="btn sm" disabled={!tracks.length} onClick={() => playAll(tracks)}><Icon name="play" size={14} filled /> Tout lire</button>
+        <button className="btn ghost sm" onClick={onBack}><Icon name="back" size={16} /> {t("Retour")}</button>
+        <button className="btn sm" disabled={!tracks.length} onClick={() => playAll(tracks)}><Icon name="play" size={14} filled /> {t("Tout lire")}</button>
       </div>
       <div className="artist-head">
-        <div className="cover big">{detail?.cover_url ? <img src={detail.cover_url} alt="" /> : <Icon name="note" size={44} />}</div>
+        <div className="cover big">{detail?.cover_url ? <img src={detail.cover_url} alt="" /> : <Icon name="user" size={44} />}</div>
         <div>
-          <h1 style={{ margin: 0 }}>{name}</h1>
-          <div className="s">{albums.length} album(s) · {tracks.length} titres</div>
+          <div className="s" style={{ textTransform: "uppercase", letterSpacing: 1 }}>{t("Artiste")}</div>
+          <h1 style={{ margin: "4px 0" }}>{name}</h1>
+          <div className="s">
+            {cl(albums.length, "album", "albums")} · {cl(tracks.length, "titre", "titres")}
+            {years ? ` · ${years}` : ""}
+            {detail && detail.duration_secs > 0 ? ` · ${fmtTime(detail.duration_secs)}` : ""}
+          </div>
+          {genres.length > 0 && (
+            <div className="chips">{genres.map((g) => <span key={g} className="chip">{g}</span>)}</div>
+          )}
         </div>
       </div>
+      {detail?.bio && <p className="bio">{detail.bio}</p>}
       {albums.length > 0 && (
         <>
-          <h2>Albums</h2>
+          <h2>{t("Albums")}</h2>
           <div className="grid">
             {albums.map((a) => (
               <div key={a.id} className="card" onClick={() => onOpenAlbum({ id: a.id, title: a.title, artist: a.artist })}>
                 <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}</div>
                 <div className="t">{a.title}</div>
-                <div className="s">{a.artist}{a.year ? ` · ${a.year}` : ""} · {a.track_count} titres</div>
+                <div className="s">{a.artist}{a.year ? ` · ${a.year}` : ""} · {cl(a.track_count, "titre", "titres")}</div>
               </div>
             ))}
           </div>
         </>
       )}
-      <h2>Titres</h2>
+      <h2>{t("Titres")}</h2>
       <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} />
     </div>
   );
