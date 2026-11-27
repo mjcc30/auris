@@ -744,3 +744,19 @@ tr.link:hover { background: var(--hover, rgba(255,255,255,0.06)); }
 @media (max-width: 1100px) {
   .np-panel { width: 300px; }
 }
+
+/* Multiroom (#23) */
+.multiroom { display: flex; flex-direction: column; gap: 14px; }
+.mr-peers { display: flex; flex-wrap: wrap; gap: 10px; }
+.mr-peer { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; }
+.mr-peer.self { border-color: var(--accent); }
+.mr-name { font-weight: 600; font-size: 14px; }
+.mr-base { font-size: 12px; color: var(--text-dim); }
+.mr-newgroup { display: flex; gap: 8px; align-items: center; }
+.mr-group { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.mr-group-head { display: flex; justify-content: space-between; align-items: center; }
+.mr-group-actions { display: flex; gap: 6px; }
+.mr-members { display: flex; flex-direction: column; gap: 6px; }
+.mr-member { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.mr-add { align-self: flex-start; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px; font-size: 12px; }
+.mr-groupvol { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-dim); }

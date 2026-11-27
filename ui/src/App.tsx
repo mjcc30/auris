@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
 
-type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "favorites" | "sources" | "settings";
+type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "favorites" | "sources" | "multiroom" | "settings";
 type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp";
 /** Onglets du panneau lecture en cours (style Volumio: Pochette / Infos / Paroles). */
 type NpTab = "cover" | "infos" | "lyrics";
@@ -278,7 +278,7 @@ export default function App() {
         <Sidebar view={view} setView={setView} sources={sources} browseSrc={browseSrc} openSource={openSource} system={system} stats={stats} upnpDevs={upnpDevs} upnpScanning={upnpScanning} onScanUpnp={() => scanUpnp(true)} onOpenUpnp={openUpnp} />
         <main className="content">
           <div className="topbar">
-            <div className="topbar-title">{view === "home" ? t("Accueil") : view === "library" ? t("Bibliothèque") : view === "browse" ? t("Parcourir") : view === "radios" ? t("Radios") : view === "queue" ? t("File d'attente") : view === "playlists" ? t("Listes de lecture") : view === "favorites" ? t("Favoris") : view === "sources" ? t("Sources") : t("Réglages")}</div>
+            <div className="topbar-title">{view === "home" ? t("Accueil") : view === "library" ? t("Bibliothèque") : view === "browse" ? t("Parcourir") : view === "radios" ? t("Radios") : view === "queue" ? t("File d'attente") : view === "playlists" ? t("Listes de lecture") : view === "favorites" ? t("Favoris") : view === "sources" ? t("Sources") : view === "multiroom" ? t("Multiroom") : t("Réglages")}</div>
             <div className="topbar-search">
               <Icon name="search" size={18} />
               <input type="text" placeholder={t("Rechercher un titre, un artiste…")} value={searchQ}
@@ -307,6 +307,7 @@ export default function App() {
           {view === "queue" && <Queue state={state} act={act} say={say} playAll={playAll} />}
           {view === "playlists" && <Playlists act={act} say={say} playAll={playAll} playTrack={playTrack} pins={pins} onTogglePin={togglePin} />}
           {view === "sources" && <Sources sources={sources} refresh={refresh} say={say} />}
+          {view === "multiroom" && <MultiroomView state={state} act={act} say={say} />}
           {view === "settings" && <SettingsView settings={settings} updateSettings={updateSettings} say={say} refresh={refresh} packs={packs} />}
         </main>
         {npOpen && state?.current && (
@@ -344,6 +345,7 @@ function Sidebar({ view, setView, sources, browseSrc, openSource, system, stats,
     ["playlists", t("Listes de lecture"), "playlist"],
     ["favorites", t("Favoris"), "heart"],
     ["sources", t("Sources"), "server"],
+    ["multiroom", t("Multiroom"), "group"],
     ["settings", t("Réglages"), "gear"],
   ];
   return (
@@ -1285,6 +1287,120 @@ type MenuTarget =
 type RadioMenuState = { x: number; y: number; target: MenuTarget } | null;
 
 type DirData = DirTag[] | DirCountry[] | DirStation[];
+
+function MultiroomView({ state, act, say }: { state: PlayerState | null; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void }) {
+  const [mr, setMr] = useState<MultiroomState | null>(null);
+  const [newGroup, setNewGroup] = useState("");
+
+  const reload = useCallback(async () => {
+    try { setMr(await api.multiroomState()); }
+    catch (e) { say(e instanceof Error ? e.message : String(e)); }
+  }, [say]);
+
+  useEffect(() => {
+    reload();
+    const iv = setInterval(reload, 10000);
+    return () => clearInterval(iv);
+  }, [reload]);
+
+  if (!mr) return <div className="empty">{t("Chargement…")}</div>;
+
+  const memberName = (id: string) =>
+    id === mr.self_id ? `${mr.self_name} (${t("cet appareil")})` : (mr.peers.find((p) => p.id === id)?.name ?? id.slice(0, 8));
+
+  const candidates = [mr.self_id, ...mr.peers.map((p) => p.id)];
+
+  const report = (r: { ok: string[]; failed: string[] }, label: string) =>
+    say(`${label} — OK: ${r.ok.join(", ") || "—"}${r.failed.length ? ` | échec: ${r.failed.join(", ")}` : ""}`);
+
+  return (
+    <div className="multiroom">
+      <div className="section-head">
+        <h1><Icon name="group" size={28} /> {t("Multiroom")}</h1>
+        <button className="btn ghost sm" onClick={reload}><Icon name="refresh" size={16} /> {t("Actualiser")}</button>
+      </div>
+
+      <div className="mr-peers">
+        <div className="mr-peer self">
+          <span className="row-ico"><Icon name="speaker" size={20} /></span>
+          <div><div className="mr-name">{mr.self_name}</div><div className="mr-base">{t("cet appareil")}</div></div>
+        </div>
+        {mr.peers.map((p) => (
+          <div className="mr-peer" key={p.id}>
+            <span className="row-ico"><Icon name="server" size={20} /></span>
+            <div><div className="mr-name">{p.name}</div><div className="mr-base">{p.base}</div></div>
+          </div>
+        ))}
+        {mr.peers.length === 0 && (
+          <div className="empty">{t("Aucun autre Auris détecté sur le réseau (balise multicast 239.255.255.251:3011).")}</div>
+        )}
+      </div>
+
+      <div className="section-head">
+        <h2>{t("Groupes")}</h2>
+        <div className="mr-newgroup">
+          <input type="text" value={newGroup} placeholder={t("Nom du groupe")} style={{ width: 200 }}
+            onChange={(e) => setNewGroup(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && newGroup.trim()) { act(async () => { await api.mrCreateGroup(newGroup.trim()); setNewGroup(""); await reload(); }, t("Groupe créé")); } }} />
+          <button className="btn sm" disabled={!newGroup.trim()}
+            onClick={() => act(async () => { await api.mrCreateGroup(newGroup.trim()); setNewGroup(""); await reload(); }, t("Groupe créé"))}>
+            <Icon name="plus" size={16} /> {t("Créer")}
+          </button>
+        </div>
+      </div>
+
+      {mr.groups.length === 0 && <div className="empty">{t("Aucun groupe — créez-en un pour synchroniser plusieurs Auris.")}</div>}
+      {mr.groups.map((g: MrGroup) => (
+        <div className="mr-group" key={g.id}>
+          <div className="mr-group-head">
+            <strong>{g.name}</strong>
+            <span className="mr-group-actions">
+              <button className="btn ghost sm" title={t("Lire la piste en cours sur tout le groupe")}
+                disabled={!state?.current}
+                onClick={() => act(async () => report(await api.mrPlay(g.id, state?.current?.uri, state?.position_secs), t("Lecture groupe")), t("Lecture envoyée"))}>
+                <Icon name="play" size={15} /> {t("Jouer")}
+              </button>
+              <button className="btn ghost sm" onClick={() => act(async () => report(await api.mrPause(g.id), t("Pause groupe")), t("Pause envoyée"))}>
+                <Icon name="pause" size={15} />
+              </button>
+              <button className="btn ghost sm" onClick={() => act(async () => report(await api.mrStop(g.id), t("Stop groupe")), t("Stop envoyé"))}>
+                <Icon name="stop" size={15} />
+              </button>
+              <button className="btn ghost sm" title={t("Supprimer le groupe")}
+                onClick={() => act(async () => { await api.mrDeleteGroup(g.id); await reload(); }, t("Groupe supprimé"))}>
+                <Icon name="trash" size={15} />
+              </button>
+            </span>
+          </div>
+          <div className="mr-members">
+            {g.members.map((m) => (
+              <div className="mr-member" key={m}>
+                <span className="row-ico"><Icon name="speaker" size={17} /></span>
+                <span className="mr-name">{memberName(m)}</span>
+                <input type="range" min={0} max={100} defaultValue={state?.volume ?? 80} style={{ width: 90 }}
+                  title={t("Volume de cette zone")}
+                  onChange={(e) => api.mrVolume(g.id, Number(e.target.value), m).then((r) => report(r, t("Volume zone"))).catch((e2) => say(String(e2)))} />
+                <button className="icon-btn" title={t("Retirer du groupe")}
+                  onClick={() => act(async () => { await api.mrSetMember(g.id, m, false); await reload(); }, t("Membre retiré"))}>
+                  <Icon name="close" size={14} />
+                </button>
+              </div>
+            ))}
+            <select className="mr-add" defaultValue="" onChange={(e) => { const v = e.target.value; if (v) act(async () => { await api.mrSetMember(g.id, v, true); await reload(); }, t("Membre ajouté")); e.target.value = ""; }}>
+              <option value="">{t("+ ajouter une zone…")}</option>
+              {candidates.filter((c) => !g.members.includes(c)).map((c) => <option key={c} value={c}>{memberName(c)}</option>)}
+            </select>
+          </div>
+          <div className="mr-groupvol">
+            <span>{t("Volume du groupe")}</span>
+            <input type="range" min={0} max={100} defaultValue={state?.volume ?? 80} style={{ width: 160 }}
+              onChange={(e) => api.mrVolume(g.id, Number(e.target.value)).then((r) => report(r, t("Volume groupe"))).catch((e2) => say(String(e2)))} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | null; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; pins: Pins; onTogglePin: (kind: PinKind, id: string) => void }) {
   const [list, setList] = useState<RadioList | null>(null);

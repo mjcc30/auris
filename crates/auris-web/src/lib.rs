@@ -34,8 +34,11 @@ use auris_updater::Updater;
 
 mod dlna_renderer;
 mod lastfm;
+mod multiroom;
 mod packs;
 mod radios;
+
+pub use multiroom::{peer_id, MultiroomHub};
 
 #[derive(RustEmbed)]
 #[folder = "../../ui/dist/"]
@@ -94,6 +97,8 @@ pub struct AppState {
     /// Adresse réellement bindée par `serve` (renseigné au démarrage) —
     /// sert de repli pour l'URL de base annoncée en SSDP/DLNA (#35).
     pub bound_addr: Arc<RwLock<Option<SocketAddr>>>,
+    /// Multiroom : pairs découverts (balise multicast) + groupes persistés (#23).
+    pub multiroom: Arc<multiroom::MultiroomHub>,
 }
 
 /// Action d'alimentation (redémarrer / éteindre la machine hôte).
@@ -125,6 +130,10 @@ impl AppState {
             exclusive_sink: None,
             device_lister: None,
             ext_http: None,
+            multiroom: Arc::new(multiroom::MultiroomHub::new(
+                data_dir.clone(),
+                multiroom::peer_id(&data_dir),
+            )),
             data_dir,
             power_control: false,
             power_ops: None,
@@ -450,6 +459,24 @@ pub fn router(state: AppState) -> Router {
         .route("/dlna/scpd/{name}", get(dlna_renderer::get_scpd))
         .route("/dlna/avtransport", post(dlna_renderer::post_avtransport))
         .route("/dlna/rendering", post(dlna_renderer::post_rendering))
+        // multiroom / regroupement — #23
+        .route("/api/multiroom/state", get(multiroom::get_state))
+        .route("/api/multiroom/clock", get(multiroom::get_clock))
+        .route("/api/multiroom/groups", post(multiroom::post_group))
+        .route(
+            "/api/multiroom/groups/{id}",
+            delete(multiroom::delete_group),
+        )
+        .route(
+            "/api/multiroom/groups/{id}/members",
+            post(multiroom::post_member),
+        )
+        .route("/api/multiroom/play", post(multiroom::post_play))
+        .route("/api/multiroom/pause", post(multiroom::post_pause))
+        .route("/api/multiroom/stop", post(multiroom::post_stop))
+        .route("/api/multiroom/seek", post(multiroom::post_seek))
+        .route("/api/multiroom/volume", post(multiroom::post_volume))
+        .route("/api/multiroom/receive", post(multiroom::post_receive))
         // websocket
         .route("/ws", get(ws_handler))
         .route("/ws/audio", get(ws_audio_handler))
@@ -475,6 +502,8 @@ pub async fn serve(state: AppState, addr: SocketAddr) -> anyhow::Result<()> {
         let base = format!("http://{ip}:{}", addr.port());
         dlna_renderer::spawn_announcer(state.clone(), base);
     }
+    // clone pour la balise multiroom, lancée après le bind (cf. ci-dessous)
+    let state_mr = state.clone();
     // tâche de fond : historique d'écoute (#69) — enregistre chaque piste qui démarre
     // (dédup consécutifs géré par Library::record_play).
     {
@@ -557,7 +586,11 @@ pub async fn serve(state: AppState, addr: SocketAddr) -> anyhow::Result<()> {
         }
     });
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    *state.bound_addr.write().unwrap() = Some(listener.local_addr().unwrap_or(addr));
+    let bound = listener.local_addr().unwrap_or(addr);
+    *state_mr.bound_addr.write().unwrap() = Some(bound);
+    // balise multicast de découverte des pairs multiroom (#23) — après le
+    // bind pour annoncer la bonne URL de base
+    multiroom::spawn_beacon(state_mr);
     tracing::info!("interface web: http://{addr}");
     axum::serve(listener, app).await?;
     Ok(())

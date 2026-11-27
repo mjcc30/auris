@@ -477,6 +477,35 @@ export interface NetworkSettings {
   dlna_renderer: boolean;
 }
 
+/** Pair Auris découvert sur le LAN (multiroom #23). */
+export interface PeerInfo {
+  id: string;
+  name: string;
+  base: string;
+  version: string;
+  ts_ms: number;
+}
+
+export interface MrGroup {
+  id: string;
+  name: string;
+  members: string[];
+}
+
+export interface MultiroomState {
+  self_id: string;
+  self_name: string;
+  peers: PeerInfo[];
+  groups: MrGroup[];
+}
+
+export interface GroupActionReport {
+  group: string;
+  action: string;
+  ok: string[];
+  failed: string[];
+}
+
 export interface SourcesSettings {
   metadata_discovery: boolean;
 }
@@ -618,6 +647,18 @@ export const api = {
     }),
   browse: (uri: string) => req<BrowseEntry[]>(`/api/browse?uri=${encodeURIComponent(uri)}`),
   radios: () => req<RadioList>("/api/radios"),
+  multiroomState: () => req<MultiroomState>("/api/multiroom/state"),
+  mrCreateGroup: (name: string) => req<MrGroup>("/api/multiroom/groups", post({ name })),
+  mrDeleteGroup: (id: string) => req<{ removed: boolean }>(`/api/multiroom/groups/${encodeURIComponent(id)}`, del()),
+  mrSetMember: (groupId: string, member: string, add: boolean) =>
+    req<MrGroup>(`/api/multiroom/groups/${encodeURIComponent(groupId)}/members`, post({ member, add })),
+  mrPlay: (group: string, uri?: string, position?: number) =>
+    req<GroupActionReport>("/api/multiroom/play", post({ group, uri, position })),
+  mrPause: (group: string) => req<GroupActionReport>("/api/multiroom/pause", post({ group })),
+  mrStop: (group: string) => req<GroupActionReport>("/api/multiroom/stop", post({ group })),
+  mrSeek: (group: string, secs: number) => req<GroupActionReport>("/api/multiroom/seek", post({ group, secs })),
+  mrVolume: (group: string, volume: number, member?: string) =>
+    req<GroupActionReport>("/api/multiroom/volume", post({ group, volume, member })),
   addRadio: (name: string, url: string) => req<RadioList>("/api/radios", post({ name, url })),
   deleteRadio: (id: string) => req<RadioList>(`/api/radios/${encodeURIComponent(id)}`, del()),
   playRadio: (id: string) => req<PlayerState>(`/api/radios/${encodeURIComponent(id)}/play`, post({})),

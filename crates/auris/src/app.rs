@@ -160,6 +160,10 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         alarms: Arc::new(std::sync::Mutex::new(auris_core::AlarmState::default())),
         mb_cache: Arc::new(std::sync::Mutex::new(None)),
         bound_addr: Arc::new(RwLock::new(None)),
+        multiroom: Arc::new(auris_web::MultiroomHub::new(
+            data_dir.clone(),
+            auris_web::peer_id(&data_dir),
+        )),
     };
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)
