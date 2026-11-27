@@ -108,11 +108,12 @@ build_pc() {
     apt-get install -y -qq --no-install-recommends \
       ca-certificates libasound2 ffmpeg alsa-utils \
       grub-pc-bin grub2-common linux-image-amd64 openssh-server \
+      systemd systemd-sysv dbus udev \
       locales sudo curl
     dpkg -i /tmp/auris.deb || apt-get -f install -y -qq
     rm -f /tmp/auris.deb
     useradd --system --home /var/lib/auris --shell /usr/sbin/nologin auris 2>/dev/null || true
-    systemctl enable auris.service
+    systemctl enable auris.service || true
     # SSH actif pour l'admin ; root login désactivé (mot de passe par défaut Pi-style non requis ici).
     systemctl enable ssh
     # Locale UTF-8
@@ -170,11 +171,17 @@ CHROOT
 build_rpi() {
   command -v kpartx >/dev/null || die "kpartx requis (apt install kpartx)"
   command -v dpkg-deb >/dev/null || die "dpkg-deb requis (apt install dpkg-dev)"
-  local base="2025-05-06-raspios-bookworm-arm64-lite"
-  local src_url="https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2025-05-06/2025-05-06-raspios-bookworm-arm64-lite.img.xz"
+  # Dernière image Raspberry Pi OS Lite arm64 : on résout le listing (l'URL exacte
+  # change à chaque release Raspberry Pi).
+  local base_url="https://downloads.raspberrypi.com/raspios_lite_arm64/images"
+  local dir img_xz_name src_url
+  dir="$(curl -fsSL "$base_url/" | grep -oE 'href="[^"]+/"' | sed 's/href="//;s/"$//' | sort | tail -1)"
+  img_xz_name="$(curl -fsSL "$base_url/$dir" | grep -oE 'href="[^"]+\.img\.xz"' | sed 's/href="//;s/"$//' | sort | tail -1)"
+  src_url="$base_url/$dir/$img_xz_name"
+  [ -n "$img_xz_name" ] || die "image RPi OS Lite arm64 introuvable dans $base_url/"
   local img_xz="$WORK/raspios.img.xz"
-  log "téléchargement de Raspberry Pi OS Lite arm64 ($base)…"
-  curl -fsSL -H 'User-Agent: auris-image' -o "$img_xz" "$src_url" || die "téléchargement RPi OS échoué"
+  log "téléchargement de Raspberry Pi OS Lite arm64 ($dir/$img_xz_name)…"
+  curl -fsSL -H 'User-Agent: auris-image' -o "$img_xz" "$src_url" || die "téléchargement RPi OS échoué ($src_url)"
   xz -dk -T0 "$img_xz"
   local img="${img_xz%.xz}"
 
