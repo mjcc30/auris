@@ -76,8 +76,7 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ matrix.asset }}" == *.zip ]]; then
-            cd target/${{ matrix.target }}/release
-            7z a ../../../../${{ matrix.asset }} auris.exe
+            7z a ${{ matrix.asset }} target/${{ matrix.target }}/release/auris.exe
           else
             tar -czf ${{ matrix.asset }} -C target/${{ matrix.target }}/release auris
           fi
