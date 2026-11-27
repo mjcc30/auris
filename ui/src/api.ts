@@ -18,6 +18,15 @@ export interface Track {
   format: AudioFormat | null;
   size_bytes: number | null;
   has_cover: boolean;
+  /** Crédits étendus lus au scan (#73). */
+  composer?: string | null;
+  producer?: string | null;
+  label?: string | null;
+  publisher?: string | null;
+  isrc?: string | null;
+  copyright?: string | null;
+  /** Paroles embarquées — uniquement sur la route individuelle, absentes de la liste. */
+  lyrics?: string | null;
 }
 
 export interface Album {
@@ -28,6 +37,10 @@ export interface Album {
   cover_track_id: string | null;
   track_count: number;
   duration_secs: number;
+  /** Crédits de l'album agrégés depuis les pistes (#73). */
+  label?: string | null;
+  publisher?: string | null;
+  copyright?: string | null;
 }
 
 export interface Artist {
@@ -262,6 +275,14 @@ export interface InfosResponse {
   format: AudioFormat | null;
   /** Commentaire embarqué (tag COMM/COMMENT). */
   comment: string | null;
+  /** Crédits étendus de la piste (#73). */
+  composer: string | null;
+  producer: string | null;
+  label: string | null;
+  publisher: string | null;
+  isrc: string | null;
+  copyright: string | null;
+  lyrics_embedded: boolean;
   album_info: {
     id: string;
     title: string;
@@ -269,6 +290,9 @@ export interface InfosResponse {
     year: number | null;
     track_count: number;
     duration_secs: number;
+    label: string | null;
+    publisher: string | null;
+    copyright: string | null;
     cover_url: string | null;
   } | null;
   /** Bio Wikipedia de l'artiste (null si introuvable). */
@@ -485,6 +509,7 @@ export const api = {
     const qs = p.toString();
     return req<Track[]>(`/api/library/tracks${qs ? `?${qs}` : ""}`);
   },
+  track: (id: string) => req<Track>(`/api/library/tracks/${encodeURIComponent(id)}`),
   facets: () => req<Facets>("/api/library/facets"),
   libraryStats: () => req<LibraryStats>("/api/library/stats"),
   history: (limit = 50) => req<HistoryTrack[]>(`/api/library/history?limit=${limit}`),

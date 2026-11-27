@@ -120,5 +120,12 @@
   "Effacer": "Clear",
   "Scan…": "Scanning…",
   "Scanner la source": "Scan source",
-  "Couleur principale de l'interface — presets ou #RRGGBB": "Main interface color — presets or #RRGGBB"
+  "Couleur principale de l'interface — presets ou #RRGGBB": "Main interface color — presets or #RRGGBB",
+  "Crédits": "Credits",
+  "Compositeur": "Composer",
+  "Producteur": "Producer",
+  "Label": "Label",
+  "Éditeur": "Publisher",
+  "Titre": "Title",
+  "Copyright": "Copyright"
 }

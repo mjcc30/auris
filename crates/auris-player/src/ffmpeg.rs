@@ -265,6 +265,12 @@ fn meta_from_probe(info: &ProbeInfo) -> TrackMeta {
         cover: None,
         lyrics: tag(t, &["lyrics", "lyrics-xxx", "unsyncedlyrics"]),
         comment: tag(t, &["comment"]),
+        composer: tag(t, &["composer"]),
+        producer: tag(t, &["producer"]),
+        label: tag(t, &["label", "recordlabel"]),
+        publisher: tag(t, &["publisher"]),
+        isrc: tag(t, &["isrc"]),
+        copyright: tag(t, &["copyright"]),
     }
 }
 

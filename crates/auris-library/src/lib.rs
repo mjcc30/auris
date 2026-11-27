@@ -881,6 +881,20 @@ fn album_key_of(a: &Album) -> String {
     format!("{}|{}", a.artist.to_lowercase(), a.title.to_lowercase())
 }
 
+/// Remplit les crédits d'album (label/éditeur/copyright) depuis une piste (#73) :
+/// la première valeur trouvée gagne.
+fn merge_album_credits(a: &mut Album, t: &Track) {
+    if a.label.is_none() {
+        a.label = t.label.clone();
+    }
+    if a.publisher.is_none() {
+        a.publisher = t.publisher.clone();
+    }
+    if a.copyright.is_none() {
+        a.copyright = t.copyright.clone();
+    }
+}
+
 /// Plafonnement des groupes de résultats de recherche (#71).
 const SEARCH_CAP: usize = 30;
 
@@ -1025,6 +1039,14 @@ async fn probe_and_store(db: &sled::Db, sources: &Arc<SourcesManager>, uri: &str
     t.duration_secs = meta.duration_secs.or(dur);
     t.format = meta.format;
     t.has_cover = meta.has_cover;
+    // credits étendus (#73)
+    t.composer = meta.composer.clone();
+    t.producer = meta.producer.clone();
+    t.label = meta.label.clone();
+    t.publisher = meta.publisher.clone();
+    t.isrc = meta.isrc.clone();
+    t.copyright = meta.copyright.clone();
+    t.lyrics = meta.lyrics.clone();
     t.finalize_keys();
 
     let tracks = db
@@ -1102,6 +1124,9 @@ async fn probe_and_store(db: &sled::Db, sources: &Arc<SourcesManager>, uri: &str
                             cover_track_id: None,
                             track_count: 0,
                             duration_secs: 0.0,
+                            label: t.label.clone(),
+                            publisher: t.publisher.clone(),
+                            copyright: t.copyright.clone(),
                         })?,
                     )
                     .map_err(se)?;
@@ -1117,6 +1142,7 @@ async fn probe_and_store(db: &sled::Db, sources: &Arc<SourcesManager>, uri: &str
             if a.cover_track_id.is_none() && t.has_cover {
                 a.cover_track_id = Some(t.id.clone());
             }
+            merge_album_credits(&mut a, &t);
             albums.insert(album_id.as_bytes(), enc(&a)?).map_err(se)?;
         }
         if let Some(v) = artists.get(artist_id.as_bytes()).map_err(se)? {
@@ -1178,3 +1204,41 @@ pub fn purge_source(db: &sled::Db, source_id: &str) -> Result<usize> {
 
 /// HashMap utilitaire pour les reponses API.
 pub type TrackMap = HashMap<String, Track>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn track_with_credits() -> Track {
+        let mut t = Track::new("src://s/a.flac".into(), "s".into());
+        t.label = Some("Deutsche Grammophon".into());
+        t.publisher = Some("DG".into());
+        t.copyright = Some("© 2018".into());
+        t
+    }
+
+    #[test]
+    fn credits_album_remplis_depuis_la_piste() {
+        let mut a = Album {
+            id: "a1".into(),
+            title: "Album".into(),
+            artist: "Artiste".into(),
+            year: None,
+            cover_track_id: None,
+            track_count: 0,
+            duration_secs: 0.0,
+            label: None,
+            publisher: None,
+            copyright: None,
+        };
+        merge_album_credits(&mut a, &track_with_credits());
+        assert_eq!(a.label.as_deref(), Some("Deutsche Grammophon"));
+        assert_eq!(a.publisher.as_deref(), Some("DG"));
+        assert_eq!(a.copyright.as_deref(), Some("© 2018"));
+        // une seconde piste ne réécrase pas
+        let mut t2 = Track::new("src://s/b.flac".into(), "s".into());
+        t2.label = Some("Autre label".into());
+        merge_album_credits(&mut a, &t2);
+        assert_eq!(a.label.as_deref(), Some("Deutsche Grammophon"));
+    }
+}

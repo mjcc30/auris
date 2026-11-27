@@ -345,6 +345,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/queue/{index}", delete(delete_queue_item))
         // bibliotheque
         .route("/api/library/tracks", get(get_tracks))
+        .route("/api/library/tracks/{id}", get(get_track))
         .route("/api/library/facets", get(get_facets))
         .route("/api/library/stats", get(get_library_stats))
         .route("/api/library/history", get(get_history))
@@ -779,7 +780,21 @@ async fn get_tracks(
 ) -> Json<Vec<Track>> {
     let genre = q.get("genre").map(|s| s.as_str());
     let decade = q.get("decade").and_then(|d| d.parse::<u32>().ok());
-    Json(s.library.tracks_filtered(genre, decade))
+    // Liste allégée : les paroles embarquées restent sur la route individuelle (#73).
+    let mut tracks = s.library.tracks_filtered(genre, decade);
+    for t in &mut tracks {
+        t.lyrics = None;
+    }
+    Json(tracks)
+}
+
+/// `GET /api/library/tracks/{id}` — piste complète, crédits étendus et paroles embarquées inclus (#73).
+async fn get_track(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<Track>> {
+    let t = s
+        .library
+        .track(&id)
+        .ok_or_else(|| AurisError::TrackNotFound(id.clone()))?;
+    Ok(Json(t))
 }
 
 /// `GET /api/library/facets` — facettes genre/décennie pour l'accueil façon Nova.
@@ -1269,6 +1284,14 @@ async fn get_infos(
         "duration_secs": t.duration_secs,
         "format": t.format,
         "comment": meta.comment,
+        // crédits étendus (#73), lus au scan et stockés sur la piste
+        "composer": t.composer,
+        "producer": t.producer,
+        "label": t.label,
+        "publisher": t.publisher,
+        "isrc": t.isrc,
+        "copyright": t.copyright,
+        "lyrics_embedded": t.lyrics.is_some(),
         "album_info": album.as_ref().map(|a| serde_json::json!({
             "id": a.id,
             "title": a.title,
@@ -1276,6 +1299,9 @@ async fn get_infos(
             "year": a.year,
             "track_count": a.track_count,
             "duration_secs": a.duration_secs,
+            "label": a.label,
+            "publisher": a.publisher,
+            "copyright": a.copyright,
             "cover_url": a.cover_track_id.as_ref().map(|c| format!("/api/library/cover/{c}")),
         })),
         "bio": bio,

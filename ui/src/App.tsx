@@ -885,10 +885,12 @@ function ArtistView({ id, name, playAll, playTrack, favs, onToggleFav, pins, onT
 function AlbumView({ id, title, artist, playAll, playTrack, say, favs, onToggleFav, pins, onTogglePin, onBack }: { id: string; title: string; artist: string; playAll: (t: Track[]) => void; playTrack: (t: Track) => void; say: (m: string) => void; onBack: () => void } & LibProps) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [cover, setCover] = useState<string | null>(null);
+  const [album, setAlbum] = useState<Album | null>(null);
   useEffect(() => {
     fetch(`/api/library/albums/${encodeURIComponent(id)}`).then((r) => r.json()).then((j) => {
       setTracks(j.tracks ?? []);
       setCover(j.cover_url ?? null);
+      setAlbum(j.album ?? null);
     }).catch(() => {});
   }, [id]);
   return (
@@ -908,7 +910,31 @@ function AlbumView({ id, title, artist, playAll, playTrack, say, favs, onToggleF
       </div>
       <h1>{title} <PinButton on={pins.albums.includes(id)} onToggle={() => onTogglePin("album", id)} /> <FavHeart on={favs.albums.includes(id)} onToggle={() => onToggleFav("album", id)} /></h1>
       <h2 style={{ marginTop: 0 }}>{artist}</h2>
+      {album && [album.year, album.label, album.publisher, album.copyright].some((v) => v != null && v !== "") && (
+        <div className="s" style={{ marginTop: -10, marginBottom: 10 }}>
+          {[album.year, album.label, album.publisher, album.copyright].filter((v) => v != null && v !== "").join(" · ")}
+        </div>
+      )}
       <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={onToggleFav} albumCover={cover} />
+      {tracks.some((t) => t.composer || t.producer || t.isrc) && (
+        <>
+          <h2>{t("Crédits")}</h2>
+          <table className="tracks">
+            <thead><tr><th>#</th><th>{t("Titre")}</th><th>{t("Compositeur")}</th><th>{t("Producteur")}</th><th>ISRC</th></tr></thead>
+            <tbody>
+              {tracks.filter((t) => t.composer || t.producer || t.isrc).map((t) => (
+                <tr key={t.id} className="link" onClick={() => playTrack(t)}>
+                  <td className="meta">{t.track_number ?? ""}</td>
+                  <td>{t.title}</td>
+                  <td>{t.composer ?? ""}</td>
+                  <td>{t.producer ?? ""}</td>
+                  <td className="meta">{t.isrc ?? ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
     </div>
   );
 }
@@ -2388,6 +2414,23 @@ function NowPlayingPanel({ track, pos, tab, setTab, onClose }: {
                 {track.duration_secs != null ? ` · ${fmtTime(track.duration_secs)}` : ""}
                 {track.format ? ` · ${fmtFormat(track.format)}` : ""}
               </p>
+              {(() => {
+                const rows: [string, string | null][] = [
+                  [t("Compositeur"), infos.composer],
+                  [t("Producteur"), infos.producer],
+                  [t("Label"), infos.label ?? infos.album_info?.label ?? null],
+                  [t("Éditeur"), infos.publisher ?? infos.album_info?.publisher ?? null],
+                  ["ISRC", infos.isrc],
+                  ["Copyright", infos.copyright ?? infos.album_info?.copyright ?? null],
+                ].filter((r): r is [string, string | null] => !!r[1]);
+                if (!rows.length) return null;
+                return (<>
+                  <div className="np-h">{t("Crédits")}</div>
+                  <table className="np-credits"><tbody>
+                    {rows.map(([k, v]) => <tr key={k}><td>{k}</td><td>{v}</td></tr>)}
+                  </tbody></table>
+                </>);
+              })()}
               {infos.comment && (<>
                 <div className="np-h">Commentaire</div>
                 <p className="np-text">{infos.comment}</p>

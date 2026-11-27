@@ -95,6 +95,23 @@ pub struct Track {
     pub album_key: String,
     pub artist_key: String,
     pub has_cover: bool,
+    /// Crédits étendus lus au scan (#73) — absents des anciens index, d'où `default`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub producer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isrc: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copyright: Option<String>,
+    /// Paroles embarquées (USLT/LYRICS) — retirées de la liste `/api/library/tracks`
+    /// pour alléger la réponse, présentes sur `/api/library/tracks/{id}` et `/api/infos/{id}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lyrics: Option<String>,
     pub added_at: i64,
 }
 
@@ -121,6 +138,13 @@ impl Track {
             album_key: String::new(),
             artist_key: String::new(),
             has_cover: false,
+            composer: None,
+            producer: None,
+            label: None,
+            publisher: None,
+            isrc: None,
+            copyright: None,
+            lyrics: None,
             added_at: now,
         }
     }
@@ -144,6 +168,14 @@ pub struct Album {
     pub cover_track_id: Option<String>,
     pub track_count: usize,
     pub duration_secs: f64,
+    /// Crédits de l'album agrégés depuis les pistes (#73) — `default` pour les
+    /// anciens index sled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copyright: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

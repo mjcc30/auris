@@ -73,6 +73,13 @@ pub struct TrackMeta {
     pub lyrics: Option<String>,
     /// Commentaire embarque (tag COMM/COMMENT).
     pub comment: Option<String>,
+    /// Credits étendus (#73) : compositeur, producteur, label, éditeur, ISRC, copyright.
+    pub composer: Option<String>,
+    pub producer: Option<String>,
+    pub label: Option<String>,
+    pub publisher: Option<String>,
+    pub isrc: Option<String>,
+    pub copyright: Option<String>,
 }
 
 /// Decodeur de flux.
@@ -309,41 +316,7 @@ pub fn read_metadata(format: &mut dyn FormatReader) -> TrackMeta {
                 _ => {
                     // repli sur les cles brutes
                     let key = tag.raw.key.to_ascii_uppercase();
-                    match key.as_str() {
-                        "TITLE" | "TIT2" => {
-                            meta.title.get_or_insert(value);
-                        }
-                        "ARTIST" | " TPE1" => {
-                            meta.artist.get_or_insert(value);
-                        }
-                        "ALBUM" | "TALB" => {
-                            meta.album.get_or_insert(value);
-                        }
-                        "ALBUMARTIST" | "TPE2" | "ALBUM ARTIST" => {
-                            meta.album_artist.get_or_insert(value);
-                        }
-                        "TRACKNUMBER" | "TRCK" | "TRACK" => {
-                            meta.track_number =
-                                value.split('/').next().and_then(|s| s.trim().parse().ok())
-                        }
-                        "DISCNUMBER" | "TPOS" | "DISC" => {
-                            meta.disc_number =
-                                value.split('/').next().and_then(|s| s.trim().parse().ok())
-                        }
-                        "DATE" | "YEAR" | "TDRC" => {
-                            meta.year = value.chars().take(4).collect::<String>().parse().ok()
-                        }
-                        "GENRE" | "TCON" => {
-                            meta.genre.get_or_insert(value);
-                        }
-                        "USLT" | "LYRICS" | "UNSYNCEDLYRICS" | "SYLT" => {
-                            meta.lyrics.get_or_insert(value);
-                        }
-                        "COMM" | "COMMENT" => {
-                            meta.comment.get_or_insert(value);
-                        }
-                        _ => {}
-                    }
+                    apply_raw_tag(&mut meta, &key, &value);
                 }
             }
         }
@@ -353,6 +326,63 @@ pub fn read_metadata(format: &mut dyn FormatReader) -> TrackMeta {
         }
     }
     meta
+}
+
+/// Applique une paire cle brute/valeur sur les metadonnees (tags ID3, Vorbis,
+/// APE... normalisés en MAJUSCULES). Extrait de `read_metadata` pour être testé.
+pub fn apply_raw_tag(meta: &mut TrackMeta, key: &str, value: &str) {
+    match key {
+        "TITLE" | "TIT2" => {
+            meta.title.get_or_insert(value.to_string());
+        }
+        "ARTIST" | " TPE1" => {
+            meta.artist.get_or_insert(value.to_string());
+        }
+        "ALBUM" | "TALB" => {
+            meta.album.get_or_insert(value.to_string());
+        }
+        "ALBUMARTIST" | "TPE2" | "ALBUM ARTIST" => {
+            meta.album_artist.get_or_insert(value.to_string());
+        }
+        "TRACKNUMBER" | "TRCK" | "TRACK" => {
+            meta.track_number = value.split('/').next().and_then(|s| s.trim().parse().ok());
+        }
+        "DISCNUMBER" | "TPOS" | "DISC" => {
+            meta.disc_number = value.split('/').next().and_then(|s| s.trim().parse().ok());
+        }
+        "DATE" | "YEAR" | "TDRC" => {
+            meta.year = value.chars().take(4).collect::<String>().parse().ok();
+        }
+        "GENRE" | "TCON" => {
+            meta.genre.get_or_insert(value.to_string());
+        }
+        "USLT" | "LYRICS" | "UNSYNCEDLYRICS" | "SYLT" => {
+            meta.lyrics.get_or_insert(value.to_string());
+        }
+        "COMM" | "COMMENT" => {
+            meta.comment.get_or_insert(value.to_string());
+        }
+        // credits étendus (#73)
+        "COMPOSER" | "TCOM" | "SONGWRITER" | "WRITER" => {
+            meta.composer.get_or_insert(value.to_string());
+        }
+        "PRODUCER" | "TPE3" => {
+            meta.producer.get_or_insert(value.to_string());
+        }
+        "LABEL" | "RECORDLABEL" | "ORGANIZATION" => {
+            meta.label.get_or_insert(value.to_string());
+        }
+        "PUBLISHER" | "TPUB" => {
+            meta.publisher.get_or_insert(value.to_string());
+        }
+        "ISRC" | "TSRC" => {
+            meta.isrc.get_or_insert(value.to_string());
+        }
+        "COPYRIGHT" | "TCOP" => {
+            meta.copyright.get_or_insert(value.to_string());
+        }
+        _ => {}
+    }
 }
 
 /// Ouvre un decodeur adapte au format (DSD si .dsf/.dff, PCM sinon).
@@ -416,5 +446,36 @@ pub fn probe_meta(
             Ok((meta, spec, dur))
         }
         Err(e) => crate::ffmpeg::ffmpeg_probe(shared).map_err(|fe| fallback_error(e, fe)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tags_credits_etendus_id3_et_vorbis() {
+        let mut m = TrackMeta::default();
+        apply_raw_tag(&mut m, "TCOM", "Max Richter");
+        apply_raw_tag(&mut m, "TPE3", "Deutsche Grammophon");
+        apply_raw_tag(&mut m, "PUBLISHER", "DG");
+        apply_raw_tag(&mut m, "ISRC", "DEUM71800001");
+        apply_raw_tag(&mut m, "TCOP", "© 2018");
+        apply_raw_tag(&mut m, "COMPOSER", "Max Richter"); // vorbis: premier gagne
+        apply_raw_tag(&mut m, "LABEL", "DG");
+        assert_eq!(m.composer.as_deref(), Some("Max Richter"));
+        assert_eq!(m.producer.as_deref(), Some("Deutsche Grammophon"));
+        assert_eq!(m.publisher.as_deref(), Some("DG"));
+        assert_eq!(m.isrc.as_deref(), Some("DEUM71800001"));
+        assert_eq!(m.copyright.as_deref(), Some("© 2018"));
+        assert_eq!(m.label.as_deref(), Some("DG"));
+    }
+
+    #[test]
+    fn tags_credits_ne_ecrasent_pas_la_valeur_deja_lue() {
+        let mut m = TrackMeta::default();
+        apply_raw_tag(&mut m, "PRODUCER", "Premier");
+        apply_raw_tag(&mut m, "TPE3", "Second");
+        assert_eq!(m.producer.as_deref(), Some("Premier"));
     }
 }

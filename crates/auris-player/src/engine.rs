@@ -119,6 +119,13 @@ fn track_from_uri(uri: &str, meta: &TrackMeta, duration: Option<f64>) -> Track {
     t.duration_secs = duration.or(meta.duration_secs);
     t.format = meta.format;
     t.has_cover = meta.has_cover;
+    t.composer = meta.composer.clone();
+    t.producer = meta.producer.clone();
+    t.label = meta.label.clone();
+    t.publisher = meta.publisher.clone();
+    t.isrc = meta.isrc.clone();
+    t.copyright = meta.copyright.clone();
+    t.lyrics = meta.lyrics.clone();
     t.finalize_keys();
     t
 }
