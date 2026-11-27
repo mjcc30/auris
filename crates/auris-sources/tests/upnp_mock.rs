@@ -68,12 +68,36 @@ async fn spawn_mock() -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         while let Ok((mut sock, _)) = listener.accept().await {
             tokio::spawn(async move {
-                let mut buf = vec![0u8; 65536];
-                let n = match sock.read(&mut buf).await {
-                    Ok(n) => n,
-                    Err(_) => return,
+                // Lire la requête complète : headers + body (Content-Length).
+                // Un seul read() ne suffit pas — selon l'OS, le corps SOAP peut
+                // arriver dans un second segment TCP.
+                let mut buf = Vec::with_capacity(65536);
+                let req = loop {
+                    let mut chunk = [0u8; 65536];
+                    let n = match sock.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break String::new(),
+                        Ok(n) => n,
+                    };
+                    buf.extend_from_slice(&chunk[..n]);
+                    let req = String::from_utf8_lossy(&buf).to_string();
+                    if let Some(pos) = req.find("\r\n\r\n") {
+                        let head = &req[..pos];
+                        let want = head
+                            .lines()
+                            .find_map(|l| {
+                                let (name, val) = l.split_once(':')?;
+                                if name.trim().eq_ignore_ascii_case("content-length") {
+                                    val.trim().parse::<usize>().ok()
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or(0);
+                        if req.len() - (pos + 4) >= want {
+                            break req;
+                        }
+                    }
                 };
-                let req = String::from_utf8_lossy(&buf[..n]).to_string();
                 let (body, is_post) = if let Some(pos) = req.find("\r\n\r\n") {
                     (req[pos + 4..].to_string(), req.starts_with("POST"))
                 } else {

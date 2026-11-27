@@ -85,12 +85,18 @@ async fn dop_setup_device_inconnu_erreur_propre() {
         .json()
         .await
         .unwrap();
-    assert_eq!(r["ok"], false);
-    assert_eq!(r["applied"], false);
     assert_eq!(r["rate"], 176400);
-    // le nom inconnu doit produire une erreur explicite (pas de repli sur le
-    // périphérique par défaut, qui serait modifié à la place du bon DAC)
-    assert!(r["message"].as_str().unwrap().contains("introuvable"));
+    if cfg!(target_os = "windows") {
+        assert_eq!(r["ok"], false);
+        assert_eq!(r["applied"], false);
+        // le nom inconnu doit produire une erreur explicite (pas de repli sur le
+        // périphérique par défaut, qui serait modifié à la place du bon DAC)
+        assert!(r["message"].as_str().unwrap().contains("introuvable"));
+    } else {
+        // hors Windows, ensure_dop_carrier est un no-op : ok = true, applied = false
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["applied"], false);
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -137,13 +143,31 @@ async fn exclusive_toggle_endpoints_et_etat() {
         .unwrap();
     assert_eq!(r["ok"], true);
     assert_eq!(r["enabled"], true);
-    let st: serde_json::Value = http
-        .get(format!("{base}/api/audio/dop-status"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    // la commande SetExclusive est asynchrone (cmd_tx) : on poll l'état
+    let st = poll_dop_status(&http, &base).await;
     assert_eq!(st["exclusive_enabled"], true);
+}
+
+/// Poll GET /api/audio/dop-status jusqu'à ce que `exclusive_enabled` vaille
+/// `want` (ou timeout 5 s) : les commandes du moteur sont traitées en tâche de fond.
+async fn poll_dop_status_want(http: &reqwest::Client, base: &str, want: bool) -> serde_json::Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let st: serde_json::Value = http
+            .get(format!("{base}/api/audio/dop-status"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if st["exclusive_enabled"].as_bool() == Some(want) || std::time::Instant::now() > deadline {
+            return st;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+async fn poll_dop_status(http: &reqwest::Client, base: &str) -> serde_json::Value {
+    poll_dop_status_want(http, base, true).await
 }
