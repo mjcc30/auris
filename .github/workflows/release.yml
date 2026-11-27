@@ -87,9 +87,127 @@ jobs:
           name: checksums-${{ matrix.target }}
           path: checksums.txt
 
+  deb:
+    name: Package .deb (${{ matrix.arch }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: auris-${{ matrix.target }}.tar.gz
+          path: pkg
+      - name: construit le .deb
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          V="${VERSION#v}"
+          root="build-deb-$V"
+          rm -rf "$root"
+          mkdir -p "$root/DEBIAN" "$root/usr/local/bin" "$root/etc/systemd/system" "$root/var/lib/auris"
+          tar -xzf pkg/*.tar.gz -C "$root/usr/local/bin"
+          chmod 755 "$root/usr/local/bin/auris"
+          cat > "$root/DEBIAN/control" <<EOF
+          Package: auris
+          Version: ${V}-1
+          Section: sound
+          Priority: optional
+          Architecture: ${{ matrix.arch }}
+          Maintainer: mjcc30 <mjcc30@users.noreply.github.com>
+          Depends: libasound2, ffmpeg
+          Homepage: https://auris.audio
+          Description: Auris — lecteur audiophile style Volumio
+           Binaire unique Rust : bibliothèque musicale, lecture gapless/DoP,
+           radios internet, multiroom, plugins communautaires. Interface web
+           embarquée sur http://<hote>:3000/.
+          EOF
+          cat > "$root/DEBIAN/postinst" <<'EOF'
+          #!/bin/sh
+          set -e
+          if ! id auris >/dev/null 2>&1; then
+            useradd --system --home /var/lib/auris --shell /usr/sbin/nologin auris
+          fi
+          chown -R auris:auris /var/lib/auris
+          if [ ! -f /var/lib/auris/config.toml ]; then
+            cat > /var/lib/auris/config.toml <<'CFG'
+          host = "0.0.0.0"
+          port = 3000
+          volume = 80
+          auto_update = true
+          repo_owner = "mjcc30"
+          repo_name = "auris"
+
+          [[sources]]
+          id = "nas"
+          name = "NAS"
+          enabled = true
+          kind = "local"
+          path = "/mnt/nas/musique"
+          CFG
+            chown auris:auris /var/lib/auris/config.toml
+            chmod 640 /var/lib/auris/config.toml
+          fi
+          systemctl daemon-reload || true
+          systemctl enable auris.service || true
+          systemctl restart auris.service || true
+          echo "Auris installé — interface web: http://$(hostname -I | awk '{print $1}'):3000/"
+          EOF
+          chmod 755 "$root/DEBIAN/postinst"
+          cat > "$root/DEBIAN/postrm" <<'EOF'
+          #!/bin/sh
+          set -e
+          if [ "$1" = "purge" ]; then
+            systemctl stop auris.service || true
+            systemctl disable auris.service || true
+            userdel auris || true
+            rm -rf /var/lib/auris
+          fi
+          systemctl daemon-reload || true
+          EOF
+          chmod 755 "$root/DEBIAN/postrm"
+          cat > "$root/etc/systemd/system/auris.service" <<'EOF'
+          [Unit]
+          Description=Auris — lecteur audiophile (style Volumio)
+          Documentation=https://auris.audio
+          After=network-online.target sound.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=auris
+          Group=auris
+          ExecStart=/usr/local/bin/auris serve --data-dir /var/lib/auris
+          Restart=on-failure
+          RestartSec=5
+          AmbientCapabilities=CAP_SYS_NICE
+          Nice=-10
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          out="auris_${V}-1_${{ matrix.arch }}.deb"
+          dpkg-deb --root-owner-group --build "$root" "$out"
+          sha256sum "$out" >> "$out.sha256"
+          echo "built $out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.arch }}
+          path: |
+            auris_*.deb
+            auris_*.deb.sha256
+
   release:
     name: Publie la release GitHub
-    needs: build
+    needs: [build, deb]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -97,6 +215,11 @@ jobs:
         with:
           path: artifacts
           pattern: auris-*
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: deb-*
           merge-multiple: true
       - uses: actions/download-artifact@v4
         with:
