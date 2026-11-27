@@ -798,42 +798,44 @@ impl Engine {
                     track.format = meta.format;
                 }
                 if self.output.is_none() {
-                    match AudioOutput::new(self.device_name.as_deref()) {
-                        Ok(mut o) => {
-                            o.set_exclusive(self.exclusive.load(Ordering::SeqCst));
-                            self.device_name = Some(o.name().to_string());
-                            self.output = Some(o);
-                        }
-                        Err(e) => {
-                            if self.out_mode.load(Ordering::SeqCst) == 1 {
-                                // « Jouer ici » sans peripherique audio local
-                                // (ex: binaire WSL, aucun DAC visible): on
-                                // forward le PCM au navigateur via WebSocket.
-                                self.output =
-                                    Some(AudioOutput::browser_only("Navigateur (Jouer ici)"));
-                            } else {
-                                // DAC choisi indisponible au demarrage (debranche) :
-                                // on retombe sur la sortie par defaut de l'OS avec un
-                                // avertissement publie, plutot que de rester muet.
-                                match AudioOutput::new(None) {
-                                    Ok(mut o) => {
-                                        o.set_exclusive(self.exclusive.load(Ordering::SeqCst));
-                                        self.publish_msg(
-                                            "warning",
-                                            &format!(
+                    if self.out_mode.load(Ordering::SeqCst) == 1 {
+                        // « Jouer ici » : le navigateur EST la sortie (DAC muet).
+                        // On n'ouvre pas de peripherique local — sinon un device
+                        // enuméré mais inutilisable (CI headless, WSL sans carte
+                        // son) ferait échouer le stream et la lecture.
+                        self.output = Some(AudioOutput::browser_only("Navigateur (Jouer ici)"));
+                    } else {
+                        match AudioOutput::new(self.device_name.as_deref()) {
+                            Ok(mut o) => {
+                                o.set_exclusive(self.exclusive.load(Ordering::SeqCst));
+                                self.device_name = Some(o.name().to_string());
+                                self.output = Some(o);
+                            }
+                            Err(e) => {
+                                {
+                                    // DAC choisi indisponible au demarrage (debranche) :
+                                    // on retombe sur la sortie par defaut de l'OS avec un
+                                    // avertissement publie, plutot que de rester muet.
+                                    match AudioOutput::new(None) {
+                                        Ok(mut o) => {
+                                            o.set_exclusive(self.exclusive.load(Ordering::SeqCst));
+                                            self.publish_msg(
+                                                "warning",
+                                                &format!(
                                                 "sortie audio: {e} — bascule sur « {} » (defaut)",
                                                 o.name()
                                             ),
-                                        );
-                                        self.device_name = Some(o.name().to_string());
-                                        self.output = Some(o);
-                                    }
-                                    Err(e2) => {
-                                        self.publish_msg(
-                                            "error",
-                                            &format!("sortie audio: {e} / defaut: {e2}"),
-                                        );
-                                        return;
+                                            );
+                                            self.device_name = Some(o.name().to_string());
+                                            self.output = Some(o);
+                                        }
+                                        Err(e2) => {
+                                            self.publish_msg(
+                                                "error",
+                                                &format!("sortie audio: {e} / defaut: {e2}"),
+                                            );
+                                            return;
+                                        }
                                     }
                                 }
                             }
