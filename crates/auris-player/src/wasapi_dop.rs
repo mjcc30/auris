@@ -54,6 +54,7 @@ pub fn dop_default_format_bytes(rate: u32, channels: u16) -> Vec<u8> {
 }
 
 /// Comparaison insensible à la casse et aux ponctuations.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn normalize(s: &str) -> String {
     s.chars()
         .filter(|c| c.is_alphanumeric())
@@ -64,6 +65,7 @@ pub(crate) fn normalize(s: &str) -> String {
 /// cpal préfixe parfois le nom WASAPI par l'index de carte :
 /// « Casque (2- iBasso-DC03-Pro) » côté cpal vs « Casque (iBasso-DC03-Pro) »
 /// côté WASAPI — on retire le « (<chiffres>- » pour comparer.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn strip_card_prefix(s: &str) -> String {
     let b = s.as_bytes();
     let mut i = 0;

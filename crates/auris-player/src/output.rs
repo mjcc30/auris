@@ -171,6 +171,8 @@ pub(crate) trait WriteOut: SizedSample + Send + 'static {
     /// Sérialise l'échantillon en little-endian dans `out`.
     /// `packed24` = conteneur 24 bits « packed » 3 octets (on écrit les 3 octets
     /// hauts d'un i32 24-in-32).
+    // utilisé par le chemin WASAPI exclusif (Windows) et les tests Windows
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     fn push_le(self, out: &mut Vec<u8>, packed24: bool);
 }
 
@@ -481,6 +483,7 @@ impl AudioOutput {
 
     /// Construit (et remplace) le flux de sortie pour un spec donne.
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
     pub fn build_stream(
         &mut self,
         spec: &OutputSpec,
