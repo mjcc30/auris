@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type InputDevice, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
 
 type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "favorites" | "sources" | "multiroom" | "plugins" | "settings" | "display";
-type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp" | "qobuz" | "tidal";
+type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp" | "qobuz" | "tidal" | "linein";
 /** Onglets du panneau lecture en cours (style Volumio: Pochette / Infos / Paroles). */
 type NpTab = "cover" | "infos" | "lyrics";
 
@@ -19,6 +19,7 @@ function kindIconName(kind: string): string {
     case "http": return "link";
     case "qobuz": return "note";
     case "tidal": return "note";
+    case "linein": return "link";
     default: return "folder";
   }
 }
@@ -32,6 +33,7 @@ function kindLabel(kind: string): string {
     case "http": return "HTTP";
     case "qobuz": return "Qobuz";
     case "tidal": return "Tidal";
+    case "linein": return "Line-in / optique / HDMI";
     default: return "Dossier local";
   }
 }
@@ -1964,6 +1966,7 @@ function Sources({ sources, refresh, say }: { sources: Source[]; refresh: () => 
       case "upnp": return String(r.url ?? "");
       case "qobuz": return `${String(r.user ?? "")} · ${String(r.quality ?? "hires")}`;
       case "tidal": return `session · ${String(r.quality ?? "lossless")}`;
+      case "linein": return r.device ? String(r.device) : "entrée par défaut";
       default: return "";
     }
   };
@@ -2013,6 +2016,8 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
   const [sessionId, setSessionId] = useState(String((editing as Record<string, unknown> | null)?.session_id ?? ""));
   const [mounts, setMounts] = useState<MountInfo[]>([]);
   const [detecting, setDetecting] = useState(false);
+  const [inDevice, setInDevice] = useState(String((editing as Record<string, unknown> | null)?.device ?? ""));
+  const [inDevices, setInDevices] = useState<InputDevice[]>([]);
   const [busy, setBusy] = useState(false);
 
   const uniqueId = (base: string) => {
@@ -2034,6 +2039,7 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
       case "upnp": return url.trim() ? makeSource(id, name.trim(), "upnp", { url: url.trim() }) : null;
       case "qobuz": return user.trim() && password ? makeSource(id, name.trim(), "qobuz", { user: user.trim(), password, quality }) : null;
       case "tidal": return token.trim() ? makeSource(id, name.trim(), "tidal", { token: token.trim(), session_id: sessionId.trim() || null, quality: quality === "hires" ? "hires" : "lossless" }) : null;
+      case "linein": return makeSource(id, name.trim(), "linein", { device: inDevice || null });
     }
   };
 
@@ -2058,7 +2064,11 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
     finally { setDetecting(false); }
   };
 
-  const kinds: [SourceKindTab, string][] = [["local", "Dossier local"], ["usb", "USB"], ["smb", "NAS (SMB/CIFS)"], ["radio", "Radio"], ["http", "URL HTTP"], ["upnp", "UPnP/DLNA"], ["qobuz", "Qobuz"], ["tidal", "Tidal"]];
+  const kinds: [SourceKindTab, string][] = [["local", "Dossier local"], ["usb", "USB"], ["smb", "NAS (SMB/CIFS)"], ["radio", "Radio"], ["http", "URL HTTP"], ["upnp", "UPnP/DLNA"], ["qobuz", "Qobuz"], ["tidal", "Tidal"], ["linein", "Line-in"]];
+
+  useEffect(() => {
+    if (tab === "linein") api.inputDevices().then(setInDevices).catch(() => {});
+  }, [tab]);
 
   return (
     <div className="modal-bg" onClick={onClose}>
@@ -2113,6 +2123,17 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
           )}
           {tab === "upnp" && (
             <label className="span2">URL de description du serveur UPnP/DLNA (ex. http://192.168.1.10:8200/desc.xml) — utile si la découverte SSDP est bloquée<input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://…/desc.xml" /></label>
+          )}
+          {tab === "linein" && (
+            <>
+              <label className="span2">Périphérique d'entrée (line-in, optique, HDMI eARC, boucle « ce que tu entends »…)
+                <select value={inDevice} onChange={(e) => setInDevice(e.target.value)}>
+                  <option value="">Entrée par défaut{` ★`}</option>
+                  {inDevices.map((d) => <option key={d.name} value={d.name}>{d.name}{d.is_default ? " ★" : ""}</option>)}
+                </select>
+              </label>
+              <div className="span2 meta">La source joue l'entrée en direct (badge « EN DIRECT »), en passthrough vers la sortie choisie. Sous Windows, utilisez une boucle (ex. « Stereo Mix » / VB-Cable) pour capturer la sortie du PC.</div>
+            </>
           )}
           {tab === "qobuz" && (
             <>

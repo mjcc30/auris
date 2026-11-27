@@ -232,6 +232,13 @@ pub enum SourceKind {
     Upnp { url: String },
     /// Webradio: flux HTTP(S) joue directement.
     Radio { url: String },
+    /// Entrée audio externe du boîtier (line-in, optique SPDIF, HDMI eARC, ou
+    /// boucle « ce que tu entends » sous Windows) lue en passthrough live — #75.
+    LineIn {
+        /// Nom du périphérique d'entrée (None = entrée par défaut de l'hôte).
+        #[serde(default)]
+        device: Option<String>,
+    },
     /// Qobuz (API communautaire + compte perso) — #25.
     Qobuz {
         user: String,

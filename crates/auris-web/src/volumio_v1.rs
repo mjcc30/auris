@@ -90,6 +90,9 @@ fn track_v1(t: &Track) -> Value {
 /// État au format Volumio v1 (`seek` en millisecondes).
 fn state_v1(s: &auris_core::PlayerState) -> Value {
     let cur = s.current.as_ref();
+    // format réellement joué (spec du décodeur) — prioritaire sur les tags de
+    // la piste, absents sur un flux brut (line-in #75)
+    let fmt = s.current_format.or_else(|| cur.and_then(|t| t.format));
     json!({
         "status": match s.status {
             PlayStatus::Playing => "play",
@@ -105,19 +108,19 @@ fn state_v1(s: &auris_core::PlayerState) -> Value {
             .unwrap_or_default(),
         "uri": cur.map(|t| t.uri.clone()).unwrap_or_default(),
         "service": "auris",
-        "trackType": cur.and_then(|t| t.format).map(|f| match f {
+        "trackType": fmt.map(|f| match f {
             auris_core::AudioFormat::Dsd { .. } => "dsd",
             _ => "pcm",
         }).unwrap_or(""),
-        "samplerate": cur.and_then(|t| t.format).map(|f| match f {
+        "samplerate": fmt.map(|f| match f {
             auris_core::AudioFormat::Pcm { sample_rate, .. } => sample_rate,
             auris_core::AudioFormat::Dsd { sample_rate, .. } => sample_rate,
         }).map(|r| r.to_string()).unwrap_or_default(),
-        "bitdepth": cur.and_then(|t| t.format).map(|f| match f {
+        "bitdepth": fmt.map(|f| match f {
             auris_core::AudioFormat::Pcm { bits, .. } => bits.to_string(),
             auris_core::AudioFormat::Dsd { .. } => "dsd".to_string(),
         }).unwrap_or_default(),
-        "channels": cur.and_then(|t| t.format).map(|f| match f {
+        "channels": fmt.map(|f| match f {
             auris_core::AudioFormat::Pcm { channels, .. } => channels,
             auris_core::AudioFormat::Dsd { channels, .. } => channels,
         }),

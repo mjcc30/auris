@@ -143,6 +143,23 @@ fn track_from_uri(uri: &str, meta: &TrackMeta, duration: Option<f64>) -> Track {
     t
 }
 
+/// Convertit une spec de sortie en [`auris_core::AudioFormat`] (pour les flux
+/// sans métadonnées, ex. capture line-in #75).
+fn spec_format(spec: crate::decoder::OutputSpec) -> auris_core::AudioFormat {
+    if spec.is_dsd_dop {
+        auris_core::AudioFormat::Dsd {
+            sample_rate: spec.rate,
+            channels: spec.channels,
+        }
+    } else {
+        auris_core::AudioFormat::Pcm {
+            sample_rate: spec.rate,
+            bits: spec.bits,
+            channels: spec.channels,
+        }
+    }
+}
+
 /// Lance le worker de decode d'une piste. Les chunks poussés par le worker
 /// sont tagués avec la génération *courante* (lue à chaque push) : un seek
 /// qui bump la génération purge ainsi les vieux chunks encore dans l'anneau.
@@ -922,7 +939,9 @@ impl Engine {
                     st.stream_title = None;
                     st.position_secs = 0.0;
                     st.status = PlayStatus::Playing;
-                    st.current_format = meta.format;
+                    // flux sans tags (line-in #75, flux brut) : la spec du
+                    // décodeur fait foi pour le format réellement joué
+                    st.current_format = meta.format.or_else(|| Some(spec_format(spec)));
                     // Sans peripherique local (« Jouer ici » seul), on garde le
                     // nom de device choisi plutot que « Navigateur ».
                     st.audio_device = if out.has_device() {
@@ -1121,7 +1140,9 @@ impl Engine {
                     st.stream_title = None;
                     st.position_secs = 0.0;
                     st.status = PlayStatus::Playing;
-                    st.current_format = meta.format;
+                    // flux sans tags (line-in #75, flux brut) : la spec du
+                    // décodeur fait foi pour le format réellement joué
+                    st.current_format = meta.format.or_else(|| Some(spec_format(spec)));
                 }
                 self.publish();
             }

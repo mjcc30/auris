@@ -63,6 +63,9 @@ impl SourcesManager {
             SourceKind::Http { .. } => Ok(Arc::new(HttpSource::new(src.clone())?)),
             SourceKind::Upnp { .. } => Ok(Arc::new(crate::upnp::UpnpSource::new(src.clone())?)), // ContentDirectory + lecture http des <res>
             SourceKind::Radio { .. } => Ok(Arc::new(RadioSource::new(src.clone())?)),
+            SourceKind::LineIn { .. } => {
+                Ok(Arc::new(crate::linein::LineInSource::new(src.clone())?))
+            } // capture entrée audio live (#75)
             SourceKind::Qobuz { .. } => Ok(Arc::new(crate::qobuz::QobuzSource::new(src.clone())?)),
             SourceKind::Tidal { .. } => Ok(Arc::new(crate::tidal::TidalSource::new(src.clone())?)),
         }

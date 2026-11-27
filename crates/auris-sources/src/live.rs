@@ -131,9 +131,82 @@ struct Inner {
 const CAP: usize = 48 * 1024 * 1024;
 const KEEP: usize = 32 * 1024 * 1024;
 
+/// Anneau partagé producteur → consommateur, réutilisé par les flux live HTTP
+/// (webradios) et par la capture line-in (#75). Le producteur pousse des octets,
+/// le lecteur lit via [`LiveStream`].
+#[derive(Clone)]
+pub struct LiveRing {
+    inner: std::sync::Arc<Inner>,
+}
+
+impl LiveRing {
+    pub fn new() -> Self {
+        LiveRing {
+            inner: std::sync::Arc::new(Inner {
+                shared: Mutex::new(Shared {
+                    data: Vec::new(),
+                    base: 0,
+                    eof: false,
+                    err: None,
+                }),
+                cond: Condvar::new(),
+                closed: AtomicBool::new(false),
+            }),
+        }
+    }
+
+    /// Ajoute des octets audio en fin de tampon (bloque trimmed si besoin).
+    pub fn push(&self, data: &[u8]) {
+        let mut sh = self.inner.shared.lock().unwrap();
+        sh.data.extend_from_slice(data);
+        if sh.data.len() > CAP {
+            let drop_n = sh.data.len() - KEEP;
+            sh.data.drain(..drop_n);
+            sh.base += drop_n as u64;
+        }
+        drop(sh);
+        self.inner.cond.notify_all();
+    }
+
+    /// Signale la fin du flux (avec erreur éventuelle) et réveille le lecteur.
+    pub fn finish(&self, err: Option<String>) {
+        {
+            let mut sh = self.inner.shared.lock().unwrap();
+            sh.err = err;
+            sh.eof = true;
+        }
+        self.inner.cond.notify_all();
+    }
+
+    /// Le lecteur a été abandonné : le producteur peut s'arrêter.
+    pub fn is_closed(&self) -> bool {
+        self.inner.closed.load(Ordering::SeqCst)
+    }
+
+    pub fn close(&self) {
+        self.inner.closed.store(true, Ordering::SeqCst);
+        self.inner.cond.notify_all();
+    }
+
+    /// Lecteur (Read + Seek) sur cet anneau, tagué `tag` pour les messages d'erreur.
+    pub fn stream(&self, tag: &str) -> LiveStream {
+        LiveStream {
+            ring: self.clone(),
+            url: tag.to_string(),
+            pos: 0,
+        }
+    }
+}
+
+impl Default for LiveRing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Flux live seekable dans la fenêtre retenue (Read + Seek + Send + Sync).
 pub struct LiveStream {
-    inner: std::sync::Arc<Inner>,
+    ring: LiveRing,
     url: String,
     pos: u64,
 }
@@ -149,7 +222,7 @@ impl Read for LiveStream {
         if out.is_empty() {
             return Ok(0);
         }
-        let mut sh = self.inner.shared.lock().unwrap();
+        let mut sh = self.ring.inner.shared.lock().unwrap();
         loop {
             let avail_start = sh.base;
             let avail_end = sh.base + sh.data.len() as u64;
@@ -175,14 +248,14 @@ impl Read for LiveStream {
                 }
                 return Ok(0);
             }
-            sh = self.inner.cond.wait(sh).unwrap();
+            sh = self.ring.inner.cond.wait(sh).unwrap();
         }
     }
 }
 
 impl Seek for LiveStream {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        let sh = self.inner.shared.lock().unwrap();
+        let sh = self.ring.inner.shared.lock().unwrap();
         let end = sh.base + sh.data.len() as u64;
         let target = match pos {
             SeekFrom::Start(p) => p as i128,
@@ -199,7 +272,7 @@ impl Seek for LiveStream {
             ));
         }
         let target = target as u64;
-        let sh = self.inner.shared.lock().unwrap();
+        let sh = self.ring.inner.shared.lock().unwrap();
         if target < sh.base {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -213,8 +286,7 @@ impl Seek for LiveStream {
 
 impl Drop for LiveStream {
     fn drop(&mut self) {
-        self.inner.closed.store(true, Ordering::SeqCst);
-        self.inner.cond.notify_all();
+        self.ring.close();
         set_radio_title(&self.url, None);
     }
 }
@@ -249,17 +321,8 @@ pub fn open_live(url: &str) -> Result<LiveStream> {
         .get("icy-metaint")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<usize>().ok());
-    let inner = std::sync::Arc::new(Inner {
-        shared: Mutex::new(Shared {
-            data: Vec::new(),
-            base: 0,
-            eof: false,
-            err: None,
-        }),
-        cond: Condvar::new(),
-        closed: AtomicBool::new(false),
-    });
-    let inner2 = inner.clone();
+    let ring = LiveRing::new();
+    let inner2 = ring.clone();
     let url2 = url.to_string();
     std::thread::Builder::new()
         .name(format!("auris-live-{}", &url2[..url2.len().min(48)]))
@@ -268,40 +331,24 @@ pub fn open_live(url: &str) -> Result<LiveStream> {
             let mut resp = resp;
             let mut raw = [0u8; 16 * 1024];
             loop {
-                if inner2.closed.load(Ordering::SeqCst) {
+                if inner2.is_closed() {
                     break;
                 }
                 match resp.read(&mut raw) {
                     Ok(0) => {
-                        let mut sh = inner2.shared.lock().unwrap();
-                        sh.eof = true;
-                        drop(sh);
-                        inner2.cond.notify_all();
+                        inner2.finish(None);
                         break;
                     }
                     Ok(n) => {
                         let mut audio = Vec::with_capacity(n);
                         let title = parser.push(&raw[..n], &mut audio);
-                        {
-                            let mut sh = inner2.shared.lock().unwrap();
-                            sh.data.extend_from_slice(&audio);
-                            if let Some(t) = &title {
-                                set_radio_title(&url2, Some(t.clone()));
-                            }
-                            if sh.data.len() > CAP {
-                                let drop_n = sh.data.len() - KEEP;
-                                sh.data.drain(..drop_n);
-                                sh.base += drop_n as u64;
-                            }
+                        if let Some(t) = &title {
+                            set_radio_title(&url2, Some(t.clone()));
                         }
-                        inner2.cond.notify_all();
+                        inner2.push(&audio);
                     }
                     Err(e) => {
-                        let mut sh = inner2.shared.lock().unwrap();
-                        sh.err = Some(e.to_string());
-                        sh.eof = true;
-                        drop(sh);
-                        inner2.cond.notify_all();
+                        inner2.finish(Some(e.to_string()));
                         break;
                     }
                 }
@@ -309,11 +356,7 @@ pub fn open_live(url: &str) -> Result<LiveStream> {
             set_radio_title(&url2, None);
         })
         .map_err(|e| AurisError::other(format!("spawn thread live: {e}")))?;
-    Ok(LiveStream {
-        inner,
-        url: url.to_string(),
-        pos: 0,
-    })
+    Ok(ring.stream(url))
 }
 
 /// Variante de [`open_live`] qui s'exécute dans un thread dédié : le client

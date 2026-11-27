@@ -250,6 +250,7 @@ dependencies = [
  "async-trait",
  "auris-core",
  "bytes",
+ "cpal",
  "futures-util",
  "md-5 0.10.6",
  "reqwest 0.12.28",

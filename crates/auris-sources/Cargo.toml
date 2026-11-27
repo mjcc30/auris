@@ -15,6 +15,7 @@ thiserror.workspace = true
 async-trait = "0.1"
 smb2.workspace = true
 reqwest = { workspace = true, features = ["blocking", "json"] }
+cpal.workspace = true
 md-5.workspace = true
 futures-util.workspace = true
 bytes = "1"

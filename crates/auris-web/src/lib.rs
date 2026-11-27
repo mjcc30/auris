@@ -481,6 +481,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/playlists/{id}/add", post(post_playlist_add))
         // audio
         .route("/api/audio/devices", get(get_devices))
+        // entrées audio (line-in #75) : périphériques de capture disponibles
+        .route("/api/audio/input-devices", get(get_input_devices))
         .route("/api/audio/device", post(post_device))
         .route("/api/audio/dop-status", get(get_dop_status))
         .route("/api/audio/exclusive", post(post_exclusive))
@@ -2610,6 +2612,14 @@ async fn post_playlist_add(
 
 async fn get_devices(State(s): State<AppState>) -> Json<Vec<auris_core::AudioDeviceInfo>> {
     Json(s.list_devices())
+}
+
+/// Entrées audio (capture) disponibles — source line-in #75.
+async fn get_input_devices() -> Json<serde_json::Value> {
+    Json(serde_json::json!(auris_sources::linein::input_devices()
+        .into_iter()
+        .map(|(name, is_default)| serde_json::json!({ "name": name, "is_default": is_default }))
+        .collect::<Vec<_>>()))
 }
 async fn post_device(
     State(s): State<AppState>,

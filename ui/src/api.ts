@@ -413,10 +413,16 @@ export interface MusicBrainzInfo {
 export function makeSource(
   id: string,
   name: string,
-  kind: "local" | "usb" | "smb" | "http" | "radio" | "upnp" | "qobuz" | "tidal",
+  kind: "local" | "usb" | "smb" | "http" | "radio" | "upnp" | "qobuz" | "tidal" | "linein",
   fields: Record<string, unknown>,
 ): Source {
   return { id, name, enabled: true, kind, ...fields };
+}
+
+/** Périphérique d'entrée audio (capture) — source line-in #75. */
+export interface InputDevice {
+  name: string;
+  is_default: boolean;
 }
 
 export interface AudioDevice {
@@ -809,6 +815,7 @@ export const api = {
   devices: () => req<AudioDevice[]>("/api/audio/devices"),
   selectDevice: (name: string | null) => req<PlayerState>("/api/audio/device", post({ name })),
   dopStatus: () => req<DopStatus>("/api/audio/dop-status"),
+  inputDevices: () => req<InputDevice[]>("/api/audio/input-devices"),
   dopSetup: (rate: number, device?: string | null) =>
     req<DopSetupResp>("/api/audio/dop-setup", post({ rate, device: device ?? null })),
   restartAudio: () => req<{ ok: boolean; message: string }>("/api/audio/restart-audio", post({})),

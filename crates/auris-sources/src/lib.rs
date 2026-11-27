@@ -2,6 +2,7 @@
 
 pub mod http;
 pub mod http_raw;
+pub mod linein;
 pub mod live;
 pub mod local;
 pub mod manager;
@@ -24,8 +25,16 @@ use std::io::{Read, Seek};
 use std::path::PathBuf;
 
 /// Flux binaire seekable (implante Read + Seek + Send + Sync).
-pub trait SeekRead: Read + Seek + Send + Sync {}
-impl<T: Read + Seek + Send + Sync> SeekRead for T {}
+pub trait SeekRead: Read + Seek + Send + Sync {
+    /// Downcast pour lire une info spécifique au flux (ex. spec PCM brut
+    /// d'une capture line-in, #75).
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+impl<T: Read + Seek + Send + Sync + 'static> SeekRead for T {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
 
 /// Cree un URI de source: `src://<source_id>/<chemin relatif>`.
 pub fn make_uri(source_id: &str, rel_path: &str) -> String {

@@ -134,6 +134,74 @@ impl<R: SeekRead> MediaSource for MsWrapper<R> {
     }
 }
 
+/// Decodeur PCM brut f32le interleaved, sans conteneur (capture line-in #75).
+/// Flux infini : `duration_secs` = None → le moteur passe en mode « live ».
+pub struct RawF32Decoder {
+    reader: Box<dyn SeekRead>,
+    spec: OutputSpec,
+    meta: TrackMeta,
+}
+
+impl RawF32Decoder {
+    pub fn new(reader: Box<dyn SeekRead>, rate: u32, channels: u8, meta: TrackMeta) -> Self {
+        RawF32Decoder {
+            reader,
+            spec: OutputSpec {
+                rate,
+                channels,
+                bits: 32,
+                is_dsd_dop: false,
+            },
+            meta,
+        }
+    }
+}
+
+impl Decoder for RawF32Decoder {
+    fn spec(&self) -> OutputSpec {
+        self.spec
+    }
+
+    fn duration_secs(&self) -> Option<f64> {
+        None // flux live
+    }
+
+    fn meta(&self) -> &TrackMeta {
+        &self.meta
+    }
+
+    fn next_chunk(&mut self, max_frames: usize) -> Result<Option<ChunkData>> {
+        let channels = self.spec.channels as usize;
+        let need = max_frames.max(1) * channels.max(1) * 4;
+        let mut buf = vec![0u8; need];
+        let mut filled = 0;
+        while filled < need {
+            match self.reader.read(&mut buf[filled..]) {
+                Ok(0) => break,
+                Ok(n) => filled += n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(AurisError::other(format!("lecture flux f32le: {e}"))),
+            }
+        }
+        if filled == 0 {
+            return Ok(None);
+        }
+        let n = filled / 4;
+        let mut v = Vec::with_capacity(n);
+        for i in 0..n {
+            v.push(f32::from_le_bytes(
+                buf[i * 4..i * 4 + 4].try_into().unwrap(),
+            ));
+        }
+        Ok(Some(ChunkData::F32(v)))
+    }
+
+    fn seek(&mut self, _secs: f64) -> Result<()> {
+        // flux live : le seek est sans effet (l'UI le désactive en mode live)
+        Ok(())
+    }
+}
+
 /// Decodeur PCM symphonia.
 pub struct PcmDecoder {
     format: Box<dyn FormatReader>,
@@ -427,6 +495,16 @@ pub fn open_decoder_with_path(
     let ext = ext.to_ascii_lowercase();
     if ext == "dsf" || ext == "dff" {
         return Ok(Box::new(DsdDecoder::new(reader, meta)?));
+    }
+    if ext == "f32le" {
+        // PCM brut f32le interleaved (capture line-in #75) : la spec vient du
+        // flux lui-même quand il la porte, sinon 44,1 kHz stéréo.
+        let spec = reader
+            .as_any()
+            .downcast_ref::<auris_sources::linein::LineInStream>()
+            .map(|s| s.spec())
+            .unwrap_or((44100, 2));
+        return Ok(Box::new(RawF32Decoder::new(reader, spec.0, spec.1, meta)));
     }
     let shared = match local_path {
         Some(p) => crate::ffmpeg::SharedReader::with_local_path(reader, p),
