@@ -33,6 +33,7 @@ use auris_player::{
 use auris_sources::{discover_removable, SourcesManager};
 use auris_updater::Updater;
 
+mod camilla;
 mod dlna_renderer;
 mod lastfm;
 pub mod mpd;
@@ -590,6 +591,8 @@ pub fn router(state: AppState) -> Router {
         .merge(subsonic::router())
         // chaîne du signal façon Roon « Signal Path » — #77
         .merge(signal_path::router())
+        // pont CamillaDSP (statut + profil) — #82
+        .merge(camilla::router())
         .route("/", get(index_html))
         .route("/{*path}", get(static_asset))
         .layer(CorsLayer::permissive())
@@ -2882,12 +2885,21 @@ async fn put_settings(
         ))));
     }
     new.system.device_name = new.system.device_name.trim().to_string();
+    // le pont CamillaDSP (#82) ne change que si la section a changé (sinon on
+    // resonderait l'instance à chaque sauvegarde de réglages)
+    let camilla_changed = {
+        let old = s.settings.read().unwrap();
+        old.camilla != new.camilla
+    };
     {
         let mut w = s.settings.write().unwrap();
         *w = new.clone();
     }
     // applique à chaud au moteur (volume max, courbe, mode bit-perfect)
     s.engine.apply_playback(&new.playback);
+    if camilla_changed {
+        s.engine.apply_camilla(&new.camilla);
+    }
     // le cache MusicBrainz dépend des réglages (api_url) : on l'invalide (#26)
     lastfm::mb_cache_reset(&s);
     s.persist_settings();

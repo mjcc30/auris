@@ -304,9 +304,14 @@ pub(crate) enum Stash {
 }
 
 pub struct AudioOutput {
-    /// `None` = sortie « navigateur uniquement » (aucun périphérique cpal).
+    /// `None` = sortie « navigateur uniquement » (aucun périphérique cpal),
+    /// ou pipe CamillaDSP (`pipe` renseigné).
     device: Option<Device>,
     device_name: String,
+    /// Pipe nommé (FIFO) cible quand le flux est délégué à CamillaDSP en mode
+    /// « pipe » (#82) : le PCM f32le brut y est écrit, lu par la capture
+    /// `File`/`RawFile` de CamillaDSP.
+    pipe: Option<std::path::PathBuf>,
     stream: Option<Stream>,
     drain_stop: Option<Arc<AtomicBool>>,
     drain: Option<std::thread::JoinHandle<()>>,
@@ -317,7 +322,7 @@ pub struct AudioOutput {
     exclusive: bool,
     /// Flux WASAPI exclusif actif (si ouvert avec succès).
     exclusive_stream: Option<crate::wasapi_exclusive::ExclusiveStream>,
-    /// Backend réellement utilisé pour le dernier flux : "cpal", "exclusif", "navigateur".
+    /// Backend réellement utilisé pour le dernier flux : "cpal", "exclusif", "navigateur", "pipe".
     backend: &'static str,
 }
 
@@ -421,6 +426,7 @@ impl AudioOutput {
         let name = dev_name(&device).unwrap_or_else(|| "default".into());
         Ok(AudioOutput {
             device: Some(device),
+            pipe: None,
             device_name: name,
             stream: None,
             drain_stop: None,
@@ -440,6 +446,7 @@ impl AudioOutput {
     pub fn browser_only(name: &str) -> Self {
         AudioOutput {
             device: None,
+            pipe: None,
             device_name: name.to_string(),
             stream: None,
             drain_stop: None,
@@ -449,6 +456,25 @@ impl AudioOutput {
             exclusive: false,
             exclusive_stream: None,
             backend: "navigateur",
+        }
+    }
+
+    /// Sortie « pipe » vers CamillaDSP (#82, mode pipe) : aucun périphérique
+    /// cpal, le PCM f32le brut est écrit dans le FIFO `path` (lu par la capture
+    /// `File`/`RawFile` de CamillaDSP, même cadence/canaux que le flux).
+    pub fn pipe(path: &str) -> Self {
+        AudioOutput {
+            device: None,
+            pipe: Some(std::path::PathBuf::from(path)),
+            device_name: format!("pipe:{path}"),
+            stream: None,
+            drain_stop: None,
+            drain: None,
+            paused: Arc::new(AtomicBool::new(false)),
+            dop_carrier: None,
+            exclusive: false,
+            exclusive_stream: None,
+            backend: "pipe",
         }
     }
 
@@ -507,6 +533,12 @@ impl AudioOutput {
                             // (AUDCLNT_E_DEVICE_IN_USE). Drop -> Stop + join du worker.
         self.exclusive_stream = None;
         self.stop_drain();
+        if let Some(pipe) = self.pipe.clone() {
+            // Délégation CamillaDSP en mode pipe (#82) : PCM f32le brut -> FIFO.
+            return self.build_pipe_stream(
+                spec, cons, volume, muted, frames_out, gen, max_volume, curve, vol_mode, eq, &pipe,
+            );
+        }
         if self.device.is_none() {
             // Pas de peripherique cpal: flux « Jouer ici » vers le navigateur.
             return self.build_browser_stream(
@@ -808,6 +840,128 @@ impl AudioOutput {
             .map_err(|e| AurisError::other(format!("spawn drain navigateur: {e}")))?;
         self.drain_stop = Some(stop);
         self.drain = Some(handle);
+        Ok(())
+    }
+
+    /// Flux « pipe » vers CamillaDSP (#82) : un thread drain l'anneau, applique
+    /// EQ + gain, et écrit le PCM f32le brut dans le FIFO. L'écriture bloque
+    /// quand le FIFO est plein — c'est CamillaDSP (lecteur) qui donne la
+    /// cadence. Les trames DoP ne sont pas écrivables dans un pipe PCM brut :
+    /// on écrit du silence de même durée pour garder l'horloge.
+    #[allow(clippy::too_many_arguments)]
+    fn build_pipe_stream(
+        &mut self,
+        spec: &OutputSpec,
+        mut cons: Cons,
+        volume: Arc<AtomicU8>,
+        muted: Arc<AtomicBool>,
+        frames_out: Arc<AtomicU64>,
+        gen: Arc<AtomicU64>,
+        max_volume: Arc<AtomicU8>,
+        curve: Arc<AtomicU8>,
+        vol_mode: Arc<AtomicU8>,
+        eq: Arc<std::sync::RwLock<EqConfig>>,
+        pipe: &std::path::Path,
+    ) -> Result<()> {
+        use std::io::Write;
+        let src_channels = spec.channels as usize;
+        let rate = spec.rate.max(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop2 = stop.clone();
+        let paused = self.paused.clone();
+        let pipe = pipe.to_path_buf();
+        let handle = std::thread::Builder::new()
+            .name("auris-pipe".into())
+            .spawn(move || {
+                // Ouverture en écriture : bloque jusqu'à ce que CamillaDSP ouvre
+                // le FIFO en lecture (ou échoue si le chemin n'est pas un FIFO).
+                let mut file = match std::fs::OpenOptions::new().write(true).open(&pipe) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        tracing::error!(
+                            "pipe CamillaDSP {}: ouverture impossible: {e}",
+                            pipe.display()
+                        );
+                        return;
+                    }
+                };
+                tracing::info!("pipe CamillaDSP {} ouvert (PCM f32le {} Hz)", pipe.display(), rate);
+                let mut eq_proc = EqProcessor::new();
+                let mut pcm: Vec<f32> = Vec::new();
+                let mut bytes: Vec<u8> = Vec::new();
+                let mut dop_warned = false;
+                loop {
+                    if stop2.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if paused.load(Ordering::Relaxed) {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        continue;
+                    }
+                    match cons.try_pop() {
+                        Some(chunk) if chunk.gen == gen.load(Ordering::Relaxed) => {
+                            let frames = (match &chunk.data {
+                                ChunkData::F32(v) => v.len(),
+                                ChunkData::I24Dop(v) => v.len(),
+                            } / src_channels.max(1)) as u64;
+                            frames_out.fetch_add(frames, Ordering::Relaxed);
+                            match chunk.data {
+                                ChunkData::F32(v) => {
+                                    let eq_cfg = eq.read().unwrap();
+                                    let gain = compute_gain(
+                                        volume.load(Ordering::Relaxed),
+                                        max_volume.load(Ordering::Relaxed),
+                                        curve.load(Ordering::Relaxed),
+                                        vol_mode.load(Ordering::Relaxed),
+                                        muted.load(Ordering::Relaxed),
+                                    );
+                                    pcm.clear();
+                                    pcm.reserve(v.len());
+                                    for f in 0..v.len() / src_channels.max(1) {
+                                        for c in 0..src_channels {
+                                            let s = eq_proc.process(
+                                                &eq_cfg,
+                                                rate,
+                                                src_channels,
+                                                c,
+                                                v[f * src_channels + c],
+                                            );
+                                            pcm.push(s * gain);
+                                        }
+                                    }
+                                    bytes.clear();
+                                    bytes.reserve(pcm.len() * 4);
+                                    for s in &pcm {
+                                        bytes.extend_from_slice(&s.to_le_bytes());
+                                    }
+                                    if file.write_all(&bytes).is_err() {
+                                        break; // lecteur fermé
+                                    }
+                                }
+                                ChunkData::I24Dop(_) => {
+                                    if !dop_warned {
+                                        tracing::warn!(
+                                            "pipe CamillaDSP: flux DoP non écrivable en PCM brut — silence de même durée"
+                                        );
+                                        dop_warned = true;
+                                    }
+                                    bytes.clear();
+                                    bytes.resize(frames as usize * src_channels.max(1) * 4, 0u8);
+                                    if file.write_all(&bytes).is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Some(_) => continue, // génération périmée (seek)
+                        None => std::thread::sleep(std::time::Duration::from_millis(5)),
+                    }
+                }
+            })
+            .map_err(|e| AurisError::other(format!("spawn drain pipe: {e}")))?;
+        self.drain_stop = Some(stop);
+        self.drain = Some(handle);
+        self.backend = "pipe";
         Ok(())
     }
 

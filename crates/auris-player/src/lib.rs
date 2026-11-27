@@ -1,6 +1,7 @@
 //! Moteur de lecture Auris: decodage PCM (symphonia) + DSD (DSF/DFF -> DoP),
 //! sortie cross-plateforme via cpal (ALSA / CoreAudio / WASAPI).
 
+pub mod camilla;
 pub mod decoder;
 pub mod dsd;
 pub mod engine;
@@ -12,6 +13,12 @@ pub mod output;
 pub mod wasapi_dop;
 pub mod wasapi_exclusive;
 
+pub use camilla::{
+    probe as camilla_probe, probe_blocking as camilla_probe_blocking,
+    resolve_output as camilla_resolve_output, select_profile as camilla_select_profile,
+    select_profile_blocking as camilla_select_profile_blocking,
+    OutputChoice as CamillaOutputChoice,
+};
 pub use decoder::{
     open_decoder, open_decoder_with_path, probe_meta, probe_meta_with_path, Chunk, ChunkData,
     Decoder, OutputSpec, TrackMeta,

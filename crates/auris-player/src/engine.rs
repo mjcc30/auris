@@ -7,13 +7,14 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use auris_core::{
-    BrowserFrame, OutputMode, PlayStatus, PlaybackSettings, PlayerState, RepeatMode, Track,
-    VolumeCurve, VolumeMode, WsEvent,
+    BrowserFrame, CamillaSettings, CamillaStatus, OutputMode, PlayStatus, PlaybackSettings,
+    PlayerState, RepeatMode, Track, VolumeCurve, VolumeMode, WsEvent,
 };
 use auris_sources::SourcesManager;
 use ringbuf::traits::{Observer, Producer};
 use tokio::sync::broadcast;
 
+use crate::camilla::{self, OutputChoice};
 use crate::decoder::{open_decoder_with_path, Chunk, Decoder, OutputSpec, TrackMeta};
 use crate::eq::{EqBandParams, EqConfig};
 use crate::mixer::{spawn_mixer, MixerCmd, MixerHandle};
@@ -46,6 +47,10 @@ pub enum Command {
     PlayQueueIndex(usize),
     SelectDevice(Option<String>),
     ApplyPlayback(Box<PlaybackSettings>),
+    /// Applique les réglages du pont CamillaDSP (#82) : sonde l'instance,
+    /// sélectionne le profil, reroute la sortie (loopback/pipe) ou retombe
+    /// sur le DSP interne.
+    ApplyCamilla(Box<CamillaSettings>),
     SetOutputMode(OutputMode),
     SetExclusive(bool),
 }
@@ -347,6 +352,17 @@ struct Engine {
     gapless: Arc<AtomicBool>,
     /// Lookup de gain loudness par uri (normalisation R128, #37).
     loudness_lookup: Arc<RwLock<Option<LoudnessLookup>>>,
+    /// Réglages du pont CamillaDSP (#82), appliqués à la dernière commande.
+    camilla: CamillaSettings,
+    /// Dernier statut sondé de CamillaDSP (partagé avec la couche web).
+    camilla_status: Arc<RwLock<CamillaStatus>>,
+    /// true = traitement délégué à CamillaDSP : EQ interne et gain loudness
+    /// court-circuités (CamillaDSP fait le DSP), partagé avec la couche web.
+    dsp_external: Arc<AtomicBool>,
+    /// Périphérique actif avant la délégation CamillaDSP (repli).
+    home_device: Option<String>,
+    /// Derniers réglages de lecture reçus (pour réappliquer l'EQ au repli).
+    playback: PlaybackSettings,
     rng: XorShift,
 }
 
@@ -392,6 +408,12 @@ impl Engine {
             .and_then(|f| f(&uri))
             .unwrap_or(1.0);
         let (msg_rx, cmd_tx, join) = spawn_worker(self.sources.clone(), uri, self.gen.clone());
+        // DSP délégué à CamillaDSP (#82) : aucun gain loudness interne (CamillaDSP gère le niveau)
+        let gain = if self.dsp_external.load(Ordering::SeqCst) {
+            1.0
+        } else {
+            gain
+        };
         let _ = cmd_tx.send(WorkerCmd::SetGain(gain));
         self.worker = Some(WorkerHandle {
             msg_rx,
@@ -627,6 +649,7 @@ impl Engine {
                 self.publish();
             }
             Command::ApplyPlayback(p) => {
+                self.playback = p.as_ref().clone();
                 self.max_volume.store(p.max_volume.max(1), Ordering::SeqCst);
                 self.curve.store(
                     if p.volume_curve == VolumeCurve::Linear {
@@ -660,10 +683,12 @@ impl Engine {
                     Ordering::SeqCst,
                 );
                 self.gapless.store(p.gapless, Ordering::SeqCst);
-                // EQ paramétrique : maj à chaud (bump de version -> chaîne reconstruite)
+                // EQ paramétrique : maj à chaud (bump de version -> chaîne reconstruite).
+                // Court-circuité si le DSP est délégué à CamillaDSP (#82).
+                let dsp_ext = self.dsp_external.load(Ordering::SeqCst);
                 {
                     let mut eq = self.eq.write().unwrap();
-                    eq.enabled = p.eq.enabled;
+                    eq.enabled = p.eq.enabled && !dsp_ext;
                     eq.bands =
                         p.eq.bands
                             .iter()
@@ -674,6 +699,10 @@ impl Engine {
                             .collect();
                     eq.version += 1;
                 }
+                self.publish();
+            }
+            Command::ApplyCamilla(c) => {
+                self.apply_camilla(*c);
                 self.publish();
             }
             Command::SetMuted(m) => {
@@ -714,35 +743,12 @@ impl Engine {
             }
             Command::SelectDevice(name) => {
                 match AudioOutput::new(name.as_deref()) {
-                    Ok(mut out) => {
-                        out.set_exclusive(self.exclusive.load(Ordering::SeqCst));
-                        let pos = self.state.read().unwrap().position_secs;
-                        let uri = self
-                            .state
-                            .read()
-                            .unwrap()
-                            .current
-                            .as_ref()
-                            .map(|t| t.uri.clone());
-                        self.device_name = name.clone();
-                        {
-                            let mut st = self.state.write().unwrap();
-                            st.audio_device = name.clone();
-                            // Choisir un DAC = jouer dessus en local, meme si
-                            // le mode « Jouer ici » etait actif.
-                            st.output_mode = OutputMode::Local;
-                        }
-                        self.out_mode.store(0, Ordering::SeqCst);
-                        if let Some(uri) = uri {
-                            if self.state.read().unwrap().status != PlayStatus::Stopped {
-                                self.output = Some(out);
-                                self.start_track(uri, Some(pos));
-                            } else {
-                                self.output = Some(out);
-                            }
-                        } else {
-                            self.output = Some(out);
-                        }
+                    Ok(out) => {
+                        // choix manuel d'un DAC : on sort de la délégation
+                        // CamillaDSP (#82) et on mémorise ce DAC comme « chez soi »
+                        self.dsp_external.store(false, Ordering::SeqCst);
+                        self.home_device = name.clone();
+                        self.adopt_output(out, name);
                     }
                     Err(e) => self.publish_msg("error", &format!("peripherique audio: {e}")),
                 }
@@ -768,6 +774,175 @@ impl Engine {
                 self.publish();
             }
         }
+    }
+
+    /// Adopte une nouvelle sortie audio : mémorise le périphérique, bascule en
+    /// mode local, et rejoue la piste en cours à sa position (changement de DAC
+    /// à chaud, comme SelectDevice).
+    fn adopt_output(&mut self, mut out: AudioOutput, requested: Option<String>) {
+        out.set_exclusive(self.exclusive.load(Ordering::SeqCst));
+        let pos = self.state.read().unwrap().position_secs;
+        let uri = self
+            .state
+            .read()
+            .unwrap()
+            .current
+            .as_ref()
+            .map(|t| t.uri.clone());
+        self.device_name = requested.or_else(|| Some(out.name().to_string()));
+        {
+            let mut st = self.state.write().unwrap();
+            st.audio_device = self.device_name.clone();
+            // Choisir un DAC = jouer dessus en local, meme si
+            // le mode « Jouer ici » etait actif.
+            st.output_mode = OutputMode::Local;
+        }
+        self.out_mode.store(0, Ordering::SeqCst);
+        if let Some(uri) = uri {
+            if self.state.read().unwrap().status != PlayStatus::Stopped {
+                self.output = Some(out);
+                self.start_track(uri, Some(pos));
+            } else {
+                self.output = Some(out);
+            }
+        } else {
+            self.output = Some(out);
+        }
+    }
+
+    /// Applique les réglages du pont CamillaDSP (#82) : sonde l'instance en
+    /// websocket, active le profil demandé, puis délègue la sortie (loopback /
+    /// pipe) ou retombe sur le DSP interne avec un avertissement.
+    fn apply_camilla(&mut self, c: CamillaSettings) {
+        let was_delegated = self.dsp_external.load(Ordering::SeqCst);
+        let mut status = if c.enabled && c.mode != auris_core::CamillaMode::Websocket {
+            camilla::probe_blocking(c.ws_url.trim())
+        } else if c.enabled {
+            // mode websocket : sonde quand même pour le statut / le profil
+            camilla::probe_blocking(c.ws_url.trim())
+        } else {
+            CamillaStatus::default()
+        };
+        // Sélection du profil demandé quand l'instance est joignable.
+        if c.enabled && status.reachable {
+            if let Some(p) = c
+                .profile
+                .as_deref()
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+            {
+                match camilla::select_profile_blocking(c.ws_url.trim(), p) {
+                    Ok(()) => {
+                        self.publish_msg("info", &format!("CamillaDSP: profil « {p} » activé"));
+                        status.active_profile = Some(p.to_string());
+                    }
+                    Err(e) => self.publish_msg(
+                        "warning",
+                        &format!("CamillaDSP: profil « {p} » non appliqué: {e}"),
+                    ),
+                }
+            }
+        }
+        let reachable = status.reachable;
+        let choice = camilla::resolve_output(&c, reachable);
+        let mut delegated = false;
+        let mut note: Option<String> = None;
+        match &choice {
+            OutputChoice::Delegate { target } => {
+                if !was_delegated {
+                    self.home_device = self.device_name.clone();
+                }
+                let out = if c.mode == auris_core::CamillaMode::Pipe {
+                    Ok(AudioOutput::pipe(target))
+                } else {
+                    AudioOutput::new(Some(target))
+                };
+                match out {
+                    Ok(o) => {
+                        delegated = true;
+                        self.dsp_external.store(true, Ordering::SeqCst);
+                        self.adopt_output(o, Some(target.clone()));
+                        note = Some(format!("CamillaDSP: sortie déléguée vers « {target} »"));
+                    }
+                    Err(e) => {
+                        note = Some(format!(
+                            "CamillaDSP: périphérique de capture « {target} » indisponible ({e}) — repli DSP interne"
+                        ));
+                        self.fallback_internal(&mut status);
+                    }
+                }
+            }
+            OutputChoice::Internal => {
+                if c.enabled && !reachable && c.mode != auris_core::CamillaMode::Websocket {
+                    let why = status
+                        .error
+                        .clone()
+                        .unwrap_or_else(|| "instance injoignable".into());
+                    if c.fallback_internal {
+                        note = Some(format!(
+                            "CamillaDSP injoignable ({why}) — repli sur le DSP interne"
+                        ));
+                    } else {
+                        note = Some(format!(
+                            "CamillaDSP injoignable ({why}) et repli interne désactivé — lecture sur la sortie courante sans DSP externe"
+                        ));
+                    }
+                }
+                if was_delegated {
+                    // retour au DSP interne : on revient sur le périphérique « chez soi »
+                    self.dsp_external.store(false, Ordering::SeqCst);
+                    match AudioOutput::new(self.home_device.as_deref()) {
+                        Ok(o) => self.adopt_output(o, self.home_device.clone()),
+                        Err(e) => self.publish_msg(
+                            "warning",
+                            &format!("retour sortie « {:?} » impossible: {e}", self.home_device),
+                        ),
+                    }
+                }
+            }
+        }
+        if let Some(n) = &note {
+            let kind = if n.contains("indisponible") || n.contains("injoignable") {
+                "warning"
+            } else {
+                "info"
+            };
+            self.publish_msg(kind, n);
+        }
+        // réapplique l'EQ interne si on quitte la délégation
+        if was_delegated && !delegated {
+            let mut eq = self.eq.write().unwrap();
+            eq.enabled = self.playback.eq.enabled;
+            eq.bands = self
+                .playback
+                .eq
+                .bands
+                .iter()
+                .map(|b| EqBandParams {
+                    freq_hz: b.freq_hz,
+                    gain_db: b.gain_db,
+                })
+                .collect();
+            eq.version += 1;
+        }
+        self.camilla = c;
+        status.reachable = reachable;
+        *self.camilla_status.write().unwrap() = status;
+    }
+
+    /// Repli sur le DSP interne : DSP local réactivé, sortie « chez soi ».
+    fn fallback_internal(&mut self, status: &mut CamillaStatus) {
+        self.dsp_external.store(false, Ordering::SeqCst);
+        if let Ok(o) = AudioOutput::new(self.home_device.as_deref()) {
+            self.adopt_output(o, self.home_device.clone());
+        }
+        let mut eq = self.eq.write().unwrap();
+        eq.enabled = self.playback.eq.enabled;
+        eq.version += 1;
+        drop(eq);
+        status
+            .error
+            .get_or_insert_with(|| "repli DSP interne".into());
     }
 
     fn handle_worker_msg(&mut self, msg: WorkerMsg) {
@@ -1046,6 +1221,12 @@ impl Engine {
             .as_ref()
             .and_then(|f| f(&uri))
             .unwrap_or(1.0);
+        // DSP délégué à CamillaDSP (#82) : aucun gain loudness interne (CamillaDSP gère le niveau)
+        let gain = if self.dsp_external.load(Ordering::SeqCst) {
+            1.0
+        } else {
+            gain
+        };
         let _ = cmd_tx.send(WorkerCmd::SetGain(gain));
         self.pending_next = Some(PendingNext {
             worker: WorkerHandle {
@@ -1211,6 +1392,10 @@ pub struct PlayerEngine {
     pub browser_tx: broadcast::Sender<BrowserFrame>,
     browser_spec: Arc<RwLock<Option<(u32, u16)>>>,
     exclusive: Arc<AtomicBool>,
+    /// Dernier statut CamillaDSP sondé (#82) — exposé à la couche web.
+    camilla_status: Arc<RwLock<CamillaStatus>>,
+    /// true = DSP délégué à CamillaDSP (EQ/loudness internes court-circuités).
+    dsp_external: Arc<AtomicBool>,
 }
 
 impl PlayerEngine {
@@ -1242,6 +1427,9 @@ impl PlayerEngine {
         let crossfade_ms = Arc::new(AtomicU64::new(0));
         let gapless = Arc::new(AtomicBool::new(true));
         let loudness_lookup: Arc<RwLock<Option<LoudnessLookup>>> = Arc::new(RwLock::new(None));
+        let camilla_status: Arc<RwLock<CamillaStatus>> =
+            Arc::new(RwLock::new(CamillaStatus::default()));
+        let dsp_external = Arc::new(AtomicBool::new(false));
 
         // horloge de position: 2x / seconde
         {
@@ -1298,6 +1486,11 @@ impl PlayerEngine {
             crossfade_ms,
             gapless,
             loudness_lookup: loudness_lookup.clone(),
+            camilla: CamillaSettings::default(),
+            camilla_status: camilla_status.clone(),
+            dsp_external: dsp_external.clone(),
+            home_device: None,
+            playback: PlaybackSettings::default(),
             rng: XorShift(
                 0x9E3779B97F4A7C15
                     ^ std::time::SystemTime::now()
@@ -1316,6 +1509,8 @@ impl PlayerEngine {
             browser_spec,
             exclusive,
             loudness_lookup,
+            camilla_status,
+            dsp_external,
         })
     }
 
@@ -1379,9 +1574,23 @@ impl PlayerEngine {
     }
     /// Applique les réglages playback (volume max, courbe, mode bit-perfect) à chaud.
     pub fn apply_playback(&self, p: &PlaybackSettings) {
-        let _ = self
-            .cmd_tx
-            .send(Command::ApplyPlayback(Box::new(p.clone())));
+        self.send(Command::ApplyPlayback(Box::new(p.clone())));
+    }
+
+    /// Applique les réglages du pont CamillaDSP (#82) au moteur (sonde +
+    /// routage de la sortie, bloquant ~3 s max si l'instance ne répond pas).
+    pub fn apply_camilla(&self, c: &CamillaSettings) {
+        self.send(Command::ApplyCamilla(Box::new(c.clone())));
+    }
+
+    /// Dernier statut CamillaDSP sondé par le moteur (#82).
+    pub fn camilla_status(&self) -> CamillaStatus {
+        self.camilla_status.read().unwrap().clone()
+    }
+
+    /// true = le traitement DSP est délégué à CamillaDSP (#82).
+    pub fn dsp_external(&self) -> bool {
+        self.dsp_external.load(Ordering::SeqCst)
     }
 
     pub fn set_volume(&self, v: u8) {

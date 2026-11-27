@@ -118,6 +118,8 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         config.audio_exclusive,
     );
     engine.apply_playback(&config.settings.playback);
+    // Pont CamillaDSP (#82) : sonde l'instance et délègue la sortie si activé.
+    engine.apply_camilla(&config.settings.camilla);
     // Normalisation loudness R128 (#37) : gain statique par piste, lu dans le
     // cache de la bibliothèque à chaque démarrage de piste.
     {

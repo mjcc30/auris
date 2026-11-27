@@ -213,6 +213,8 @@ export interface SignalPath {
   loudness_gain_db: number | null;
   eq_enabled: boolean;
   eq_bands: { freq_hz: number; gain_db: number }[];
+  /** Étape DSP : « CamillaDSP (<profil>) » si délégué (#82), sinon « interne ». */
+  dsp: string;
   crossfade_secs: number;
   gapless: boolean;
 }
@@ -699,6 +701,42 @@ export interface MusicBrainzSettings {
   api_url: string | null;
 }
 
+/** Mode du pont CamillaDSP (#82) : loopback (périph. de capture), pipe (FIFO), websocket (contrôle seul). */
+export type CamillaMode = "loopback" | "pipe" | "websocket";
+
+export interface CamillaSettings {
+  enabled: boolean;
+  mode: CamillaMode;
+  /** URL du websocket CamillaDSP (défaut ws://127.0.0.1:1234). */
+  ws_url: string;
+  /** loopback : nom du périphérique de capture (ex. « camilladsp ») ; pipe : chemin du FIFO. */
+  capture_device: string;
+  /** Profil (config) à activer via SetConfigName (null = laisser le profil courant). */
+  profile: string | null;
+  /** Repli sur le DSP interne si CamillaDSP est injoignable. */
+  fallback_internal: boolean;
+}
+
+export interface CamillaStatus {
+  reachable: boolean;
+  version: string | null;
+  state: string | null;
+  active_profile: string | null;
+  profiles: string[];
+  error: string | null;
+}
+
+export interface CamillaStatusResponse {
+  settings: CamillaSettings;
+  /** Sonde live de l'instance (null si le pont est désactivé). */
+  live: CamillaStatus | null;
+  /** Dernier statut appliqué par le moteur. */
+  engine: CamillaStatus;
+  /** true = le flux est actuellement routé vers CamillaDSP. */
+  delegated: boolean;
+  device: string | null;
+}
+
 export interface Settings {
   playback: PlaybackSettings;
   appearance: AppearanceSettings;
@@ -708,6 +746,7 @@ export interface Settings {
   lastfm: LastfmSettings;
   musicbrainz: MusicBrainzSettings;
   spotify: SpotifySettings;
+  camilla: CamillaSettings;
 }
 
 export interface StorageInfo {
@@ -913,6 +952,9 @@ export const api = {
     req<PackEntry>(`/api/packs/locale/${encodeURIComponent(lang)}`, postText(json, "application/json; charset=utf-8")),
   deleteLocalePack: (lang: string) => req<null>(`/api/packs/locale/${encodeURIComponent(lang)}`, { ...del(), body: undefined }),
   alarms: () => req<AlarmsInfo>("/api/alarms"),
+  camillaStatus: () => req<CamillaStatusResponse>("/api/camilla/status"),
+  camillaProfile: (name: string) => req<CamillaStatusResponse>("/api/camilla/profile", post({ name })),
+  camillaRefresh: () => req<CamillaStatusResponse>("/api/camilla/refresh", post({})),
   updateSettings: (s: Settings) =>
     req<Settings>("/api/settings", {
       method: "PUT",

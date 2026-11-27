@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type InputDevice, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type PodcastEpisode, type PodcastFeed, type PodcastShow, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirSection, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CamillaSettings, type CamillaStatusResponse, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type InputDevice, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type PodcastEpisode, type PodcastFeed, type PodcastShow, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirSection, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -3094,6 +3094,9 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
       {show("Spotify Connect", "Écouter Spotify sur Auris depuis l'app Spotify (librespot)") && (
         <SpotifyCard settings={settings} updateSettings={updateSettings} say={say} />
       )}
+      {show("CamillaDSP", "Déléguer le traitement audio (convolution, correction de pièce) à une instance CamillaDSP") && (
+        <CamillaCard settings={settings} updateSettings={updateSettings} say={say} />
+      )}
     </div>
   );
 }
@@ -3189,6 +3192,100 @@ function SpotifyCard({ settings, updateSettings, say }: {
           <pre className="logs" style={{ maxWidth: 560, maxHeight: 180, margin: 0 }}>{st.log.slice(-30).join("\n")}</pre>
         </SetRow>
       )}
+    </section>
+  );
+}
+
+// ---------- Pont CamillaDSP (convolution / correction de pièce) — #82 ----------
+
+function CamillaCard({ settings, updateSettings, say }: {
+  settings: Settings;
+  updateSettings: (patch: (s: Settings) => Settings, ok?: string) => Promise<void>;
+  say: (m: string) => void;
+}) {
+  const ca = settings.camilla;
+  const [st, setSt] = useState<CamillaStatusResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => { api.camillaStatus().then(setSt).catch(() => {}); }, []);
+  useEffect(() => { load(); }, [load]);
+  const set = <K extends keyof CamillaSettings>(k: K, v: CamillaSettings[K]) =>
+    updateSettings((s) => ({ ...s, camilla: { ...s.camilla, [k]: v } }));
+
+  const live = st?.live ?? null;
+  const profiles = live?.profiles ?? [];
+  const currentProfile = ca.profile ?? live?.active_profile ?? "";
+  const statusPill = !ca.enabled
+    ? <span className="pill">Désactivé</span>
+    : !live
+      ? <span className="pill">…</span>
+      : live.reachable
+        ? <span className="pill ok">Joignable{live.version ? ` · v${live.version}` : ""}{live.state ? ` · ${live.state}` : ""}</span>
+        : <span className="pill warn">Injoignable{live.error ? ` — ${live.error}` : ""}</span>;
+
+  return (
+    <section className="set-card">
+      <h2>CamillaDSP — convolution / correction de pièce</h2>
+      <SetRow label="Déléguer le DSP à CamillaDSP"
+        desc="Quand une instance CamillaDSP est joignable, Auris lui route le flux (le DSP interne EQ/loudness est alors court-circuité) : filtres FIR, convolution, correction de pièce. Sinon, repli sur le DSP interne.">
+        <Switch checked={ca.enabled} label="Pont CamillaDSP" onChange={(v) => set("enabled", v)} />
+      </SetRow>
+      <SetRow label="Mode de pont" desc="Loopback : le flux va sur le périphérique de capture de CamillaDSP (ex. boucle ALSA « camilladsp »). Pipe : PCM brut f32le écrit dans un FIFO. Websocket : contrôle du profil uniquement, la chaîne audio reste interne.">
+        <select value={ca.mode} onChange={(e) => set("mode", e.target.value as CamillaSettings["mode"])}>
+          <option value="loopback">Loopback (périphérique de capture)</option>
+          <option value="pipe">Pipe nommé (FIFO)</option>
+          <option value="websocket">Websocket seul (contrôle)</option>
+        </select>
+      </SetRow>
+      <SetRow label="Websocket CamillaDSP" desc="API de contrôle de CamillaDSP (port 1234 par défaut)">
+        <input type="text" value={ca.ws_url} placeholder="ws://127.0.0.1:1234" style={{ width: 260 }}
+          onChange={(e) => set("ws_url", e.target.value)} />
+      </SetRow>
+      {ca.mode !== "websocket" && (
+        <SetRow label={ca.mode === "pipe" ? "FIFO de capture" : "Périphérique de capture"}
+          desc={ca.mode === "pipe"
+            ? "Chemin du FIFO lu par CamillaDSP (capture File/RawFile, format FLOAT32LE à la cadence du flux)"
+            : "Nom du périphérique audio que CamillaDSP écoute en capture (ex. « camilladsp » avec une boucle ALSA), affiché aussi dans la liste des périphériques audio"}>
+          <input type="text" value={ca.capture_device} placeholder={ca.mode === "pipe" ? "/tmp/camilla.fifo" : "camilladsp"} style={{ width: 260 }}
+            onChange={(e) => set("capture_device", e.target.value)} />
+        </SetRow>
+      )}
+      <SetRow label="Repli sur le DSP interne" desc="Si CamillaDSP est injoignable ou le périphérique de capture indisponible : lecture sur la sortie normale avec l'EQ interne, plutôt que silence">
+        <Switch checked={ca.fallback_internal} label="Repli DSP interne" onChange={(v) => set("fallback_internal", v)} />
+      </SetRow>
+      <SetRow label="Profil CamillaDSP" desc={live?.active_profile ? `Profil actif côté CamillaDSP : ${live.active_profile}` : "Sélectionnez le profil (fichier de config) à activer — ex. correction de pièce « salon »"}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <select value={currentProfile} disabled={!live?.reachable || busy} style={{ minWidth: 200 }}
+            onChange={async (e) => {
+              const name = e.target.value;
+              setBusy(true);
+              try {
+                const r = await api.camillaProfile(name);
+                setSt(r);
+                await updateSettings((s) => ({ ...s, camilla: { ...s.camilla, profile: name || null } }));
+                say(name ? `Profil « ${name} » activé sur CamillaDSP` : "Profil CamillaDSP désélectionné");
+              } catch (err) { say(err instanceof Error ? err.message : String(err)); load(); }
+              finally { setBusy(false); }
+            }}>
+            {currentProfile === "" && <option value="">(profil courant de CamillaDSP)</option>}
+            {profiles.map((p) => <option key={p} value={p}>{p}</option>)}
+            {currentProfile !== "" && !profiles.includes(currentProfile) && <option value={currentProfile}>{currentProfile}</option>}
+          </select>
+        </div>
+      </SetRow>
+      <SetRow label="État" desc={st
+          ? `Sortie courante : ${st.device ?? "—"}${st.delegated ? " · DSP délégué à CamillaDSP" : " · DSP interne"}`
+          : t("Chargement…")}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {statusPill}
+          {st?.delegated && <span className="pill ok">Flux délégué{st.engine.active_profile ? ` · ${st.engine.active_profile}` : ""}</span>}
+          <button className="btn sm" disabled={busy} onClick={async () => {
+            setBusy(true);
+            try { setSt(await api.camillaRefresh()); say("CamillaDSP re-sondé"); }
+            catch (e) { say(e instanceof Error ? e.message : String(e)); }
+            finally { setBusy(false); }
+          }}>{t("Re-sonder")}</button>
+        </div>
+      </SetRow>
     </section>
   );
 }
@@ -3412,7 +3509,8 @@ function SignalPathModal({ onClose, onOpenSettings }: { onClose: () => void; onO
     { label: t("Bit-perfect"), detail: sp.resampling ? t("Rééchantillonnage autorisé vers la cadence de la sortie") : t("Aucun rééchantillonnage — flux bit-perfect"), on: !sp.resampling },
     ...(sp.format_kind === "dsd" ? [{ label: "DSD", detail: sp.dsd_mode === "dop" ? "DSD over PCM (DoP) vers le DAC" : "DSD converti en PCM haute fréquence", on: true }] : []),
     ...(sp.output_mode === "local" ? [{ label: t("WASAPI exclusif"), detail: sp.exclusive ? t("Actif — le flux prend le DAC en exclusif") : t("Inactif — mode partagé"), on: sp.exclusive }] : []),
-    { label: "Loudness R128", detail: sp.loudness ? `Cible ${sp.loudness_target_lufs} LUFS${sp.loudness_gain_db != null ? ` · gain ${sp.loudness_gain_db.toFixed(1)} dB sur ce morceau` : ""}` : t("Désactivée"), on: sp.loudness },
+    { label: "DSP", detail: sp.dsp.startsWith("CamillaDSP") ? `Délégué à ${sp.dsp} — convolution / correction de pièce externe` : "Interne — EQ paramétrique + loudness R128", on: sp.dsp.startsWith("CamillaDSP") },
+    { label: "Loudness R128", detail: sp.loudness && !sp.dsp.startsWith("CamillaDSP") ? `Cible ${sp.loudness_target_lufs} LUFS${sp.loudness_gain_db != null ? ` · gain ${sp.loudness_gain_db.toFixed(1)} dB sur ce morceau` : ""}` : t("Désactivée"), on: sp.loudness && !sp.dsp.startsWith("CamillaDSP") },
     { label: t("Égaliseur"), detail: sp.eq_enabled && sp.eq_bands.length > 0 ? sp.eq_bands.map((b) => `${b.freq_hz} Hz ${b.gain_db > 0 ? "+" : ""}${b.gain_db} dB`).join(", ") : t("Plat / désactivé"), on: sp.eq_enabled && sp.eq_bands.length > 0 },
     { label: t("Enchaînements"), detail: [sp.gapless ? "gapless" : null, sp.crossfade_secs > 0 ? `crossfade ${sp.crossfade_secs} s` : null].filter(Boolean).join(" · ") || t("direct"), on: sp.gapless || sp.crossfade_secs > 0 },
     { label: t("Volume"), detail: sp.volume_mode === "disabled" ? t("Bit-perfect — volume réglé sur l'ampli") : `${t("logiciel")} · ${sp.volume_curve === "logarithmic" ? t("courbe logarithmique") : t("courbe linéaire")} · ${sp.muted ? t("muet") : `${sp.volume}/${sp.max_volume}`}`, on: sp.volume_mode === "software" && !sp.muted },

@@ -308,6 +308,75 @@ impl Default for MusicBrainzSettings {
     }
 }
 
+/// Mode de pont vers CamillaDSP (convolution / correction de pièce) — #82.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CamillaMode {
+    /// Boucle (loopback ALSA ou équivalent) : le flux PCM est routé vers le
+    /// périphérique de capture de CamillaDSP (`capture_device`, ex.
+    /// `camilladsp`), qui le traite (FIR, convolution) puis le joue sur le DAC.
+    #[default]
+    Loopback,
+    /// Pipe nommé (FIFO) : le flux PCM f32le brut est écrit dans le FIFO
+    /// `capture_device` (capture `File`/`RawFile` côté CamillaDSP).
+    Pipe,
+    /// Websocket seul : aucun reroutage audio, on pilote une instance
+    /// CamillaDSP (sélection de profil) qui gère la sortie autrement.
+    Websocket,
+}
+
+/// Réglages du pont CamillaDSP — #82. Quand `enabled`, Auris délègue le
+/// traitement (EQ/convolution) à une instance CamillaDSP joignable, avec
+/// repli sur le DSP interne si elle est indisponible (`fallback_internal`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CamillaSettings {
+    /// Délégation du traitement vers CamillaDSP (false = DSP interne #37).
+    pub enabled: bool,
+    pub mode: CamillaMode,
+    /// URL du websocket CamillaDSP (défaut `ws://127.0.0.1:1234`).
+    pub ws_url: String,
+    /// Mode loopback : nom du périphérique de capture (ex. `camilladsp`) ;
+    /// mode pipe : chemin du FIFO. Ignoré en mode websocket.
+    pub capture_device: String,
+    /// Profil (fichier de config) à activer à la connexion via
+    /// `SetConfigName`. `None` = laisser le profil courant de CamillaDSP.
+    pub profile: Option<String>,
+    /// Si CamillaDSP est injoignable ou le périphérique de capture indisponible :
+    /// repli sur le DSP interne + sortie normale (true, défaut) plutôt que de
+    /// rester muet.
+    pub fallback_internal: bool,
+}
+
+impl Default for CamillaSettings {
+    fn default() -> Self {
+        CamillaSettings {
+            enabled: false,
+            mode: CamillaMode::Loopback,
+            ws_url: "ws://127.0.0.1:1234".into(),
+            capture_device: "camilladsp".into(),
+            profile: None,
+            fallback_internal: true,
+        }
+    }
+}
+
+/// Statut d'une instance CamillaDSP sondée (GET /api/camilla/status) — #82.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CamillaStatus {
+    pub reachable: bool,
+    /// Version de CamillaDSP (réponse `GetVersion`).
+    pub version: Option<String>,
+    /// État interne (« Running », « Paused », … — réponse `GetStatus`).
+    pub state: Option<String>,
+    /// Profil actif côté CamillaDSP (`GetConfigName`).
+    pub active_profile: Option<String>,
+    /// Profils (configs) disponibles (`GetConfigNames`).
+    pub profiles: Vec<String>,
+    /// Message d'erreur de la sonde, si injoignable.
+    pub error: Option<String>,
+}
+
 /// Tous les réglages, racine de la section `[settings]` de config.toml.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -320,6 +389,7 @@ pub struct Settings {
     pub lastfm: LastfmSettings,
     pub musicbrainz: MusicBrainzSettings,
     pub spotify: SpotifySettings,
+    pub camilla: CamillaSettings,
 }
 
 impl Settings {
@@ -442,6 +512,39 @@ impl Settings {
                 "Spotify Connect activé : renseignez username+password ou credentials_path".into(),
             );
         }
+        // CamillaDSP (#82) : URL websocket ws:// ou wss:// avec un hôte, et
+        // périphérique de capture renseigné sauf en mode « websocket ».
+        let ca = &self.camilla;
+        let url = ca.ws_url.trim();
+        let scheme_ok = url.starts_with("ws://") || url.starts_with("wss://");
+        let authority = url
+            .strip_prefix("wss://")
+            .or_else(|| url.strip_prefix("ws://"))
+            .unwrap_or("");
+        let url_ok = scheme_ok
+            && url.len() <= 256
+            && !authority.is_empty()
+            && !authority.chars().any(char::is_whitespace);
+        if !url_ok {
+            return Err(format!(
+                "camilla.ws_url doit être une URL ws:// ou wss:// avec hôte (reçu: `{url}`)"
+            ));
+        }
+        if ca.mode != CamillaMode::Websocket {
+            let cd = ca.capture_device.trim();
+            if cd.is_empty() || cd.len() > 256 {
+                return Err(
+                    "camilla.capture_device est requis (hors mode websocket), 1-256 caractères"
+                        .into(),
+                );
+            }
+        }
+        if let Some(p) = &ca.profile {
+            let p = p.trim();
+            if p.is_empty() || p.len() > 128 {
+                return Err("camilla.profile doit faire entre 1 et 128 caractères".into());
+            }
+        }
         Ok(())
     }
 }
@@ -470,7 +573,51 @@ mod tests {
         assert!(s.sources.metadata_discovery);
         assert!(!s.spotify.enabled);
         assert_eq!(s.spotify.bitrate, 320);
+        assert!(!s.camilla.enabled);
+        assert_eq!(s.camilla.mode, CamillaMode::Loopback);
+        assert_eq!(s.camilla.ws_url, "ws://127.0.0.1:1234");
+        assert!(s.camilla.fallback_internal);
         s.validate().unwrap();
+    }
+
+    #[test]
+    fn validation_camilla() {
+        let mut s = Settings::default();
+        // défauts valides
+        s.validate().unwrap();
+        // URL websocket invalide
+        for bad in [
+            "",
+            "http://127.0.0.1:1234",
+            "ws://",
+            "ws://ho st:1234",
+            "ws",
+        ] {
+            s.camilla.ws_url = bad.into();
+            assert!(s.validate().is_err(), "{bad:?} devrait être refusé");
+        }
+        s.camilla.ws_url = "ws://127.0.0.1:1234".into();
+        s.camilla.ws_url = "wss://dsp.local:1234".into();
+        s.validate().unwrap();
+        s.camilla.ws_url = "ws://127.0.0.1:1234".into();
+        // capture_device requis hors mode websocket
+        s.camilla.capture_device = "  ".into();
+        assert!(s.validate().is_err());
+        s.camilla.mode = CamillaMode::Websocket;
+        s.validate().unwrap(); // vide toléré en mode websocket
+        s.camilla.mode = CamillaMode::Pipe;
+        assert!(s.validate().is_err());
+        s.camilla.capture_device = "/tmp/camilla.fifo".into();
+        s.validate().unwrap();
+        // profil borné
+        s.camilla.profile = Some("x".repeat(129));
+        assert!(s.validate().is_err());
+        s.camilla.profile = Some("correction-salon.yml".into());
+        s.validate().unwrap();
+        // sérialisation : la section camilla absente d'un vieux TOML -> défaut
+        let old: Settings = toml::from_str("[playback]\nmax_volume = 80\n").unwrap();
+        assert!(!old.camilla.enabled);
+        assert_eq!(old.camilla.ws_url, "ws://127.0.0.1:1234");
     }
 
     #[test]

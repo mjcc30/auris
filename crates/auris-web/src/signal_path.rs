@@ -43,6 +43,9 @@ pub struct SignalPath {
     pub eq_enabled: bool,
     /// Bandes non plates uniquement.
     pub eq_bands: Vec<EqBand>,
+    /// Étape DSP : « CamillaDSP (<profil>) » si le traitement est délégué (#82),
+    /// sinon « interne » (EQ + loudness maison).
+    pub dsp: String,
     pub crossfade_secs: f64,
     pub gapless: bool,
 }
@@ -110,8 +113,19 @@ async fn get_signal_path(State(s): State<AppState>) -> Json<SignalPath> {
         loudness: pb.loudness,
         loudness_target_lufs: pb.loudness_target_lufs,
         loudness_gain_db: gain_db,
-        eq_enabled: pb.eq.enabled,
+        eq_enabled: pb.eq.enabled && !s.engine.dsp_external(),
         eq_bands,
+        dsp: {
+            let cst = s.engine.camilla_status();
+            if s.engine.dsp_external() {
+                match cst.active_profile {
+                    Some(p) => format!("CamillaDSP ({p})"),
+                    None => "CamillaDSP".to_string(),
+                }
+            } else {
+                "interne".to_string()
+            }
+        },
         crossfade_secs: pb.crossfade_secs,
         gapless: pb.gapless,
     })
@@ -156,6 +170,7 @@ mod tests {
                 freq_hz: 62,
                 gain_db: 2.0,
             }],
+            dsp: "interne".into(),
             crossfade_secs: 0.0,
             gapless: true,
         };

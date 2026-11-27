@@ -116,13 +116,20 @@ Livré dans cette beta :
 - **API socket.io Volumio v1.7.4** (#45) : compat Engine.IO v3 EIO=3 (polling +
   websocket) — getState/getQueue/play/seek/setVolume/repeat/shuffle/queue… et push
   `pushState`/`pushQueue` ; vérifiée en live.
+- **Pont CamillaDSP** (#82) : sonde et pilote une instance CamillaDSP via son
+  websocket (`GetVersion`/`GetStatus`/`GetConfigNames`/`SetConfigName`) ; délègue
+  le traitement (FIR/convolution) en routant le flux vers le périphérique de
+  capture (mode loopback) ou un FIFO (mode pipe, PCM f32le), avec repli sur le
+  DSP interne si l'instance est injoignable. UI : carte « CamillaDSP » dans
+  Réglages (mode, URL ws, capture, sélecteur de profil, statut) + étage DSP dans
+  le Signal Path. API : `/api/camilla/status|profile|refresh`.
 - À part : **plugin YouTube Music (compte Google + cookies)** dans un repo plugin
   séparé (catégorie `source`, manifeste `auris-plugin.toml`) — voir issue dédiée.
 
 Reste du backlog embarqué dans cette beta (milestone v0.9.0) : #12/#46 packaging
 (install.sh + paquets/images), #24 Spotify Connect, #25 Tidal & Qobuz, #28 Cast
 (Chromecast/AirPlay), #34 sortie Bluetooth, #42 affichage HDMI, #43 GPIO/IR,
-#44 Ethernet+Wi-Fi, #82 pont CamillaDSP, #83 éditorial Qobuz, #88 plugin YT Music.
+#44 Ethernet+Wi-Fi, #83 éditorial Qobuz, #88 plugin YT Music.
 
 ## Au-delà (idées, non planifiées)
 
