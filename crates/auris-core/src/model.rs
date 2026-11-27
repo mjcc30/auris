@@ -276,6 +276,22 @@ pub struct Playlist {
     pub created_at: i64,
 }
 
+/// Groupe de résultats de recherche : `total` (avant plafonnement) + `items` (plafonnés).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchGroup<T> {
+    pub total: usize,
+    pub items: Vec<T>,
+}
+
+/// Résultats de recherche groupés par type, façon Nova (#71).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResults {
+    pub tracks: SearchGroup<Track>,
+    pub albums: SearchGroup<Album>,
+    pub artists: SearchGroup<Artist>,
+    pub playlists: SearchGroup<Playlist>,
+}
+
 /// Sorte de ressource partagee par un lien public.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

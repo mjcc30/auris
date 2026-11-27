@@ -110,5 +110,14 @@
   "Épinglées": "Pinned",
   "Radios épinglées": "Pinned radios",
   "épinglée": "pinned",
-  "Aucune radio épinglée — menu ⋮ d'une radio puis « Épingler ».": "No pinned radio — open a radio's ⋮ menu, then \"Pin\"."
+  "Aucune radio épinglée — menu ⋮ d'une radio puis « Épingler ».": "No pinned radio — open a radio's ⋮ menu, then \"Pin\".",
+  "Tous": "All",
+  "Listes": "Playlists",
+  "Toutes les sources": "All sources",
+  "Aucun résultat pour « {q} »": "No results for \"{q}\"",
+  "Recherche…": "Searching…",
+  "Rechercher un titre, un album, un artiste…": "Search a track, album, artist…",
+  "Effacer": "Clear",
+  "Scan…": "Scanning…",
+  "Scanner la source": "Scan source"
 }

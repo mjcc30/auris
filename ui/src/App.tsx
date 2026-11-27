@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -621,6 +621,11 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
   const [artists, setArtists] = useState<Artist[]>([]);
   const [q, setQ] = useState("");
   const [searching, setSearching] = useState(false);
+  const [results, setResults] = useState<SearchResults | null>(null);
+  const [kind, setKind] = useState<"all" | "tracks" | "albums" | "artists" | "playlists">("all");
+  const [srcFilter, setSrcFilter] = useState("");
+  const [sources, setSources] = useState<Source[]>([]);
+  const [plDetail, setPlDetail] = useState<PlaylistDetail | null>(null);
   const [scanning, setScanning] = useState(false);
   const [albumDetail, setAlbumDetail] = useState<{ id: string; title: string; artist: string } | null>(null);
   const [artistDetail, setArtistDetail] = useState<{ id: string; name: string } | null>(null);
@@ -635,26 +640,39 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
     api.tracks().then(setTracks).catch(() => {});
     api.albums().then(setAlbums).catch(() => {});
     api.artists().then(setArtists).catch(() => {});
+    api.sources().then(setSources).catch(() => {});
   }, []);
+  const runSearch = (query: string, src: string) => {
+    if (!query.trim()) {
+      setSearching(false);
+      setResults(null);
+      api.tracks().then(setTracks).catch(() => {});
+      return;
+    }
+    setSearching(true);
+    api.search(query, src || undefined).then(setResults).catch(() => {});
+  };
   useEffect(() => {
     if (searchNonce > 0) {
       setQ(searchQ);
-      if (searchQ.trim()) {
-        setSearching(true);
-        setTab("tracks");
-        api.search(searchQ).then(setTracks).catch(() => {});
-      } else {
-        setSearching(false);
-        api.tracks().then(setTracks).catch(() => {});
-      }
+      setKind("all");
+      runSearch(searchQ, srcFilter);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchNonce]);
-  const doSearch = async () => {
-    if (!q.trim()) { setSearching(false); api.tracks().then(setTracks); return; }
-    setSearching(true);
-    setTab("tracks");
-    setTracks(await api.search(q));
+  // Recherche instantanée (debounce 250 ms) pendant que le mode recherche est actif.
+  useEffect(() => {
+    if (!searching || !q.trim()) return;
+    const h = setTimeout(() => runSearch(q, srcFilter), 250);
+    return () => clearTimeout(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, srcFilter, searching]);
+  const doSearch = () => runSearch(q, srcFilter);
+  const clearSearch = () => {
+    setSearching(false);
+    setResults(null);
+    setQ("");
+    api.tracks().then(setTracks).catch(() => {});
   };
   const scan = async () => {
     setScanning(true);
@@ -672,42 +690,95 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
   if (artistDetail) {
     return <ArtistView id={artistDetail.id} name={artistDetail.name} playAll={playAll} playTrack={playTrack} favs={favs} onToggleFav={onToggleFav} pins={pins} onTogglePin={onTogglePin} onBack={() => setArtistDetail(null)} onOpenAlbum={(a) => setAlbumDetail(a)} />;
   }
-  const ql = q.trim().toLowerCase();
-  const hitArtists = searching ? artists.filter((a) => a.name.toLowerCase().includes(ql)) : artists;
-  const hitAlbums = searching ? albums.filter((a) => a.title.toLowerCase().includes(ql) || a.artist.toLowerCase().includes(ql)) : albums;
+  if (plDetail) {
+    return (
+      <div>
+        <div className="toolbar">
+          <button className="btn ghost sm" onClick={() => setPlDetail(null)}><Icon name="back" size={16} /> {t("Retour")}</button>
+          <div className="spacer" />
+          <button className="btn sm" disabled={!plDetail.tracks.length} onClick={() => playAll(plDetail.tracks)}><Icon name="play" size={14} filled /> {t("Tout lire")}</button>
+        </div>
+        <h1>{plDetail.playlist.name}</h1>
+        <TrackTable tracks={plDetail.tracks} playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={onToggleFav} />
+      </div>
+    );
+  }
   return (
     <div>
       <div className="searchbar">
-        <div className="input-wrap"><Icon name="search" size={18} /><input type="text" placeholder="Rechercher…" value={q}
-          onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doSearch()} /></div>
-        <button className="btn ghost" onClick={doSearch}>Rechercher</button>
-        {searching && <button className="btn ghost" onClick={() => { setSearching(false); setQ(""); api.tracks().then(setTracks); }}>Effacer</button>}
-        <button className="btn" disabled={scanning} onClick={scan}>{scanning ? "Scan…" : "Scanner la source"}</button>
+        <div className="input-wrap"><Icon name="search" size={18} /><input type="text" placeholder={t("Rechercher un titre, un album, un artiste…")} value={q}
+          onChange={(e) => { const v = e.target.value; setQ(v); if (v.trim()) setSearching(true); else clearSearch(); }}
+          onKeyDown={(e) => e.key === "Enter" && doSearch()} /></div>
+        {searching && <button className="btn ghost" onClick={clearSearch}>{t("Effacer")}</button>}
+        <button className="btn" disabled={scanning} onClick={scan}>{scanning ? t("Scan…") : t("Scanner la source")}</button>
       </div>
       {searching ? (
+        results ? (
         <div>
-          <h2>Artistes ({hitArtists.length})</h2>
-          {hitArtists.length === 0 && <div className="empty">Aucun artiste ne correspond.</div>}
-          <table className="tracks"><tbody>
-            {hitArtists.map((a) => <tr key={a.id} className="link" onClick={() => setArtistDetail({ id: a.id, name: a.name })}><td>{a.name}</td><td className="meta"><FavHeart on={favs.artists.includes(a.id)} onToggle={() => onToggleFav("artist", a.id)} /> {cl(a.album_count, "album", "albums")}</td></tr>)}
-          </tbody></table>
-          <h2>Albums ({hitAlbums.length})</h2>
-          {hitAlbums.length === 0 && <div className="empty">Aucun album ne correspond.</div>}
-          <div className="grid">
-            {hitAlbums.map((a) => (
-              <div key={a.id} className="card" onClick={() => setAlbumDetail({ id: a.id, title: a.title, artist: a.artist })}>
-                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
-                  <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
-                  <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
-                </div>
-                <div className="t">{a.title}</div>
-                <div className="s">{a.artist} · {cl(a.track_count, "titre", "titres")} · {fmtTime(a.duration_secs)}</div>
-              </div>
+          <div className="chips" style={{ marginTop: 0, marginBottom: 4 }}>
+            {([["all", t("Tous")], ["tracks", `${t("Titres")} (${results.tracks.total})`], ["albums", `${t("Albums")} (${results.albums.total})`], ["artists", `${t("Artistes")} (${results.artists.total})`], ["playlists", `${t("Listes")} (${results.playlists.total})`]] as const).map(([k, label]) => (
+              <button key={k} className={`chip chip-btn ${kind === k ? "active" : ""}`} onClick={() => setKind(k)}>{label}</button>
             ))}
           </div>
-          <h2>Titres ({tracks.length})</h2>
-          <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={onToggleFav} />
+          {sources.some((s) => s.enabled) && (
+            <div className="chips" style={{ marginTop: 0, marginBottom: 8 }}>
+              <button className={`chip chip-btn ${srcFilter === "" ? "active" : ""}`} onClick={() => setSrcFilter("")}>{t("Toutes les sources")}</button>
+              {sources.filter((s) => s.enabled).map((s) => (
+                <button key={s.id} className={`chip chip-btn ${srcFilter === s.id ? "active" : ""}`} onClick={() => setSrcFilter(s.id)}>{s.name}</button>
+              ))}
+            </div>
+          )}
+          {results.tracks.total + results.albums.total + results.artists.total + results.playlists.total === 0 && (
+            <div className="empty">{t("Aucun résultat pour « {q} »", { q })}</div>
+          )}
+          {(kind === "all" || kind === "artists") && results.artists.items.length > 0 && (
+            <>
+              <h2>{t("Artistes")} ({results.artists.total})</h2>
+              <table className="tracks"><tbody>
+                {results.artists.items.map((a) => <tr key={a.id} className="link" onClick={() => setArtistDetail({ id: a.id, name: a.name })}><td>{a.name}</td><td className="meta"><FavHeart on={favs.artists.includes(a.id)} onToggle={() => onToggleFav("artist", a.id)} /> {cl(a.album_count, "album", "albums")}</td></tr>)}
+              </tbody></table>
+            </>
+          )}
+          {(kind === "all" || kind === "albums") && results.albums.items.length > 0 && (
+            <>
+              <h2>{t("Albums")} ({results.albums.total})</h2>
+              <div className="grid">
+                {results.albums.items.map((a) => (
+                  <div key={a.id} className="card" onClick={() => setAlbumDetail({ id: a.id, title: a.title, artist: a.artist })}>
+                    <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+                      <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
+                      <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
+                    </div>
+                    <div className="t">{a.title}</div>
+                    <div className="s">{a.artist} · {cl(a.track_count, "titre", "titres")} · {fmtTime(a.duration_secs)}</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          {(kind === "all" || kind === "playlists") && results.playlists.items.length > 0 && (
+            <>
+              <h2>{t("Listes de lecture")} ({results.playlists.total})</h2>
+              <table className="tracks"><tbody>
+                {results.playlists.items.map((p) => (
+                  <tr key={p.id} className="link" onClick={() => api.playlist(p.id).then(setPlDetail).catch(() => {})}>
+                    <td><Icon name="playlist" size={16} /> {p.name}</td>
+                    <td className="meta"><PinButton on={pins.playlists.includes(p.id)} onToggle={() => onTogglePin("playlist", p.id)} /> {cl(p.track_ids.length, "titre", "titres")}</td>
+                  </tr>
+                ))}
+              </tbody></table>
+            </>
+          )}
+          {(kind === "all" || kind === "tracks") && results.tracks.items.length > 0 && (
+            <>
+              <h2>{t("Titres")} ({results.tracks.total})</h2>
+              <TrackTable tracks={results.tracks.items} playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={onToggleFav} />
+            </>
+          )}
         </div>
+        ) : (
+          <div className="empty">{t("Recherche…")}</div>
+        )
       ) : (
         <>
       <div className="seg">

@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use auris_core::{
     Album, Artist, AurisError, DecadeFacet, FavKind, Favorites, GenreFacet, HistoryEntry,
-    LibraryStats, PinKind, Pins, Playlist, Result, ShareKind, ShareLink, Source, Track,
+    LibraryStats, PinKind, Pins, Playlist, Result, SearchGroup, SearchResults, ShareKind,
+    ShareLink, Source, Track,
 };
 use auris_player::probe_meta;
 use auris_sources::{make_uri, SourcesManager};
@@ -272,6 +273,99 @@ impl Library {
                         .unwrap_or(false)
             })
             .collect()
+    }
+
+    /// Recherche groupée par type, façon Nova (#71) : pistes, albums, artistes, playlists.
+    /// `source_id` restreint la recherche à une source (albums/artistes/playlists filtrés
+    /// en conséquence). Chaque groupe est plafonné à `SEARCH_CAP` items, `total` garde le
+    /// vrai compte. Les pistes sont triées par pertinence (préfixe de titre d'abord).
+    pub fn search_grouped(&self, q: &str, source_id: Option<&str>) -> SearchResults {
+        let q = q.trim().to_lowercase();
+        let src = source_id.map(str::trim).filter(|s| !s.is_empty());
+        let all = self.tracks();
+        let hit = |t: &Track| {
+            (src.map(|s| t.source_id == s).unwrap_or(true))
+                && (t.title.to_lowercase().contains(&q)
+                    || t.artist.to_lowercase().contains(&q)
+                    || t.album_artist.to_lowercase().contains(&q)
+                    || t.album.to_lowercase().contains(&q)
+                    || t.genre
+                        .as_deref()
+                        .map(|g| g.to_lowercase().contains(&q))
+                        .unwrap_or(false))
+        };
+        let mut tracks: Vec<Track> = all.iter().filter(|t| hit(t)).cloned().collect();
+        let rank = |t: &Track| {
+            if t.title.to_lowercase().starts_with(&q) {
+                0
+            } else if t.artist.to_lowercase().starts_with(&q)
+                || t.album_artist.to_lowercase().starts_with(&q)
+            {
+                1
+            } else if t.album.to_lowercase().starts_with(&q) {
+                2
+            } else {
+                3
+            }
+        };
+        tracks.sort_by(|a, b| {
+            rank(a)
+                .cmp(&rank(b))
+                .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+        });
+
+        // Clés des albums/artistes présents dans la source filtrée (toutes les pistes).
+        let src_album_keys: std::collections::HashSet<&str> = all
+            .iter()
+            .filter(|t| src.map(|s| t.source_id == s).unwrap_or(true))
+            .map(|t| t.album_key.as_str())
+            .collect();
+        let src_artist_keys: std::collections::HashSet<&str> = all
+            .iter()
+            .filter(|t| src.map(|s| t.source_id == s).unwrap_or(true))
+            .map(|t| t.artist_key.as_str())
+            .collect();
+        let albums: Vec<Album> = self
+            .albums()
+            .into_iter()
+            .filter(|a| {
+                (a.title.to_lowercase().contains(&q) || a.artist.to_lowercase().contains(&q))
+                    && (src.is_none() || src_album_keys.contains(album_key_of(a).as_str()))
+            })
+            .collect();
+        let artists: Vec<Artist> = self
+            .artists()
+            .into_iter()
+            .filter(|a| {
+                a.name.to_lowercase().contains(&q)
+                    && (src.is_none() || src_artist_keys.contains(a.name.to_lowercase().as_str()))
+            })
+            .collect();
+        let track_src: HashMap<&str, &str> = all
+            .iter()
+            .map(|t| (t.id.as_str(), t.source_id.as_str()))
+            .collect();
+        let playlists: Vec<Playlist> = self
+            .playlists()
+            .into_iter()
+            .filter(|p| {
+                p.name.to_lowercase().contains(&q)
+                    && match src {
+                        None => true,
+                        Some(s) => p
+                            .track_ids
+                            .iter()
+                            .any(|id| track_src.get(id.as_str()) == Some(&s)),
+                    }
+            })
+            .collect();
+
+        SearchResults {
+            tracks: cap_group(tracks),
+            albums: cap_group(albums),
+            artists: cap_group(artists),
+            playlists: cap_group(playlists),
+        }
     }
 
     pub fn albums(&self) -> Vec<Album> {
@@ -785,6 +879,16 @@ impl Library {
 
 fn album_key_of(a: &Album) -> String {
     format!("{}|{}", a.artist.to_lowercase(), a.title.to_lowercase())
+}
+
+/// Plafonnement des groupes de résultats de recherche (#71).
+const SEARCH_CAP: usize = 30;
+
+fn cap_group<T>(v: Vec<T>) -> SearchGroup<T> {
+    SearchGroup {
+        total: v.len(),
+        items: v.into_iter().take(SEARCH_CAP).collect(),
+    }
 }
 
 /// Découpe un tag de genre en facettes (séparateur `;`), nettoyées et non vides.

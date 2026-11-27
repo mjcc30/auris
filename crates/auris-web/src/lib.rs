@@ -21,8 +21,8 @@ use tower_http::cors::CorsLayer;
 
 use auris_core::{
     lyrics, Alarm, AlarmState, AurisError, BrowseEntry, FavKind, Favorites, LibraryStats,
-    OutputMode, PinKind, Pins, PlayStatus, Playlist, RepeatMode, Settings, ShareKind, ShareLink,
-    Source, Track, WsEvent, ZipWriter,
+    OutputMode, PinKind, Pins, PlayStatus, Playlist, RepeatMode, SearchResults, Settings,
+    ShareKind, ShareLink, Source, Track, WsEvent, ZipWriter,
 };
 use auris_library::Library;
 use auris_player::{
@@ -1018,9 +1018,10 @@ async fn get_artist(
 async fn get_search(
     State(s): State<AppState>,
     Query(q): Query<std::collections::HashMap<String, String>>,
-) -> Json<Vec<Track>> {
+) -> Json<SearchResults> {
     let query = q.get("q").cloned().unwrap_or_default();
-    Json(s.library.search(&query))
+    let source = q.get("source").map(String::as_str);
+    Json(s.library.search_grouped(&query, source))
 }
 async fn get_cover(State(s): State<AppState>, Path(track_id): Path<String>) -> Response {
     match s.library.cover(&track_id) {

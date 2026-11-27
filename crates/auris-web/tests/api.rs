@@ -196,7 +196,8 @@ async fn api_rest_complet() {
         .json()
         .await
         .unwrap();
-    assert_eq!(found.as_array().unwrap().len(), 1);
+    assert_eq!(found["tracks"]["total"], 1);
+    assert_eq!(found["tracks"]["items"].as_array().unwrap().len(), 1);
     let albums: serde_json::Value = http
         .get(format!("{base}/api/library/albums"))
         .send()

@@ -229,6 +229,9 @@ h1 .pin-btn { vertical-align: middle; margin-left: 6px; background: transparent;
   background: var(--surface-high); color: var(--text-dim);
   border: 1px solid var(--border);
 }
+.chip-btn { cursor: pointer; font-family: inherit; }
+.chip-btn:hover { border-color: var(--accent); color: var(--text); }
+.chip-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .bio { color: var(--text-dim); font-size: 14px; line-height: 1.6; max-width: 720px; white-space: pre-wrap; }
 
 .empty { color: var(--text-dim); padding: 32px 0; text-align: center; }

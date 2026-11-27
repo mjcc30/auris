@@ -211,6 +211,20 @@ export interface FavoritesResolved {
   artists: Artist[];
 }
 
+/** Groupe de résultats de recherche (#71) : total réel + items plafonnés. */
+export interface SearchGroup<T> {
+  total: number;
+  items: T[];
+}
+
+/** Résultats de recherche groupés par type, façon Nova (#71). */
+export interface SearchResults {
+  tracks: SearchGroup<Track>;
+  albums: SearchGroup<Album>;
+  artists: SearchGroup<Artist>;
+  playlists: SearchGroup<Playlist>;
+}
+
 /** Lien de partage public (v0.6) : /share/<token>. */
 export interface ShareLink {
   token: string;
@@ -485,7 +499,10 @@ export const api = {
   albums: () => req<Album[]>("/api/library/albums"),
   artists: () => req<Artist[]>("/api/library/artists"),
   artist: (id: string) => req<ArtistDetail>(`/api/library/artists/${encodeURIComponent(id)}`),
-  search: (q: string) => req<Track[]>(`/api/library/search?q=${encodeURIComponent(q)}`),
+  search: (q: string, source?: string) =>
+    req<SearchResults>(
+      `/api/library/search?q=${encodeURIComponent(q)}${source ? `&source=${encodeURIComponent(source)}` : ""}`
+    ),
   scan: (sourceId: string) => req<unknown>("/api/library/scan", post({ source_id: sourceId })),
   scanStatus: () => req<unknown>("/api/library/scan/status"),
   sources: () => req<Source[]>("/api/sources"),
