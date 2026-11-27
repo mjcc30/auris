@@ -1824,6 +1824,8 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
   const [davUser, setDavUser] = useState("");
   const [davPass, setDavPass] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
+  // jeton d'autorisation Last.fm en cours de validation (#26)
+  const lfToken = useRef<string | null>(null);
 
   useEffect(() => {
     api.systemStorage().then(setStorage).catch(() => {});
@@ -1845,6 +1847,10 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
     updateSettings((s) => ({ ...s, network: { ...s.network, [k]: v } }));
   const setSources = <K extends keyof Settings["sources"]>(k: K, v: Settings["sources"][K]) =>
     updateSettings((s) => ({ ...s, sources: { ...s.sources, [k]: v } }));
+  const setLastfm = <K extends keyof Settings["lastfm"]>(k: K, v: Settings["lastfm"][K]) =>
+    updateSettings((s) => ({ ...s, lastfm: { ...s.lastfm, [k]: v } }));
+  const setMb = <K extends keyof Settings["musicbrainz"]>(k: K, v: Settings["musicbrainz"][K]) =>
+    updateSettings((s) => ({ ...s, musicbrainz: { ...s.musicbrainz, [k]: v } }));
 
   const power = async (fn: () => Promise<unknown>, label: string) => {
     setBusy(label);
@@ -1910,6 +1916,7 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
   };
 
   const p = settings.playback, ap = settings.appearance, sy = settings.system, nw = settings.network, so = settings.sources;
+  const lf = settings.lastfm, mb = settings.musicbrainz;
 
   const sections: { title: string; rows: React.ReactNode[] }[] = [
     {
@@ -2134,6 +2141,59 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
                 </button>
               </div>
             </div>
+          </SetRow>
+        ),
+      ].filter(Boolean) as React.ReactNode[],
+    },
+    {
+      title: t("Last.fm / MusicBrainz"),
+      rows: [
+        show("Last.fm", "Scrobble automatique et « en cours de lecture » vers Last.fm") && (
+          <SetRow key="lf-on" label="Last.fm" desc="Scrobble quand la piste dépasse 50 % de sa durée (ou 4 min, min 30 s) + « en cours de lecture »">
+            <Switch checked={lf.enabled} label="Last.fm" onChange={(v) => setLastfm("enabled", v)} />
+          </SetRow>
+        ),
+        show("Clés API Last.fm", "api_key + shared_secret du compte API Last.fm") && (
+          <SetRow key="lf-key" label="Clés API Last.fm" desc="Créer un compte API sur last.fm/api/account/create (32 caractères hex)">
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+              <input type="text" value={lf.api_key} placeholder="api_key (32 hex)" style={{ width: 310 }}
+                onChange={(e) => setLastfm("api_key", e.target.value.trim())} />
+              <input type="password" value={lf.shared_secret} placeholder="shared_secret" style={{ width: 310 }}
+                onChange={(e) => setLastfm("shared_secret", e.target.value)} />
+            </div>
+          </SetRow>
+        ),
+        show("Session Last.fm", "Autorisation du compte (flux token → navigateur → session)") && (
+          <SetRow key="lf-auth" label="Session Last.fm" desc={lf.session_key ? "Session enregistrée" : "Aucune session enregistrée"}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <button className="btn ghost sm" disabled={!lf.api_key || !lf.shared_secret} onClick={async () => {
+                try {
+                  const r = await api.lastfmToken();
+                  lfToken.current = r.token;
+                  window.open(r.auth_url, "_blank", "noopener");
+                  say("Autorisez Auris sur Last.fm dans l'onglet ouvert, puis cliquez sur « Finaliser »");
+                } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+              }}>1. Autoriser…</button>
+              <button className="btn ghost sm" disabled={!lfToken.current} onClick={async () => {
+                try {
+                  const r = await api.lastfmSession(lfToken.current!);
+                  lfToken.current = null;
+                  await setLastfm("session_key", r.session_key);
+                  say(`Session enregistrée pour ${r.name}`);
+                } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+              }}>2. Finaliser la session</button>
+              <button className="btn ghost sm" disabled={!lf.session_key} onClick={async () => {
+                try {
+                  const r = await api.lastfmTest();
+                  say(`Last.fm connecté : ${r.name ?? "?"} (${r.playcount ?? 0} écoutes)`);
+                } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+              }}>Tester</button>
+            </div>
+          </SetRow>
+        ),
+        show("MusicBrainz", "Fiche recording (sortie, label, tags, ISRC, note) dans l'onglet Infos") && (
+          <SetRow key="mb" label="MusicBrainz" desc="API publique WS2 (1 req/s, cache 10 min) — enrichit l'onglet Infos de la lecture en cours">
+            <Switch checked={mb.enabled} label="MusicBrainz" onChange={(v) => setMb("enabled", v)} />
           </SetRow>
         ),
       ].filter(Boolean) as React.ReactNode[],
@@ -2530,6 +2590,30 @@ function NowPlayingPanel({ track, pos, tab, setTab, onClose }: {
                 <div className="np-h">Commentaire</div>
                 <p className="np-text">{infos.comment}</p>
               </>)}
+              {(() => {
+                const mb = infos.musicbrainz;
+                const utile = mb && (mb.mbid || mb.release || mb.label || mb.rating != null || (mb.tags?.length ?? 0) > 0 || (mb.isrcs?.length ?? 0) > 0);
+                if (!utile) return null;
+                return (<>
+                <div className="np-h">MusicBrainz</div>
+                <table className="np-credits"><tbody>
+                  {mb.release && <tr><td>Sortie</td><td>
+                    {mb.url
+                      ? <a href={mb.url} target="_blank" rel="noreferrer">{mb.release}</a>
+                      : mb.release}
+                    {mb.release_date ? ` (${mb.release_date})` : ""}
+                  </td></tr>}
+                  {mb.label && <tr><td>Label</td><td>{mb.label}</td></tr>}
+                  {mb.isrcs?.length > 0 && <tr><td>ISRC</td><td>{mb.isrcs.join(", ")}</td></tr>}
+                  {mb.rating != null && <tr><td>Note</td><td>{mb.rating.toFixed(1)} / 5{mb.rating_count != null ? ` (${mb.rating_count} votes)` : ""}</td></tr>}
+                </tbody></table>
+                {mb.tags?.length > 0 && (
+                  <div className="np-badges" style={{ marginTop: 6 }}>
+                    {mb.tags.slice(0, 8).map((tg) => <span key={tg} className="badge">{tg}</span>)}
+                  </div>
+                )}
+              </>);
+              })()}
             </>)}
           </div>
         )}

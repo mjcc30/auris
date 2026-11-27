@@ -112,6 +112,10 @@ pub struct Track {
     /// pour alléger la réponse, présentes sur `/api/library/tracks/{id}` et `/api/infos/{id}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lyrics: Option<String>,
+    /// MusicBrainz Recording ID (tag MUSICBRAINZ_TRACKID / TXXX) — pour le
+    /// scrobble Last.fm (mbid) et la fiche MusicBrainz (#26).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mb_track_id: Option<String>,
     pub added_at: i64,
 }
 
@@ -145,6 +149,7 @@ impl Track {
             isrc: None,
             copyright: None,
             lyrics: None,
+            mb_track_id: None,
             added_at: now,
         }
     }

@@ -1049,6 +1049,7 @@ async fn probe_and_store(db: &sled::Db, sources: &Arc<SourcesManager>, uri: &str
     t.isrc = meta.isrc.clone();
     t.copyright = meta.copyright.clone();
     t.lyrics = meta.lyrics.clone();
+    t.mb_track_id = meta.mb_track_id.clone();
     t.finalize_keys();
 
     let tracks = db

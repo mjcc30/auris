@@ -135,5 +135,15 @@
   "Télécharger (.zip)": "Download (.zip)",
   "Choisir un .zip…": "Choose a .zip…",
   "Envoyer": "Send",
-  "Restaurer": "Restore"
+  "Restaurer": "Restore",
+  "Last.fm / MusicBrainz": "Last.fm / MusicBrainz",
+  "Last.fm": "Last.fm",
+  "Clés API Last.fm": "Last.fm API keys",
+  "Session Last.fm": "Last.fm session",
+  "MusicBrainz": "MusicBrainz",
+  "1. Autoriser…": "1. Authorize…",
+  "2. Finaliser la session": "2. Finalize session",
+  "Tester": "Test",
+  "Sortie": "Release",
+  "Note": "Rating"
 }

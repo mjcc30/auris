@@ -299,6 +299,24 @@ export interface InfosResponse {
   bio: string | null;
   /** "cache" (sled), "wikipedia" ou "none". */
   bio_source: string;
+  /** Fiche MusicBrainz de la recording (#26), null si rien trouvé. */
+  musicbrainz: MusicBrainzInfo | null;
+}
+
+/** Fiche MusicBrainz resumée côté backend (#26). */
+export interface MusicBrainzInfo {
+  mbid: string | null;
+  title: string | null;
+  artist: string;
+  release: string;
+  release_date: string;
+  label: string;
+  length_ms: number | null;
+  tags: string[];
+  isrcs: string[];
+  rating: number | null;
+  rating_count: number | null;
+  url: string | null;
 }
 
 /** Construit un objet Source sérialisable côté backend (serde taggé). */
@@ -452,12 +470,27 @@ export interface SourcesSettings {
   metadata_discovery: boolean;
 }
 
+export interface LastfmSettings {
+  enabled: boolean;
+  api_key: string;
+  shared_secret: string;
+  session_key: string;
+  api_url: string | null;
+}
+
+export interface MusicBrainzSettings {
+  enabled: boolean;
+  api_url: string | null;
+}
+
 export interface Settings {
   playback: PlaybackSettings;
   appearance: AppearanceSettings;
   system: SystemSettings;
   network: NetworkSettings;
   sources: SourcesSettings;
+  lastfm: LastfmSettings;
+  musicbrainz: MusicBrainzSettings;
 }
 
 export interface StorageInfo {
@@ -646,6 +679,9 @@ export const api = {
   },
   backupWebdav: (p: WebdavTarget) => req<BackupPushReport>("/api/settings/backup/webdav", post(p)),
   restoreWebdav: (p: WebdavTarget) => req<BackupRestoreReport>("/api/settings/restore/webdav", post(p)),
+  lastfmTest: () => req<{ ok: boolean; name: string | null; playcount: unknown; url: string | null }>("/api/lastfm/test", post({})),
+  lastfmToken: () => req<{ token: string; auth_url: string }>("/api/lastfm/token", post({})),
+  lastfmSession: (token: string) => req<{ session_key: string; name: string }>("/api/lastfm/session", post({ token })),
   reboot: () => req<unknown>("/api/system/reboot", post({})),
   shutdown: () => req<unknown>("/api/system/shutdown", post({})),
   coverUrl: (trackId: string) => `/api/library/cover/${encodeURIComponent(trackId)}`,

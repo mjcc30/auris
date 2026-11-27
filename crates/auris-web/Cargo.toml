@@ -24,6 +24,7 @@ rust-embed.workspace = true
 fs2.workspace = true
 walkdir.workspace = true
 reqwest = { workspace = true, features = ["blocking", "json"] }
+md-5.workspace = true
 mime_guess = "2"
 
 [dev-dependencies]

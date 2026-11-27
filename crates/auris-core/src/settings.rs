@@ -207,6 +207,43 @@ impl Default for SourcesSettings {
     }
 }
 
+/// Réglages Last.fm (scrobble + « en cours de lecture ») — #26.
+/// La clé API + le secret partagé viennent de https://www.last.fm/api/account/create ;
+/// la session (`sk`) s'obtient par le flux auth.getToken → autorisation web → auth.getSession.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct LastfmSettings {
+    pub enabled: bool,
+    /// API key (32 caractères hex) du compte Last.fm.
+    pub api_key: String,
+    /// Shared secret du compte API (affiché sur la page du compte).
+    pub shared_secret: String,
+    /// Session key (`sk`) obtenue après autorisation — requise pour scrobbler.
+    pub session_key: String,
+    /// Endpoint API (défaut `https://ws.audioscrobbler.com/2.0/`) — surchargeable
+    /// pour les tests.
+    pub api_url: Option<String>,
+}
+
+/// Réglages MusicBrainz (fiche recording : sortie, label, tags, ISRC, note) — #26.
+/// L'API WS2 est publique, sans clé ; 1 requête/s max (rate-limit côté client).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MusicBrainzSettings {
+    pub enabled: bool,
+    /// Base WS2 (défaut `https://musicbrainz.org/ws/2`) — surchargeable pour les tests.
+    pub api_url: Option<String>,
+}
+
+impl Default for MusicBrainzSettings {
+    fn default() -> Self {
+        MusicBrainzSettings {
+            enabled: true,
+            api_url: None,
+        }
+    }
+}
+
 /// Tous les réglages, racine de la section `[settings]` de config.toml.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -216,6 +253,8 @@ pub struct Settings {
     pub system: SystemSettings,
     pub network: NetworkSettings,
     pub sources: SourcesSettings,
+    pub lastfm: LastfmSettings,
+    pub musicbrainz: MusicBrainzSettings,
 }
 
 impl Settings {
@@ -294,6 +333,25 @@ impl Settings {
                 return Err(format!(
                     "gain de bande EQ hors plage ±{EQ_MAX_GAIN_DB} dB: {}",
                     b.gain_db
+                ));
+            }
+        }
+        // Last.fm (#26) : si activé, les 3 identifiants sont requis et la clé
+        // API doit être hexadécimale (32 caractères côté Last.fm).
+        let lf = &self.lastfm;
+        if lf.enabled {
+            if lf.api_key.trim().is_empty()
+                || lf.shared_secret.trim().is_empty()
+                || lf.session_key.trim().is_empty()
+            {
+                return Err(
+                    "Last.fm activé : api_key, shared_secret et session_key sont requis".into(),
+                );
+            }
+            let k = lf.api_key.trim();
+            if !k.chars().all(|c| c.is_ascii_hexdigit()) || k.len() != 32 {
+                return Err(format!(
+                    "lastfm.api_key doit être une clé API hex de 32 caractères (reçu: `{k}`)"
                 ));
             }
         }

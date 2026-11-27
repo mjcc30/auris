@@ -32,6 +32,7 @@ use auris_player::{
 use auris_sources::{discover_removable, SourcesManager};
 use auris_updater::Updater;
 
+mod lastfm;
 mod packs;
 mod radios;
 
@@ -87,6 +88,8 @@ pub struct AppState {
     pub log_path: Option<PathBuf>,
     /// État de la minuterie de sommeil / du réveil (tick 1x/s dans `serve`).
     pub alarms: Arc<Mutex<AlarmState>>,
+    /// Cache MusicBrainz (fiche recording par piste) — #26, construit à la volée.
+    pub mb_cache: Arc<Mutex<Option<Arc<lastfm::MbCache>>>>,
 }
 
 /// Action d'alimentation (redémarrer / éteindre la machine hôte).
@@ -123,6 +126,7 @@ impl AppState {
             power_ops: None,
             log_path: None,
             alarms: Arc::new(Mutex::new(AlarmState::default())),
+            mb_cache: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -426,6 +430,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/settings/restore", post(post_restore))
         .route("/api/settings/backup/webdav", post(post_backup_webdav))
         .route("/api/settings/restore/webdav", post(post_restore_webdav))
+        .route("/api/lastfm/test", post(post_lastfm_test))
+        .route("/api/lastfm/token", post(post_lastfm_token))
+        .route("/api/lastfm/session", post(post_lastfm_session))
         .route("/api/alarms", get(get_alarms))
         .route("/api/shares", get(get_shares).post(post_share))
         .route("/api/shares/{token}", delete(delete_share))
@@ -480,6 +487,8 @@ pub async fn serve(state: AppState, addr: SocketAddr) -> anyhow::Result<()> {
             }
         });
     }
+    // tâche de fond : scrobble Last.fm + now-playing (#26)
+    lastfm::spawn_scrobbler(state.clone());
     // tâche de fond : minuterie de sommeil + réveil (vérification 1x/s)
     tokio::spawn(async move {
         loop {
@@ -1316,6 +1325,12 @@ async fn get_infos(
         })),
         "bio": bio,
         "bio_source": bio_source,
+        // fiche MusicBrainz (#26) : MBID tagué ou recherche artist+titre (cache 10 min)
+        "musicbrainz": if lastfm::mb_enabled(&s) {
+            lastfm::mb_cache(&s).ficha(&t).await
+        } else {
+            serde_json::Value::Null
+        },
     })))
 }
 async fn post_scan(
@@ -1850,6 +1865,73 @@ async fn post_restore_webdav(
         .map_err(|e| AurisError::other(format!("join webdav: {e}")))?
         .map_err(AurisError::other)?;
     restore_from_zip(&s, &bytes)
+}
+
+// ---------- Last.fm / MusicBrainz (#26) ----------
+
+fn lastfm_client_or_err(s: &AppState, need_session: bool) -> ApiResult<lastfm::LastfmClient> {
+    let cfg = lastfm::lastfm_cfg(s);
+    if cfg.api_key.trim().is_empty() || cfg.shared_secret.trim().is_empty() {
+        return Err(AurisError::other(
+            "Last.fm non configuré : api_key + shared_secret requis (Réglages → Last.fm)"
+                .to_string(),
+        )
+        .into());
+    }
+    if need_session && cfg.session_key.trim().is_empty() {
+        return Err(AurisError::other(
+            "Last.fm : aucune session — faites « 1. Autoriser » puis « 2. Finaliser la session »"
+                .to_string(),
+        )
+        .into());
+    }
+    Ok(lastfm::LastfmClient::new(cfg))
+}
+
+/// `POST /api/lastfm/test` — vérifie la configuration via `user.getInfo`.
+async fn post_lastfm_test(State(s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
+    let c = lastfm_client_or_err(&s, true)?;
+    let v = c.user_info().await.map_err(AurisError::other)?;
+    let user = v.get("user").cloned().unwrap_or(serde_json::Value::Null);
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "name": user.get("name").cloned().unwrap_or(serde_json::Value::Null),
+        "playcount": user.get("playcount").cloned().unwrap_or(serde_json::Value::Null),
+        "url": user.get("url").cloned().unwrap_or(serde_json::Value::Null),
+    })))
+}
+
+/// `POST /api/lastfm/token` — démarre le flux d'autorisation (auth.getToken).
+/// Réponse : `{token, auth_url}` à ouvrir dans un navigateur.
+async fn post_lastfm_token(State(s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
+    let c = lastfm_client_or_err(&s, false)?;
+    let token = c.auth_get_token().await.map_err(AurisError::other)?;
+    Ok(Json(serde_json::json!({
+        "token": token,
+        "auth_url": c.auth_url(&token),
+    })))
+}
+
+#[derive(Deserialize)]
+struct LastfmSessionBody {
+    token: String,
+}
+
+/// `POST /api/lastfm/session` — échange un token autorisé contre une session
+/// (`auth.getSession`). L'UI enregistre ensuite `session_key` dans les réglages.
+async fn post_lastfm_session(
+    State(s): State<AppState>,
+    Json(body): Json<LastfmSessionBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let c = lastfm_client_or_err(&s, false)?;
+    let (key, name) = c
+        .auth_get_session(&body.token)
+        .await
+        .map_err(AurisError::other)?;
+    Ok(Json(serde_json::json!({
+        "session_key": key,
+        "name": name,
+    })))
 }
 
 /// Export ZIP d'un album de la bibliotheque (toutes ses pistes).
@@ -2536,6 +2618,8 @@ async fn put_settings(
     }
     // applique à chaud au moteur (volume max, courbe, mode bit-perfect)
     s.engine.apply_playback(&new.playback);
+    // le cache MusicBrainz dépend des réglages (api_url) : on l'invalide (#26)
+    lastfm::mb_cache_reset(&s);
     s.persist_settings();
     Ok(Json(new))
 }

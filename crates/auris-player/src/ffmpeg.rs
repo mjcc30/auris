@@ -303,6 +303,15 @@ fn meta_from_probe(info: &ProbeInfo) -> TrackMeta {
         publisher: tag(t, &["publisher"]),
         isrc: tag(t, &["isrc"]),
         copyright: tag(t, &["copyright"]),
+        // MusicBrainz (#26) : vorbis MUSICBRAINZ_* ou ID3 TXXX (clés en minuscules
+        // après ffprobe, ex. `musicbrainz recording id`).
+        mb_track_id: tag(t, &["musicbrainz_trackid", "musicbrainz recording id"]),
+        mb_artist_id: tag(t, &["musicbrainz_artistid", "musicbrainz artist id"]),
+        mb_album_id: tag(t, &["musicbrainz_albumid", "musicbrainz album id"]),
+        mb_release_group_id: tag(
+            t,
+            &["musicbrainz_releasegroupid", "musicbrainz release group id"],
+        ),
     }
 }
 

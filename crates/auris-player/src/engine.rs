@@ -126,6 +126,7 @@ fn track_from_uri(uri: &str, meta: &TrackMeta, duration: Option<f64>) -> Track {
     t.isrc = meta.isrc.clone();
     t.copyright = meta.copyright.clone();
     t.lyrics = meta.lyrics.clone();
+    t.mb_track_id = meta.mb_track_id.clone();
     t.finalize_keys();
     t
 }

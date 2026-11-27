@@ -80,6 +80,12 @@ pub struct TrackMeta {
     pub publisher: Option<String>,
     pub isrc: Option<String>,
     pub copyright: Option<String>,
+    /// Identifiants MusicBrainz (#26) : recording (scrobble Last.fm + fiche MB),
+    /// artist, album, release group.
+    pub mb_track_id: Option<String>,
+    pub mb_artist_id: Option<String>,
+    pub mb_album_id: Option<String>,
+    pub mb_release_group_id: Option<String>,
 }
 
 /// Decodeur de flux.
@@ -381,6 +387,19 @@ pub fn apply_raw_tag(meta: &mut TrackMeta, key: &str, value: &str) {
         "COPYRIGHT" | "TCOP" => {
             meta.copyright.get_or_insert(value.to_string());
         }
+        // MusicBrainz (#26) : vorbis MUSICBRAINZ_* et ID3 TXXX « MusicBrainz … »
+        "MUSICBRAINZ_TRACKID" | "MUSICBRAINZ RECORDING ID" => {
+            meta.mb_track_id.get_or_insert(value.to_string());
+        }
+        "MUSICBRAINZ_ARTISTID" | "MUSICBRAINZ ARTIST ID" => {
+            meta.mb_artist_id.get_or_insert(value.to_string());
+        }
+        "MUSICBRAINZ_ALBUMID" | "MUSICBRAINZ ALBUM ID" => {
+            meta.mb_album_id.get_or_insert(value.to_string());
+        }
+        "MUSICBRAINZ_RELEASEGROUPID" | "MUSICBRAINZ RELEASE GROUP ID" => {
+            meta.mb_release_group_id.get_or_insert(value.to_string());
+        }
         _ => {}
     }
 }
@@ -491,6 +510,16 @@ mod tests {
         apply_raw_tag(&mut m, "TCOP", "© 2018");
         apply_raw_tag(&mut m, "COMPOSER", "Max Richter"); // vorbis: premier gagne
         apply_raw_tag(&mut m, "LABEL", "DG");
+        // MusicBrainz (#26) : vorbis + TXXX
+        apply_raw_tag(&mut m, "MUSICBRAINZ_TRACKID", "rec-mbid-1");
+        apply_raw_tag(&mut m, "MusicBrainz Recording Id", "ignore-premier-gagne");
+        apply_raw_tag(&mut m, "MUSICBRAINZ_ARTISTID", "art-mbid-1");
+        apply_raw_tag(&mut m, "MUSICBRAINZ_ALBUMID", "alb-mbid-1");
+        apply_raw_tag(&mut m, "MUSICBRAINZ_RELEASEGROUPID", "rg-mbid-1");
+        assert_eq!(m.mb_track_id.as_deref(), Some("rec-mbid-1"));
+        assert_eq!(m.mb_artist_id.as_deref(), Some("art-mbid-1"));
+        assert_eq!(m.mb_album_id.as_deref(), Some("alb-mbid-1"));
+        assert_eq!(m.mb_release_group_id.as_deref(), Some("rg-mbid-1"));
         assert_eq!(m.composer.as_deref(), Some("Max Richter"));
         assert_eq!(m.producer.as_deref(), Some("Deutsche Grammophon"));
         assert_eq!(m.publisher.as_deref(), Some("DG"));
