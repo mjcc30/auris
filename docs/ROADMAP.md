@@ -89,7 +89,14 @@ ouverts ou des intégrations communautaires avec compte utilisateur :
 - **Deezer extraits 30 s** (#85) : chart + recherche via API keyless.
 - Auto-ajout des deux sources dans les nouvelles installations.
 
-## v0.9.0 — Compat clients tiers (en cours)
+## v0.9.0 — Beta : tout le backlog restant (en cours)
+
+**Politique de version** : aucun tag `v0.9.x` n'est posé — la **v0.9.0 est la release
+beta** (milestone GitHub « v0.9.0 - Beta ») qui embarque tout ce qui reste du backlog ;
+la **v1.0.0 est réservée à la vérification finale après les tests beta** (tag posé
+uniquement quand tout est validé).
+
+Livré dans cette beta :
 
 - **API Subsonic serveur v1 lecture seule** (#79) sur `/rest/*` : ping, artists,
   albums, search3, playlists, coverArt, stream (Range/206) — DSub, Ultrasonic,
@@ -111,6 +118,11 @@ ouverts ou des intégrations communautaires avec compte utilisateur :
   `pushState`/`pushQueue` ; vérifiée en live.
 - À part : **plugin YouTube Music (compte Google + cookies)** dans un repo plugin
   séparé (catégorie `source`, manifeste `auris-plugin.toml`) — voir issue dédiée.
+
+Reste du backlog embarqué dans cette beta (milestone v0.9.0) : #12/#46 packaging
+(install.sh + paquets/images), #24 Spotify Connect, #25 Tidal & Qobuz, #28 Cast
+(Chromecast/AirPlay), #34 sortie Bluetooth, #42 affichage HDMI, #43 GPIO/IR,
+#44 Ethernet+Wi-Fi, #82 pont CamillaDSP, #83 éditorial Qobuz, #88 plugin YT Music.
 
 ## Au-delà (idées, non planifiées)
 
