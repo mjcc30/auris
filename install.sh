@@ -60,7 +60,11 @@ chown -R "$USER_NAME:$USER_NAME" "$DATA_DIR"
 
 # --- Configuration par défaut -------------------------------------------------
 # La config se lit dans <data-dir>/config.toml (voir crates/auris/src/config.rs).
-if [ ! -f "$DATA_DIR/config.toml" ]; then
+# Réinstallation : on garde la config existante, avec une sauvegarde datée.
+if [ -f "$DATA_DIR/config.toml" ]; then
+  cp -a "$DATA_DIR/config.toml" "$DATA_DIR/config.toml.bak-$(date +%Y%m%d-%H%M%S)"
+  log "Config existante conservée (sauvegarde config.toml.bak-*)."
+else
   log "Écriture de $DATA_DIR/config.toml…"
   cat > "$DATA_DIR/config.toml" <<EOF
 # Configuration Auris — voir https://auris.audio/docs/SPECIFICATIONS
@@ -80,6 +84,11 @@ path = "/mnt/nas/musique"
 EOF
   chown "$USER_NAME:$USER_NAME" "$DATA_DIR/config.toml"
   chmod 640 "$DATA_DIR/config.toml"
+fi
+
+# Avertissement si le point de montage NAS n'existe pas (la source « nas » restera vide).
+if [ ! -d /mnt/nas/musique ]; then
+  log "ATTENTION: /mnt/nas/musique n'existe pas — montez votre NAS (fstab/cifs) ou éditez $DATA_DIR/config.toml."
 fi
 
 # --- Service systemd -----------------------------------------------------------
