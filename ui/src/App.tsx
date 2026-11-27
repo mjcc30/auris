@@ -2287,7 +2287,9 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
             const dev = dop.devices.find((d) => devName != null && sameDevice(d.name, devName)) ?? dop.devices[0] ?? null;
             const mix = dev?.mix ?? null;
             const def = dev?.default_format ?? null;
-            const ok = mix != null && !mix.is_float && mix.rate === dopRate;
+            // « Prêt » = mode exclusif actif (mixeur contourné), ou Default Format
+            // (adopté au prochain rebranchement) en PCM entier à la porteuse.
+            const ok = dop.exclusive_enabled || (def != null && !def.is_float && def.rate === dopRate);
             return (
               <>
                 <SetRow label="État WASAPI du DAC"
@@ -2382,9 +2384,11 @@ function DopBanner({ carrier, dop, deviceName, backend, say, onChanged }: { carr
   // (ou le navigateur) directement — le mixeur est contourné, l'avertissement
   // n'a plus lieu d'être.
   if (backend !== "cpal") return null;
-  // RAS si le mix est déjà un PCM entier à la porteuse ; sinon le flux DoP
-  // sera rééchantillonné (bruit) ou refusé par le pilote.
-  if (!dop.windows || !mix || (!mix.is_float && mix.rate === carrier)) return null;
+  // RAS si le mix tourne déjà à la fréquence de la porteuse : aucun
+  // rééchantillonnage, donc aucun risque de bruit (même en float 32 bits).
+  // Avertissement seulement si les fréquences diffèrent (le flux DoP sera
+  // rééchantillonné -> bruit) ou si le pilote refuserait le format.
+  if (!dop.windows || !mix || mix.rate === carrier) return null;
   const run = async (fn: () => Promise<{ message: string }>) => {
     setBusy(true);
     try { say((await fn()).message); onChanged(); }
