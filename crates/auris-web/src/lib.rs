@@ -36,6 +36,7 @@ use auris_updater::Updater;
 mod dlna_renderer;
 mod lastfm;
 mod multiroom;
+mod network;
 mod packs;
 mod radios;
 
@@ -461,6 +462,11 @@ pub fn router(state: AppState) -> Router {
         .route("/dlna/avtransport", post(dlna_renderer::post_avtransport))
         .route("/dlna/rendering", post(dlna_renderer::post_rendering))
         // multiroom / regroupement — #23
+        // interfaces réseau (#44)
+        .route(
+            "/api/network/interfaces",
+            get(network::get_interfaces).post(network::post_interface),
+        )
         .route("/api/multiroom/state", get(multiroom::get_state))
         .route("/api/multiroom/clock", get(multiroom::get_clock))
         .route("/api/multiroom/groups", post(multiroom::post_group))

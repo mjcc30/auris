@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -2022,6 +2022,50 @@ function SetRow({ label, desc, children }: { label: string; desc?: string; child
   );
 }
 
+/// Interfaces réseau : état + activer/désactiver (#44).
+function NetInterfaces({ say }: { say: (m: string) => void }) {
+  const [ifs, setIfs] = useState<NetInterface[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    try { setIfs(await api.netInterfaces()); } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+  }, [say]);
+  useEffect(() => { load(); }, [load]);
+  const toggle = async (name: string, up: boolean) => {
+    setBusy(true);
+    try {
+      setIfs(await api.netInterfaceAction(name, up ? "down" : "up"));
+      say(up ? `${name} désactivée` : `${name} activée`);
+    } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+  if (!ifs) return <div className="empty">{t("Chargement…")}</div>;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 440 }}>
+      {ifs.map((i) => (
+        <div key={i.name} className="mr-peer" style={{ justifyContent: "space-between" }}>
+          <div style={{ minWidth: 0 }}>
+            <div className="mr-name">
+              {i.name} {i.wifi && <span className="badge">Wi-Fi</span>} {i.loopback && <span className="badge">loopback</span>} {i.default_route && <span className="badge">{t("route par défaut")}</span>}
+            </div>
+            <div className="mr-base">{i.ips.join(", ") || t("pas d'adresse IP")}{i.mac ? ` · ${i.mac}` : ""}</div>
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flex: "none" }}>
+            <span className={`badge ${i.up ? "live" : ""}`}>{i.up ? t("active") : t("inactive")}</span>
+            {!i.loopback && (
+              <button className="btn ghost sm" disabled={busy} onClick={() => toggle(i.name, i.up)}>
+                {i.up ? t("Désactiver") : t("Activer")}
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+      <button className="btn ghost sm" style={{ alignSelf: "flex-start" }} onClick={load} disabled={busy}>
+        <Icon name="refresh" size={16} /> {t("Actualiser")}
+      </button>
+    </div>
+  );
+}
+
 function SettingsView({ settings, updateSettings, say, refresh, packs }: {
   settings: Settings | null;
   updateSettings: (patch: (s: Settings) => Settings, ok?: string) => Promise<void>;
@@ -2445,6 +2489,11 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
         show("Enceinte DLNA", "MediaRenderer UPnP AVTransport BubbleUPnP Hi-Fi Cast diffuser") && (
           <SetRow key="dlna" label="Enceinte DLNA" desc="Auris apparaît comme enceinte DLNA (AVTransport + volume) dans BubbleUPnP, Hi-Fi Cast… pour recevoir de la musique poussée depuis un autre appareil">
             <Switch checked={nw.dlna_renderer} label="DLNA" onChange={(v) => setNetwork("dlna_renderer", v)} />
+          </SetRow>
+        ),
+        show("Interfaces réseau", "État Ethernet/Wi-Fi, route par défaut, activer/désactiver") && (
+          <SetRow key="netif" label="Interfaces réseau" desc="État des interfaces (Ethernet + Wi-Fi peuvent être actives en même temps) — activer/désactiver exige les droits root/administrateur">
+            <NetInterfaces say={say} />
           </SetRow>
         ),
       ].filter(Boolean) as React.ReactNode[],

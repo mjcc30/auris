@@ -479,6 +479,19 @@ export interface NetworkSettings {
   dlna_renderer: boolean;
 }
 
+/** Interface réseau système (#44). */
+export interface NetInterface {
+  name: string;
+  mac: string | null;
+  up: boolean;
+  loopback: boolean;
+  wifi: boolean;
+  ips: string[];
+  default_route: boolean;
+  rx_bytes: number;
+  tx_bytes: number;
+}
+
 /** Pair Auris découvert sur le LAN (multiroom #23). */
 export interface PeerInfo {
   id: string;
@@ -700,6 +713,9 @@ export const api = {
   system: () => req<SystemInfo>("/api/system/info"),
   updateCheck: () => req<UpdateInfo>("/api/system/update"),
   settings: () => req<Settings>("/api/settings"),
+  netInterfaces: () => req<NetInterface[]>("/api/network/interfaces"),
+  netInterfaceAction: (name: string, action: "up" | "down") =>
+    req<NetInterface[]>("/api/network/interfaces", post({ name, action })),
   packs: () => req<Packs>("/api/packs"),
   alarms: () => req<AlarmsInfo>("/api/alarms"),
   updateSettings: (s: Settings) =>
