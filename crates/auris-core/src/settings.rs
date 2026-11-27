@@ -123,6 +123,11 @@ pub struct PlaybackSettings {
     pub wake_time: Option<String>,
     /// Égaliseur paramétrique appliqué au flux PCM (DAC local et « Jouer ici »).
     pub eq: EqSettings,
+    /// Normalisation du volume par loudness intégrée R128 (gain statique par
+    /// piste, mesuré à l'analyse de la bibliothèque). false = aucun gain (#37).
+    pub loudness: bool,
+    /// Cible de loudness en LUFS (streaming -14, broadcast EBU R128 -23).
+    pub loudness_target_lufs: f64,
 }
 
 impl Default for PlaybackSettings {
@@ -138,6 +143,8 @@ impl Default for PlaybackSettings {
             sleep_timer: None,
             wake_time: None,
             eq: EqSettings::default(),
+            loudness: false,
+            loudness_target_lufs: -14.0,
         }
     }
 }

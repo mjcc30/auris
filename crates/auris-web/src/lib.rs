@@ -374,6 +374,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/library/facets", get(get_facets))
         .route("/api/library/stats", get(get_library_stats))
         .route("/api/library/history", get(get_history))
+        .route("/api/library/loudness/scan", post(post_loudness_scan))
+        .route("/api/library/loudness/{id}", get(get_loudness))
         .route("/api/favorites", get(get_favorites))
         .route("/api/favorites/toggle", post(post_favorite_toggle))
         .route("/api/favorites/resolved", get(get_favorites_resolved))
@@ -919,6 +921,54 @@ async fn get_facets(State(s): State<AppState>) -> Json<serde_json::Value> {
 /// `GET /api/library/stats` — compteurs globaux de l'index (équivalent Volumio `collectionstats`, #74).
 async fn get_library_stats(State(s): State<AppState>) -> Json<LibraryStats> {
     Json(s.library.stats())
+}
+
+/// `GET /api/library/loudness/{id}` — loudness intégrée (LUFS) en cache pour une
+/// piste (null si non mesurée) — #37.
+async fn get_loudness(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "track_id": id,
+        "lufs": s.library.loudness_get(&id),
+        "cached_count": s.library.loudness_count(),
+    }))
+}
+
+/// `POST /api/library/loudness/scan` — lance l'analyse R128 de toute la
+/// bibliothèque en arrière-plan (décodage complet des fichiers locaux) et
+/// met en cache le LUFS de chaque piste. Retourne immédiatement les compteurs.
+async fn post_loudness_scan(State(s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
+    let lib = s.library.clone();
+    let sources = s.sources.clone();
+    std::thread::spawn(move || {
+        let tracks = lib.tracks();
+        let mut ok = 0usize;
+        let mut failed = 0usize;
+        for t in &tracks {
+            let Some(path) = sources.local_path_for_uri(&t.uri) else {
+                failed += 1;
+                continue;
+            };
+            match auris_player::loudness::analyze_file(&path) {
+                Ok(lufs) if lufs.is_finite() => {
+                    if lib.loudness_set(&t.id, lufs).is_ok() {
+                        ok += 1;
+                    } else {
+                        failed += 1;
+                    }
+                }
+                _ => failed += 1,
+            }
+        }
+        tracing::info!("loudness scan terminé: {ok} pistes analysées, {failed} sans mesure");
+    });
+    Ok(Json(serde_json::json!({
+        "started": true,
+        "total": s.library.track_count(),
+        "cached": s.library.loudness_count(),
+    })))
 }
 
 /// `GET /api/library/history?limit=50` — pistes récemment jouées (plus récente d'abord),

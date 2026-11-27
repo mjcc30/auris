@@ -50,6 +50,8 @@ pub enum Command {
 
 enum WorkerCmd {
     Seek(f64),
+    /// Gain de normalisation loudness appliqué aux échantillons PCM (1.0 = neutre).
+    SetGain(f32),
     Stop,
 }
 
@@ -206,6 +208,7 @@ fn spawn_worker(
             return;
         }
         let mut pushed_frames = 0usize;
+        let mut gain: f32 = 1.0;
         loop {
             match cmd_rx.try_recv() {
                 Ok(WorkerCmd::Seek(s)) => {
@@ -214,12 +217,20 @@ fn spawn_worker(
                     }
                     let _ = msg_tx.send(WorkerMsg::Seeked(s));
                 }
+                Ok(WorkerCmd::SetGain(g)) => gain = g,
                 Ok(WorkerCmd::Stop) | Err(mpsc::TryRecvError::Disconnected) => break,
                 Err(mpsc::TryRecvError::Empty) => {}
             }
             match decoder.next_chunk(CHUNK_FRAMES) {
-                Ok(Some(data)) => {
+                Ok(Some(mut data)) => {
                     pushed_frames += data.frames(spec.channels as usize);
+                    if gain != 1.0 {
+                        if let crate::decoder::ChunkData::F32(v) = &mut data {
+                            for s in v.iter_mut() {
+                                *s *= gain;
+                            }
+                        }
+                    }
                     let mut chunk = Chunk {
                         gen: gen.load(Ordering::SeqCst),
                         data,
@@ -247,7 +258,7 @@ fn spawn_worker(
                     loop {
                         match cmd_rx.try_recv() {
                             Ok(WorkerCmd::Stop) | Err(mpsc::TryRecvError::Disconnected) => return,
-                            Ok(WorkerCmd::Seek(_)) => {}
+                            Ok(WorkerCmd::Seek(_)) | Ok(WorkerCmd::SetGain(_)) => {}
                             Err(mpsc::TryRecvError::Empty) => {}
                         }
                         if prod.is_empty() {
@@ -272,6 +283,9 @@ fn spawn_worker(
     });
     (msg_rx, cmd_tx, handle)
 }
+
+/// Callback uri -> gain de normalisation loudness (None = pas de gain).
+pub type LoudnessLookup = Arc<dyn Fn(&str) -> Option<f32> + Send + Sync>;
 
 struct Engine {
     sources: Arc<SourcesManager>,
@@ -312,6 +326,8 @@ struct Engine {
     crossfade_ms: Arc<AtomicU64>,
     /// Préchargement de la piste suivante (gapless).
     gapless: Arc<AtomicBool>,
+    /// Lookup de gain loudness par uri (normalisation R128, #37).
+    loudness_lookup: Arc<RwLock<Option<LoudnessLookup>>>,
     rng: XorShift,
 }
 
@@ -349,7 +365,15 @@ impl Engine {
         if let Some(w) = self.worker.take() {
             w.stop();
         }
+        let gain = self
+            .loudness_lookup
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|f| f(&uri))
+            .unwrap_or(1.0);
         let (msg_rx, cmd_tx, join) = spawn_worker(self.sources.clone(), uri, self.gen.clone());
+        let _ = cmd_tx.send(WorkerCmd::SetGain(gain));
         self.worker = Some(WorkerHandle {
             msg_rx,
             cmd_tx,
@@ -989,6 +1013,14 @@ impl Engine {
         tracing::debug!("engine: préchargement piste suivante #{idx} ({uri})");
         let (msg_rx, cmd_tx, join) =
             spawn_worker(self.sources.clone(), uri.clone(), self.gen.clone());
+        let gain = self
+            .loudness_lookup
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|f| f(&uri))
+            .unwrap_or(1.0);
+        let _ = cmd_tx.send(WorkerCmd::SetGain(gain));
         self.pending_next = Some(PendingNext {
             worker: WorkerHandle {
                 msg_rx,
@@ -1144,6 +1176,7 @@ impl Engine {
 pub struct PlayerEngine {
     cmd_tx: mpsc::Sender<Command>,
     state: Arc<RwLock<PlayerState>>,
+    loudness_lookup: Arc<RwLock<Option<LoudnessLookup>>>,
     /// Canal d'evenements temps reel (WebSocket).
     pub events: broadcast::Sender<WsEvent>,
     /// Canal du flux « Jouer ici » (PCM f32 vers /ws/audio).
@@ -1180,6 +1213,7 @@ impl PlayerEngine {
         let eq = Arc::new(RwLock::new(EqConfig::default()));
         let crossfade_ms = Arc::new(AtomicU64::new(0));
         let gapless = Arc::new(AtomicBool::new(true));
+        let loudness_lookup: Arc<RwLock<Option<LoudnessLookup>>> = Arc::new(RwLock::new(None));
 
         // horloge de position: 2x / seconde
         {
@@ -1235,6 +1269,7 @@ impl PlayerEngine {
             seek_after_ready: None,
             crossfade_ms,
             gapless,
+            loudness_lookup: loudness_lookup.clone(),
             rng: XorShift(
                 0x9E3779B97F4A7C15
                     ^ std::time::SystemTime::now()
@@ -1252,7 +1287,14 @@ impl PlayerEngine {
             browser_tx,
             browser_spec,
             exclusive,
+            loudness_lookup,
         })
+    }
+
+    /// Installe le lookup de gain loudness (uri -> gain linéaire) ; appelé par
+    /// la couche web qui connaît la bibliothèque et les réglages (#37).
+    pub fn set_loudness_lookup(&self, f: Option<LoudnessLookup>) {
+        *self.loudness_lookup.write().unwrap() = f;
     }
 
     fn send(&self, cmd: Command) {

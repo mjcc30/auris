@@ -45,6 +45,8 @@ const HISTORY_KEY: &str = "all";
 const HISTORY_CAP: usize = 500;
 const TREE_PINS: &str = "pins";
 const PINS_KEY: &str = "all";
+/// Loudness intégrée (LUFS) mesurée par piste, mise en cache (#37).
+const TREE_LUFS: &str = "lufs";
 
 pub struct Library {
     db: sled::Db,
@@ -589,6 +591,30 @@ impl Library {
             .insert(artist_key.as_bytes(), text.as_bytes())
             .map_err(se)?;
         Ok(())
+    }
+
+    /// Loudness intégrée (LUFS) en cache pour une piste (None = non mesurée).
+    pub fn loudness_get(&self, track_id: &str) -> Option<f64> {
+        self.tree(TREE_LUFS)
+            .get(track_id.as_bytes())
+            .ok()?
+            .and_then(|v| dec::<f64>(&v).ok())
+    }
+
+    /// Met en cache la loudness d'une piste.
+    pub fn loudness_set(&self, track_id: &str, lufs: f64) -> Result<()> {
+        self.tree(TREE_LUFS)
+            .insert(
+                track_id.as_bytes(),
+                enc(&lufs).map_err(|e| AurisError::Storage(e.to_string()))?,
+            )
+            .map_err(se)?;
+        Ok(())
+    }
+
+    /// Nombre de pistes dont la loudness est en cache.
+    pub fn loudness_count(&self) -> usize {
+        self.tree(TREE_LUFS).len()
     }
 
     pub fn cover(&self, track_id: &str) -> Option<Vec<u8>> {

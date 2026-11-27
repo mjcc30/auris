@@ -2322,6 +2322,24 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
             </div>
           </SetRow>
         ),
+        show("Normalisation du volume", "Niveau sonore homogène entre les pistes (loudness R128)") && (
+          <SetRow key="loudness" label="Normalisation du volume (R128)" desc="Gain statique par piste (LUFS intégré) pour un niveau homogène — lancez l'analyse de la bibliothèque">
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <select value={p.loudness_target_lufs} aria-label="Cible LUFS"
+                onChange={(e) => setPlayback("loudness_target_lufs", Number(e.target.value))}>
+                <option value={-14}>-14 LUFS (streaming)</option>
+                <option value={-16}>-16 LUFS</option>
+                <option value={-23}>-23 LUFS (EBU R128)</option>
+              </select>
+              <Switch checked={p.loudness} label="loudness" onChange={(v) => setPlayback("loudness", v)} />
+              <button className="btn ghost sm" onClick={() => api.loudnessScan()
+                .then((r) => say(`${r.total} pistes à analyser (${r.cached} déjà en cache)`))
+                .catch((e) => say(e instanceof Error ? e.message : String(e)))}>
+                {t("Analyser la bibliothèque")}
+              </button>
+            </div>
+          </SetRow>
+        ),
         show("Rééchantillonnage", "Autoriser la conversion de fréquence d'échantillonnage") && (
           <SetRow key="resampling" label="Rééchantillonnage" desc="Désactivé = bit-perfect, aucun resample (recommandé)">
             <Switch checked={p.resampling} label="rééchantillonnage" onChange={(v) => setPlayback("resampling", v)} />

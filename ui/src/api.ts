@@ -441,6 +441,10 @@ export interface PlaybackSettings {
   wake_time: string | null;
   /** Égaliseur paramétrique 10 bandes. */
   eq: EqSettings;
+  /** Normalisation du volume par loudness R128 (#37). */
+  loudness: boolean;
+  /** Cible de loudness en LUFS (-14 streaming, -23 broadcast). */
+  loudness_target_lufs: number;
 }
 
 export interface AlarmsInfo {
@@ -742,6 +746,9 @@ export const api = {
   pluginCall: (id: string, method: string, params: unknown) =>
     req<unknown>(`/api/plugins/${encodeURIComponent(id)}/call`, post({ method, params: params ?? {} })),
   pluginTest: (id: string) => req<unknown>(`/api/plugins/${encodeURIComponent(id)}/test`, post({})),
+  loudnessScan: () => req<{ started: boolean; total: number; cached: number }>("/api/library/loudness/scan", post({})),
+  loudnessOf: (trackId: string) =>
+    req<{ track_id: string; lufs: number | null; cached_count: number }>(`/api/library/loudness/${encodeURIComponent(trackId)}`),
   packs: () => req<Packs>("/api/packs"),
   alarms: () => req<AlarmsInfo>("/api/alarms"),
   updateSettings: (s: Settings) =>

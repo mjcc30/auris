@@ -70,6 +70,8 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
     let library = Arc::new(Library::open(&data_dir, sources.clone())?);
     tracing::info!("bibliothèque: {} pistes indexées", library.track_count());
 
+    let settings = Arc::new(RwLock::new(config.settings.clone()));
+
     let engine = PlayerEngine::start(
         sources.clone(),
         config.audio_device.clone(),
@@ -77,6 +79,24 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         config.audio_exclusive,
     );
     engine.apply_playback(&config.settings.playback);
+    // Normalisation loudness R128 (#37) : gain statique par piste, lu dans le
+    // cache de la bibliothèque à chaque démarrage de piste.
+    {
+        let lib = library.clone();
+        let st = settings.clone();
+        engine.set_loudness_lookup(Some(Arc::new(move |uri: &str| {
+            let (on, target) = {
+                let g = st.read().unwrap();
+                (g.playback.loudness, g.playback.loudness_target_lufs)
+            };
+            if !on {
+                return None;
+            }
+            let track = lib.get_by_uri(uri)?;
+            let lufs = lib.loudness_get(&track.id)?;
+            Some(auris_player::gain_for_target(lufs, target))
+        })));
+    }
     // Mode de sortie persistant (« local » / « browser ») : repris tel quel au
     // demarrage pour ne pas retomber sur le defaut Windows.
     if let Some(mode_str) = &config.output_mode {
@@ -147,7 +167,7 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         updater,
         started_at: chrono::Utc::now().timestamp(),
         sources_sink: Some(sources_sink),
-        settings: Arc::new(RwLock::new(config.settings.clone())),
+        settings,
         settings_sink: Some(settings_sink),
         player_sink: Some(player_sink),
         exclusive_sink: Some(exclusive_sink),
