@@ -187,12 +187,24 @@ impl Default for SystemSettings {
     }
 }
 
-/// Réglages réseau (informations + nom d'hôte).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Réglages réseau (informations + nom d'hôte + enceinte DLNA).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NetworkSettings {
     /// Nom d'hôte souhaité (appliqué au mieux selon l'OS, Linux uniquement).
     pub hostname: Option<String>,
+    /// Enceinte DLNA (MediaRenderer UPnP) : Auris annonce un AVTransport +
+    /// RenderingControl en SSDP pour recevoir du contenu poussé (#35).
+    pub dlna_renderer: bool,
+}
+
+impl Default for NetworkSettings {
+    fn default() -> Self {
+        NetworkSettings {
+            hostname: None,
+            dlna_renderer: true,
+        }
+    }
 }
 
 /// Réglages des sources (toggles de la page Sources de Nova).

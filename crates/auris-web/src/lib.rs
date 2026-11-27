@@ -32,6 +32,7 @@ use auris_player::{
 use auris_sources::{discover_removable, SourcesManager};
 use auris_updater::Updater;
 
+mod dlna_renderer;
 mod lastfm;
 mod packs;
 mod radios;
@@ -90,6 +91,9 @@ pub struct AppState {
     pub alarms: Arc<Mutex<AlarmState>>,
     /// Cache MusicBrainz (fiche recording par piste) — #26, construit à la volée.
     pub mb_cache: Arc<Mutex<Option<Arc<lastfm::MbCache>>>>,
+    /// Adresse réellement bindée par `serve` (renseigné au démarrage) —
+    /// sert de repli pour l'URL de base annoncée en SSDP/DLNA (#35).
+    pub bound_addr: Arc<RwLock<Option<SocketAddr>>>,
 }
 
 /// Action d'alimentation (redémarrer / éteindre la machine hôte).
@@ -127,6 +131,7 @@ impl AppState {
             log_path: None,
             alarms: Arc::new(Mutex::new(AlarmState::default())),
             mb_cache: Arc::new(Mutex::new(None)),
+            bound_addr: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -440,6 +445,11 @@ pub fn router(state: AppState) -> Router {
         .route("/share/{token}", get(share_page))
         .route("/share/{token}/stream", get(share_stream))
         .route("/share/{token}/stream/{track_id}", get(share_stream_track))
+        // enceinte DLNA (MediaRenderer UPnP) — #35
+        .route("/dlna/desc.xml", get(dlna_renderer::get_desc))
+        .route("/dlna/scpd/{name}", get(dlna_renderer::get_scpd))
+        .route("/dlna/avtransport", post(dlna_renderer::post_avtransport))
+        .route("/dlna/rendering", post(dlna_renderer::post_rendering))
         // websocket
         .route("/ws", get(ws_handler))
         .route("/ws/audio", get(ws_audio_handler))
@@ -455,6 +465,16 @@ pub fn router(state: AppState) -> Router {
 
 pub async fn serve(state: AppState, addr: SocketAddr) -> anyhow::Result<()> {
     let app = router(state.clone());
+    // annonce SSDP de l'enceinte DLNA (#35) — thread dédié, ne bloque jamais
+    {
+        let ip = if addr.ip().is_unspecified() {
+            dlna_renderer::local_ip()
+        } else {
+            addr.ip().to_string()
+        };
+        let base = format!("http://{ip}:{}", addr.port());
+        dlna_renderer::spawn_announcer(state.clone(), base);
+    }
     // tâche de fond : historique d'écoute (#69) — enregistre chaque piste qui démarre
     // (dédup consécutifs géré par Library::record_play).
     {
@@ -537,6 +557,7 @@ pub async fn serve(state: AppState, addr: SocketAddr) -> anyhow::Result<()> {
         }
     });
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    *state.bound_addr.write().unwrap() = Some(listener.local_addr().unwrap_or(addr));
     tracing::info!("interface web: http://{addr}");
     axum::serve(listener, app).await?;
     Ok(())

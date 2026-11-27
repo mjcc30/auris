@@ -474,6 +474,7 @@ export interface SystemSettings {
 
 export interface NetworkSettings {
   hostname: string | null;
+  dlna_renderer: boolean;
 }
 
 export interface SourcesSettings {

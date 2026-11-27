@@ -2291,6 +2291,11 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
               onChange={(e) => setNetwork("hostname", e.target.value.trim() || null)} />
           </SetRow>
         ),
+        show("Enceinte DLNA", "MediaRenderer UPnP AVTransport BubbleUPnP Hi-Fi Cast diffuser") && (
+          <SetRow key="dlna" label="Enceinte DLNA" desc="Auris apparaît comme enceinte DLNA (AVTransport + volume) dans BubbleUPnP, Hi-Fi Cast… pour recevoir de la musique poussée depuis un autre appareil">
+            <Switch checked={nw.dlna_renderer} label="DLNA" onChange={(v) => setNetwork("dlna_renderer", v)} />
+          </SetRow>
+        ),
       ].filter(Boolean) as React.ReactNode[],
     },
     {
