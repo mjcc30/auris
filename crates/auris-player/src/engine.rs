@@ -42,6 +42,8 @@ pub enum Command {
     SetShuffle(bool),
     ClearQueue,
     RemoveQueueItem(usize),
+    /// Joue la piste à l'index donné de la file (exposé pour socket.io #45).
+    PlayQueueIndex(usize),
     SelectDevice(Option<String>),
     ApplyPlayback(Box<PlaybackSettings>),
     SetOutputMode(OutputMode),
@@ -515,6 +517,9 @@ impl Engine {
                     st.queue = tracks;
                     st.queue_index = Some(idx.min(st.queue.len().saturating_sub(1)));
                 }
+                self.play_queue_index(idx);
+            }
+            Command::PlayQueueIndex(idx) => {
                 self.play_queue_index(idx);
             }
             Command::Enqueue(t) => {
@@ -1372,6 +1377,10 @@ impl PlayerEngine {
     }
     pub fn remove_queue_item(&self, i: usize) {
         self.send(Command::RemoveQueueItem(i));
+    }
+    /// Joue la piste à l'index `idx` de la file d'attente.
+    pub fn play_queue_index(&self, idx: usize) {
+        self.send(Command::PlayQueueIndex(idx));
     }
     pub fn select_device(&self, name: Option<String>) {
         self.send(Command::SelectDevice(name));

@@ -40,6 +40,7 @@ mod network;
 mod packs;
 mod plugins;
 mod radios;
+pub mod socketio;
 
 pub use multiroom::{peer_id, MultiroomHub};
 
@@ -104,6 +105,8 @@ pub struct AppState {
     pub multiroom: Arc<multiroom::MultiroomHub>,
     /// Hôte de plugins communautaires (#8 — docs/PLUGIN_SYSTEM.md).
     pub plugins: Arc<auris_plugins::PluginHost>,
+    /// Hub socket.io (Engine.IO v3) pour clients mobiles Volumio (#45).
+    pub socketio: Arc<socketio::SocketIoHub>,
 }
 
 /// Action d'alimentation (redémarrer / éteindre la machine hôte).
@@ -140,6 +143,7 @@ impl AppState {
                 multiroom::peer_id(&data_dir),
             )),
             plugins: Arc::new(auris_plugins::PluginHost::new(&data_dir)),
+            socketio: socketio::SocketIoHub::new(),
             data_dir,
             power_control: false,
             power_ops: None,
@@ -312,7 +316,26 @@ struct SystemInfo {
 // ---------- routes ----------
 
 pub fn router(state: AppState) -> Router {
+    // Pont événements moteur -> pushState socket.io pour tous les clients (#45).
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let mut events = state.engine.events.subscribe();
+        let st = state.clone();
+        handle.spawn(async move {
+            loop {
+                match events.recv().await {
+                    Ok(_) => socketio::broadcast_state(&st),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
     let api = Router::new()
+        // compatibilité socket.io (clients mobiles Volumio) — #45
+        .route(
+            "/socket.io/",
+            get(socketio::socketio_get).post(socketio::socketio_post),
+        )
         // lecteur
         .route("/api/state", get(get_state))
         .route("/api/player/play", post(post_play))
