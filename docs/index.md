@@ -30,4 +30,4 @@ Puis ouvrez **http://<ip-de-la-machine>:3000**.
 
 - [Code source](https://github.com/mjcc30/auris) · [Releases](https://github.com/mjcc30/auris/releases)
 - [Kanban](https://github.com/users/mjcc30/projects/2) · [Roadmap](ROADMAP.md)
-- [Manifeste](../MANIFESTO.md) · [Contribuer](../CONTRIBUTING.md)
+- [Manifeste](https://github.com/mjcc30/auris/blob/main/MANIFESTO.md) · [Contribuer](https://github.com/mjcc30/auris/blob/main/CONTRIBUTING.md)

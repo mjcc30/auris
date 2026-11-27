@@ -45,6 +45,7 @@
           buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [
             pkgs.alsa-lib
             pkgs.openssl
+            pkgs.stdenv.cc.cc.lib # libgcc_s.so.1 (requis par autoPatchelfHook)
           ];
           sourceRoot = ".";
           installPhase = ''
