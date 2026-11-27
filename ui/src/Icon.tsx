@@ -23,6 +23,7 @@ export function Icon({ name, size = 24, filled = false, className = "" }: { name
     shuffle: (<><path d="M16 4h4v4" /><path d="M4 20 20 4" /><path d="M20 16v4h-4" /><path d="m14.5 14.5 5.5 5.5" /><path d="M4 4l5.5 5.5" /></>),
     repeat: (<><path d="m17 2.5 4 4-4 4" /><path d="M3 11.5v-1a4 4 0 0 1 4-4h14" /><path d="m7 21.5-4-4 4-4" /><path d="M21 12.5v1a4 4 0 0 1-4 4H3" /></>),
     heart: <path d="M12 20.5C7 16.5 3.5 13.3 3.5 9.6 3.5 7 5.5 5 8 5c1.6 0 3.1.8 4 2.1C12.9 5.8 14.4 5 16 5c2.5 0 4.5 2 4.5 4.6 0 3.7-3.5 6.9-8.5 10.9z" />,
+    pin: <path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z" fill="currentColor" stroke="none" />,
     dots: (<><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none" /></>),
     download: (<><path d="M12 3v11" /><path d="m7 10 5 5 5-5" /><path d="M4 20h16" /></>),
     copy: (<><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></>),

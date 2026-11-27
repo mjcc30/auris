@@ -103,5 +103,12 @@
   "albums": "albums",
   "titre": "track",
   "titres": "tracks",
-  "Écoutés récemment": "Recently played"
+  "Écoutés récemment": "Recently played",
+  "Épinglés": "Pinned",
+  "Épingler": "Pin",
+  "Retirer des épingles": "Unpin",
+  "Épinglées": "Pinned",
+  "Radios épinglées": "Pinned radios",
+  "épinglée": "pinned",
+  "Aucune radio épinglée — menu ⋮ d'une radio puis « Épingler ».": "No pinned radio — open a radio's ⋮ menu, then \"Pin\"."
 }

@@ -78,6 +78,22 @@ export interface LibraryStats {
 /** Piste de l'historique d'écoute (#69) : Track + `last_played` (timestamp Unix). */
 export type HistoryTrack = Track & { last_played: number };
 
+export type PinKind = "album" | "playlist" | "radio";
+
+/** Épingles (#70 — « Pin anything » façon Nova) : IDs par catégorie, ordre d'ajout. */
+export interface Pins {
+  albums: string[];
+  playlists: string[];
+  radios: string[];
+}
+
+/** Épingles résolues côté serveur (#70) : albums/playlists complets, radios en IDs/URLs. */
+export interface PinsResolved {
+  albums: (Album & { cover_url?: string | null })[];
+  playlists: Playlist[];
+  radios: string[];
+}
+
 export interface PlayerState {
   status: "stopped" | "playing" | "paused";
   current: Track | null;
@@ -458,6 +474,10 @@ export const api = {
   facets: () => req<Facets>("/api/library/facets"),
   libraryStats: () => req<LibraryStats>("/api/library/stats"),
   history: (limit = 50) => req<HistoryTrack[]>(`/api/library/history?limit=${limit}`),
+  pins: () => req<Pins>("/api/pins"),
+  pinsResolved: () => req<PinsResolved>("/api/pins/resolved"),
+  togglePin: (kind: PinKind, id: string) =>
+    req<{ kind: PinKind; id: string; pinned: boolean }>("/api/pins/toggle", post({ kind, id })),
   favorites: () => req<Favorites>("/api/favorites"),
   favoritesResolved: () => req<FavoritesResolved>("/api/favorites/resolved"),
   toggleFavorite: (kind: FavKind, id: string) =>

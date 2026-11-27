@@ -21,8 +21,8 @@ use tower_http::cors::CorsLayer;
 
 use auris_core::{
     lyrics, Alarm, AlarmState, AurisError, BrowseEntry, FavKind, Favorites, LibraryStats,
-    OutputMode, PlayStatus, Playlist, RepeatMode, Settings, ShareKind, ShareLink, Source, Track,
-    WsEvent, ZipWriter,
+    OutputMode, PinKind, Pins, PlayStatus, Playlist, RepeatMode, Settings, ShareKind, ShareLink,
+    Source, Track, WsEvent, ZipWriter,
 };
 use auris_library::Library;
 use auris_player::{
@@ -351,6 +351,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/favorites", get(get_favorites))
         .route("/api/favorites/toggle", post(post_favorite_toggle))
         .route("/api/favorites/resolved", get(get_favorites_resolved))
+        .route("/api/pins", get(get_pins))
+        .route("/api/pins/toggle", post(post_pin_toggle))
+        .route("/api/pins/resolved", get(get_pins_resolved))
         .route("/api/library/albums", get(get_albums))
         .route("/api/library/albums/{id}", get(get_album))
         .route("/api/library/artists", get(get_artists))
@@ -886,6 +889,58 @@ async fn get_favorites_resolved(State(s): State<AppState>) -> Json<serde_json::V
         "tracks": tracks,
         "albums": albums,
         "artists": artists,
+    }))
+}
+
+/// `GET /api/pins` — IDs des épingles (albums / playlists / radios), #70.
+async fn get_pins(State(s): State<AppState>) -> Json<Pins> {
+    Json(s.library.pins())
+}
+
+#[derive(Deserialize)]
+struct PinToggleBody {
+    kind: PinKind,
+    id: String,
+}
+
+/// `POST /api/pins/toggle` — bascule une épingle, renvoie le nouvel état.
+async fn post_pin_toggle(
+    State(s): State<AppState>,
+    Json(body): Json<PinToggleBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    if body.id.trim().is_empty() {
+        return Err(AurisError::other("id vide".to_string()).into());
+    }
+    let on = s.library.toggle_pin(body.kind, &body.id)?;
+    Ok(Json(serde_json::json!({
+        "kind": body.kind,
+        "id": body.id,
+        "pinned": on,
+    })))
+}
+
+/// `GET /api/pins/resolved` — épingles résolues : albums (avec cover_url) et playlists
+/// complets, radios en IDs/URLs bruts (résolus côté client dans la liste des radios).
+async fn get_pins_resolved(State(s): State<AppState>) -> Json<serde_json::Value> {
+    let albums: Vec<serde_json::Value> = s
+        .library
+        .pinned_albums()
+        .into_iter()
+        .map(|a| {
+            let mut v = serde_json::to_value(&a).unwrap_or_default();
+            if let Some(cover_id) = &a.cover_track_id {
+                v["cover_url"] =
+                    serde_json::Value::String(format!("/api/library/cover/{cover_id}"));
+            }
+            v
+        })
+        .collect();
+    let playlists = s.library.pinned_playlists();
+    let radios = s.library.pins().radios;
+    Json(serde_json::json!({
+        "albums": albums,
+        "playlists": playlists,
+        "radios": radios,
     }))
 }
 async fn get_albums(State(s): State<AppState>) -> Json<serde_json::Value> {

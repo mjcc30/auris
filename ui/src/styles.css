@@ -207,7 +207,9 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-w
 .fav-heart:hover { transform: scale(1.12); opacity: 1; }
 .fav-heart.on { color: var(--accent); opacity: 1; }
 .cover .fav-heart { position: absolute; top: 6px; right: 6px; }
+.cover .pin-btn { position: absolute; top: 6px; left: 6px; }
 h1 .fav-heart { vertical-align: middle; margin-left: 6px; }
+h1 .pin-btn { vertical-align: middle; margin-left: 6px; background: transparent; }
 .card .t { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card .s { color: var(--text-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

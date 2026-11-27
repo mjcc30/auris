@@ -342,6 +342,26 @@ pub struct HistoryEntry {
     pub played_at: i64,
 }
 
+/// Catégorie épinglable (#70 — « Pin anything » façon Nova).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PinKind {
+    Album,
+    Playlist,
+    Radio,
+}
+
+/// Ressources épinglées en haut de l'accueil / des vues (#70), persistées côté serveur.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Pins {
+    #[serde(default)]
+    pub albums: Vec<String>,
+    #[serde(default)]
+    pub playlists: Vec<String>,
+    #[serde(default)]
+    pub radios: Vec<String>,
+}
+
 /// Entree de navigation dans une source (dossier ou fichier).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowseEntry {

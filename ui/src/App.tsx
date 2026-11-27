@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -101,6 +101,7 @@ export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [packs, setPacks] = useState<Packs | null>(null);
   const [favs, setFavs] = useState<Favorites>({ tracks: [], albums: [], artists: [] });
+  const [pins, setPins] = useState<Pins>({ albums: [], playlists: [], radios: [] });
   const [stats, setStats] = useState<LibraryStats | null>(null);
   const [, setLocaleTick] = useState(0);
   const [alarms, setAlarms] = useState<AlarmsInfo | null>(null);
@@ -125,15 +126,17 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, srcs, devs, sys, st, pk, fv, libStats] = await Promise.all([
+      const [s, srcs, devs, sys, st, pk, fv, libStats, pn] = await Promise.all([
         api.state(), api.sources(), api.devices(), api.system(), api.settings(),
         api.packs().catch(() => null),
         api.favorites().catch(() => null),
         api.libraryStats().catch(() => null),
+        api.pins().catch(() => null),
       ]);
       setState(s); setSources(srcs); setDevices(devs); setSystem(sys); setSettings(st); setPacks(pk);
       if (fv) setFavs(fv);
       if (libStats) setStats(libStats);
+      if (pn) setPins(pn);
     } catch { /* backend indisponible pour l'instant */ }
   }, []);
 
@@ -229,6 +232,13 @@ export default function App() {
       setFavs(await api.favorites());
     });
   }, [act]);
+  /// Bascule une épingle (album/playlist/radio) — #70.
+  const togglePin = useCallback((kind: PinKind, id: string) => {
+    act(async () => {
+      await api.togglePin(kind, id);
+      setPins(await api.pins());
+    });
+  }, [act]);
   const openSource = (id: string) => { setBrowseSrc(id); setView("browse"); };
   const globalSearch = () => { if (searchQ.trim()) { setSearchNonce((n) => n + 1); setView("library"); } };
   const refreshDevices = useCallback(async () => {
@@ -250,25 +260,25 @@ export default function App() {
             </div>
           </div>
           {view === "home" && (
-            <Home state={state} sources={sources} favs={favs} onToggleFav={toggleFav} playTrack={playTrack} playAll={playAll} openSource={openSource}
+            <Home state={state} sources={sources} favs={favs} onToggleFav={toggleFav} pins={pins} onTogglePin={togglePin} playTrack={playTrack} playAll={playAll} openSource={openSource}
               openArtist={(a) => { setPendingArtist(a); setPendingAlbum(null); setView("library"); }}
               openAlbum={(a) => { setPendingAlbum(a); setPendingArtist(null); setView("library"); }} />
           )}
           {view === "library" && (
             <Library playTrack={playTrack} playAll={playAll} say={say} refresh={refresh} searchNonce={searchNonce} searchQ={searchQ}
-              favs={favs} onToggleFav={toggleFav}
+              favs={favs} onToggleFav={toggleFav} pins={pins} onTogglePin={togglePin}
               pendingArtist={pendingArtist} onPendingArtistDone={() => setPendingArtist(null)}
               pendingAlbum={pendingAlbum} onPendingAlbumDone={() => setPendingAlbum(null)} />
           )}
           {view === "favorites" && (
-            <FavoritesView playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={toggleFav}
+            <FavoritesView playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={toggleFav} pins={pins} onTogglePin={togglePin}
               openAlbum={(a) => { setPendingAlbum(a); setPendingArtist(null); setView("library"); }}
               openArtist={(a) => { setPendingArtist(a); setPendingAlbum(null); setView("library"); }} />
           )}
           {view === "browse" && <Browse sources={sources} src={browseSrc} playUri={playUri} act={act} say={say} />}
-          {view === "radios" && <Radios state={state} act={act} say={say} />}
+          {view === "radios" && <Radios state={state} act={act} say={say} pins={pins} onTogglePin={togglePin} />}
           {view === "queue" && <Queue state={state} act={act} say={say} playAll={playAll} />}
-          {view === "playlists" && <Playlists act={act} say={say} playAll={playAll} playTrack={playTrack} />}
+          {view === "playlists" && <Playlists act={act} say={say} playAll={playAll} playTrack={playTrack} pins={pins} onTogglePin={togglePin} />}
           {view === "sources" && <Sources sources={sources} refresh={refresh} say={say} />}
           {view === "settings" && <SettingsView settings={settings} updateSettings={updateSettings} say={say} refresh={refresh} packs={packs} />}
         </main>
@@ -372,10 +382,24 @@ function FavHeart({ on, onToggle, title }: { on: boolean; onToggle: () => void; 
   );
 }
 
-function FacetCard({ coverUrl, icon, title, sub, round, fav, onToggleFav, onClick }: { coverUrl: string | null; icon: string; title: string; sub: string; round?: boolean; fav?: boolean; onToggleFav?: () => void; onClick: () => void }) {
+/// Bouton épingle (#70) : `on` = épinglé. Le clic ne propage pas.
+function PinButton({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  return (
+    <button
+      className={`fav-heart pin-btn${on ? " on" : ""}`}
+      title={on ? t("Retirer des épingles") : t("Épingler")}
+      onClick={(e) => { e.stopPropagation(); e.preventDefault(); onToggle(); }}
+    >
+      <Icon name="pin" size={14} filled={on} />
+    </button>
+  );
+}
+
+function FacetCard({ coverUrl, icon, title, sub, round, fav, onToggleFav, pinned, onTogglePin, onClick }: { coverUrl: string | null; icon: string; title: string; sub: string; round?: boolean; fav?: boolean; onToggleFav?: () => void; pinned?: boolean; onTogglePin?: () => void; onClick: () => void }) {
   return (
     <div className={`card${round ? " round" : ""}`} onClick={onClick}>
       <div className="cover">{coverUrl ? <img src={coverUrl} alt="" loading="lazy" /> : <Icon name={icon} size={44} />}
+        {onTogglePin && <PinButton on={!!pinned} onToggle={onTogglePin} />}
         {onToggleFav && <FavHeart on={!!fav} onToggle={onToggleFav} />}
       </div>
       <div className="t">{title}</div>
@@ -386,9 +410,14 @@ function FacetCard({ coverUrl, icon, title, sub, round, fav, onToggleFav, onClic
 
 type Facet = { kind: "genre"; name: string } | { kind: "decade"; decade: number };
 
-type FavProps = { favs: Favorites; onToggleFav: (kind: FavKind, id: string) => void };
+type LibProps = {
+  favs: Favorites;
+  onToggleFav: (kind: FavKind, id: string) => void;
+  pins: Pins;
+  onTogglePin: (kind: PinKind, id: string) => void;
+};
 
-function Home({ state, sources, favs, onToggleFav, playTrack, playAll, openSource, openArtist, openAlbum }: { state: PlayerState | null; sources: Source[]; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; openSource: (id: string) => void; openArtist: (a: { id: string; name: string }) => void; openAlbum: (a: { id: string; title: string; artist: string }) => void } & FavProps) {
+function Home({ state, sources, favs, onToggleFav, pins, onTogglePin, playTrack, playAll, openSource, openArtist, openAlbum }: { state: PlayerState | null; sources: Source[]; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; openSource: (id: string) => void; openArtist: (a: { id: string; name: string }) => void; openAlbum: (a: { id: string; title: string; artist: string }) => void } & LibProps) {
   const [albums, setAlbums] = useState<Album[]>([]);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [artists, setArtists] = useState<Artist[]>([]);
@@ -411,6 +440,8 @@ function Home({ state, sources, favs, onToggleFav, playTrack, playAll, openSourc
         playAll={playAll}
         favs={favs}
         onToggleFav={onToggleFav}
+        pins={pins}
+        onTogglePin={onTogglePin}
         onBack={() => setFacet(null)}
         onOpenAlbum={openAlbum}
       />
@@ -419,9 +450,21 @@ function Home({ state, sources, favs, onToggleFav, playTrack, playAll, openSourc
 
   const favAlbums = albums.filter((a) => favs.albums.includes(a.id));
   const favArtists = artists.filter((a) => favs.artists.includes(a.id));
+  const pinnedAlbums = pins.albums.map((id) => albums.find((a) => a.id === id)).filter((a): a is Album => !!a);
 
   return (
     <div>
+      {pinnedAlbums.length > 0 && (
+        <Rail title={t("Épinglés")}>
+          {pinnedAlbums.slice(0, 14).map((a) => (
+            <FacetCard key={a.id} coverUrl={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} icon="note" title={a.title}
+              sub={`${a.artist}${a.year ? ` · ${a.year}` : ""}`}
+              fav={favs.albums.includes(a.id)} onToggleFav={() => onToggleFav("album", a.id)}
+              pinned onTogglePin={() => onTogglePin("album", a.id)}
+              onClick={() => openAlbum({ id: a.id, title: a.title, artist: a.artist })} />
+          ))}
+        </Rail>
+      )}
       {state?.current && (
         <Rail title={t("En lecture")}>
           <div className="card" onClick={() => playTrack(state.current!)}>
@@ -450,6 +493,7 @@ function Home({ state, sources, favs, onToggleFav, playTrack, playAll, openSourc
             <FacetCard key={a.id} coverUrl={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} icon="note" title={a.title}
               sub={`${a.artist}${a.year ? ` · ${a.year}` : ""}`}
               fav onToggleFav={() => onToggleFav("album", a.id)}
+              pinned={pins.albums.includes(a.id)} onTogglePin={() => onTogglePin("album", a.id)}
               onClick={() => openAlbum({ id: a.id, title: a.title, artist: a.artist })} />
           ))}
         </Rail>
@@ -489,6 +533,8 @@ function Home({ state, sources, favs, onToggleFav, playTrack, playAll, openSourc
             sub={`${a.artist}${a.year ? ` · ${a.year}` : ""}`}
             fav={favs.albums.includes(a.id)}
             onToggleFav={() => onToggleFav("album", a.id)}
+            pinned={pins.albums.includes(a.id)}
+            onTogglePin={() => onTogglePin("album", a.id)}
             onClick={() => openAlbum({ id: a.id, title: a.title, artist: a.artist })} />
         ))}
         {albums.length === 0 && <div className="empty">{t("Scannez une source pour remplir la bibliothèque.")}</div>}
@@ -518,7 +564,7 @@ function Home({ state, sources, favs, onToggleFav, playTrack, playAll, openSourc
 }
 
 /// Vue d'une facette (genre ou décennie) : en-tête + albums concernés + titres.
-function FacetView({ facet, playTrack, playAll, favs, onToggleFav, onBack, onOpenAlbum }: { facet: Facet; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; onBack: () => void; onOpenAlbum: (a: { id: string; title: string; artist: string }) => void } & FavProps) {
+function FacetView({ facet, playTrack, playAll, favs, onToggleFav, pins, onTogglePin, onBack, onOpenAlbum }: { facet: Facet; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; onBack: () => void; onOpenAlbum: (a: { id: string; title: string; artist: string }) => void } & LibProps) {
   const [tracks, setTracks] = useState<Track[] | null>(null);
   const [albums, setAlbums] = useState<Album[]>([]);
   const title = facet.kind === "genre" ? facet.name : t("Années {y}", { y: facet.decade });
@@ -552,6 +598,7 @@ function FacetView({ facet, playTrack, playAll, favs, onToggleFav, onBack, onOpe
             {facetAlbums.map((a) => (
               <div key={a.id} className="card" onClick={() => onOpenAlbum({ id: a.id, title: a.title, artist: a.artist })}>
                 <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+                  <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
                   <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
                 </div>
                 <div className="t">{a.title}</div>
@@ -567,7 +614,7 @@ function FacetView({ facet, playTrack, playAll, favs, onToggleFav, onBack, onOpe
   );
 }
 
-function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendingArtist, onPendingArtistDone, pendingAlbum, onPendingAlbumDone, favs, onToggleFav }: { playTrack: (t: Track) => void; playAll: (t: Track[]) => void; say: (m: string) => void; refresh: () => Promise<void>; searchNonce: number; searchQ: string; pendingArtist: { id: string; name: string } | null; onPendingArtistDone: () => void; pendingAlbum: { id: string; title: string; artist: string } | null; onPendingAlbumDone: () => void } & FavProps) {
+function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendingArtist, onPendingArtistDone, pendingAlbum, onPendingAlbumDone, favs, onToggleFav, pins, onTogglePin }: { playTrack: (t: Track) => void; playAll: (t: Track[]) => void; say: (m: string) => void; refresh: () => Promise<void>; searchNonce: number; searchQ: string; pendingArtist: { id: string; name: string } | null; onPendingArtistDone: () => void; pendingAlbum: { id: string; title: string; artist: string } | null; onPendingAlbumDone: () => void } & LibProps) {
   const [tab, setTab] = useState<"tracks" | "albums" | "artists">("tracks");
   const [tracks, setTracks] = useState<Track[]>([]);
   const [albums, setAlbums] = useState<Album[]>([]);
@@ -620,10 +667,10 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
     } catch (e) { say(e instanceof Error ? e.message : String(e)); setScanning(false); }
   };
   if (albumDetail) {
-    return <AlbumView id={albumDetail.id} title={albumDetail.title} artist={albumDetail.artist} playAll={playAll} playTrack={playTrack} say={say} favs={favs} onToggleFav={onToggleFav} onBack={() => setAlbumDetail(null)} />;
+    return <AlbumView id={albumDetail.id} title={albumDetail.title} artist={albumDetail.artist} playAll={playAll} playTrack={playTrack} say={say} favs={favs} onToggleFav={onToggleFav} pins={pins} onTogglePin={onTogglePin} onBack={() => setAlbumDetail(null)} />;
   }
   if (artistDetail) {
-    return <ArtistView id={artistDetail.id} name={artistDetail.name} playAll={playAll} playTrack={playTrack} favs={favs} onToggleFav={onToggleFav} onBack={() => setArtistDetail(null)} onOpenAlbum={(a) => setAlbumDetail(a)} />;
+    return <ArtistView id={artistDetail.id} name={artistDetail.name} playAll={playAll} playTrack={playTrack} favs={favs} onToggleFav={onToggleFav} pins={pins} onTogglePin={onTogglePin} onBack={() => setArtistDetail(null)} onOpenAlbum={(a) => setAlbumDetail(a)} />;
   }
   const ql = q.trim().toLowerCase();
   const hitArtists = searching ? artists.filter((a) => a.name.toLowerCase().includes(ql)) : artists;
@@ -650,6 +697,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
             {hitAlbums.map((a) => (
               <div key={a.id} className="card" onClick={() => setAlbumDetail({ id: a.id, title: a.title, artist: a.artist })}>
                 <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+                  <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
                   <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
                 </div>
                 <div className="t">{a.title}</div>
@@ -673,6 +721,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
           {albums.map((a) => (
             <div key={a.id} className="card" onClick={() => setAlbumDetail({ id: a.id, title: a.title, artist: a.artist })}>
               <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+                <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
                 <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
               </div>
               <div className="t">{a.title}</div>
@@ -693,7 +742,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
 }
 
 
-function ArtistView({ id, name, playAll, playTrack, favs, onToggleFav, onBack, onOpenAlbum }: { id: string; name: string; playAll: (t: Track[]) => void; playTrack: (t: Track) => void; onBack: () => void; onOpenAlbum: (a: { id: string; title: string; artist: string }) => void } & FavProps) {
+function ArtistView({ id, name, playAll, playTrack, favs, onToggleFav, pins, onTogglePin, onBack, onOpenAlbum }: { id: string; name: string; playAll: (t: Track[]) => void; playTrack: (t: Track) => void; onBack: () => void; onOpenAlbum: (a: { id: string; title: string; artist: string }) => void } & LibProps) {
   const [detail, setDetail] = useState<ArtistDetail | null>(null);
   useEffect(() => { api.artist(id).then(setDetail).catch(() => {}); }, [id]);
   const tracks = detail?.tracks ?? [];
@@ -733,6 +782,7 @@ function ArtistView({ id, name, playAll, playTrack, favs, onToggleFav, onBack, o
             {albums.map((a) => (
               <div key={a.id} className="card" onClick={() => onOpenAlbum({ id: a.id, title: a.title, artist: a.artist })}>
                 <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+                  <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
                   <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
                 </div>
                 <div className="t">{a.title}</div>
@@ -748,7 +798,7 @@ function ArtistView({ id, name, playAll, playTrack, favs, onToggleFav, onBack, o
   );
 }
 
-function AlbumView({ id, title, artist, playAll, playTrack, say, favs, onToggleFav, onBack }: { id: string; title: string; artist: string; playAll: (t: Track[]) => void; playTrack: (t: Track) => void; say: (m: string) => void; onBack: () => void } & FavProps) {
+function AlbumView({ id, title, artist, playAll, playTrack, say, favs, onToggleFav, pins, onTogglePin, onBack }: { id: string; title: string; artist: string; playAll: (t: Track[]) => void; playTrack: (t: Track) => void; say: (m: string) => void; onBack: () => void } & LibProps) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [cover, setCover] = useState<string | null>(null);
   useEffect(() => {
@@ -772,7 +822,7 @@ function AlbumView({ id, title, artist, playAll, playTrack, say, favs, onToggleF
           } catch (e) { say(e instanceof Error ? e.message : String(e)); }
         }}><Icon name="share" size={16} /> Partager</button>
       </div>
-      <h1>{title} <FavHeart on={favs.albums.includes(id)} onToggle={() => onToggleFav("album", id)} /></h1>
+      <h1>{title} <PinButton on={pins.albums.includes(id)} onToggle={() => onTogglePin("album", id)} /> <FavHeart on={favs.albums.includes(id)} onToggle={() => onToggleFav("album", id)} /></h1>
       <h2 style={{ marginTop: 0 }}>{artist}</h2>
       <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={onToggleFav} albumCover={cover} />
     </div>
@@ -780,7 +830,7 @@ function AlbumView({ id, title, artist, playAll, playTrack, say, favs, onToggleF
 }
 
 /// Vue Favoris (#68) : albums, artistes et titres aimés, résolus côté serveur.
-function FavoritesView({ playTrack, playAll, favs, onToggleFav, openAlbum, openArtist }: { playTrack: (t: Track) => void; playAll: (t: Track[]) => void; openAlbum: (a: { id: string; title: string; artist: string }) => void; openArtist: (a: { id: string; name: string }) => void } & FavProps) {
+function FavoritesView({ playTrack, playAll, favs, onToggleFav, pins, onTogglePin, openAlbum, openArtist }: { playTrack: (t: Track) => void; playAll: (t: Track[]) => void; openAlbum: (a: { id: string; title: string; artist: string }) => void; openArtist: (a: { id: string; name: string }) => void } & LibProps) {
   const [data, setData] = useState<FavoritesResolved | null>(null);
   useEffect(() => { api.favoritesResolved().then(setData).catch(() => setData({ tracks: [], albums: [], artists: [] })); }, [favs]);
   const empty = !data || (data.tracks.length === 0 && data.albums.length === 0 && data.artists.length === 0);
@@ -798,6 +848,8 @@ function FavoritesView({ playTrack, playAll, favs, onToggleFav, openAlbum, openA
                 {data.albums.map((a) => (
                   <div key={a.id} className="card" onClick={() => openAlbum({ id: a.id, title: a.title, artist: a.artist })}>
                     <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+                      <PinButton on onToggle={() => onTogglePin("album", a.id)} />
+                      <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
                       <FavHeart on onToggle={() => onToggleFav("album", a.id)} />
                     </div>
                     <div className="t">{a.title}</div>
@@ -1078,7 +1130,7 @@ type RadioMenuState = { x: number; y: number; target: MenuTarget } | null;
 
 type DirData = DirTag[] | DirCountry[] | DirStation[];
 
-function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void }) {
+function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | null; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; pins: Pins; onTogglePin: (kind: PinKind, id: string) => void }) {
   const [list, setList] = useState<RadioList | null>(null);
   const [menu, setMenu] = useState<RadioMenuState>(null);
   const [view, setView] = useState("root");
@@ -1099,7 +1151,7 @@ function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () =
 
   // chargement de la sous-vue annuaire (top/popular/genres/pays/recherche…)
   useEffect(() => {
-    if (view === "root" || view === "fav" || view === "builtin" || view === "sources") return;
+    if (view === "root" || view === "pinned" || view === "fav" || view === "builtin" || view === "sources") return;
     let cancelled = false;
     setDirLoading(true);
     const load = async () => {
@@ -1139,6 +1191,9 @@ function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () =
   const playStation = (st: DirStation) => act(() => api.playRadioUrl(st.name, st.url), `Lecture de « ${st.name} »`);
   const targetUrl = (t: MenuTarget) => (t.kind === "entry" ? t.entry.url : t.station.url);
   const targetName = (t: MenuTarget) => (t.kind === "entry" ? t.entry.name : t.station.name);
+  /// ID d'épingle d'une radio (#70) : id d'entrée, ou URL pour une station de l'annuaire.
+  const targetPinId = (t: MenuTarget) => (t.kind === "entry" ? t.entry.id : t.station.url);
+  const isPinned = (t: MenuTarget) => pins.radios.includes(targetPinId(t));
   const playTarget = (t: MenuTarget) => (t.kind === "entry" ? play(t.entry) : playStation(t.station));
   const isFavUrl = (u: string) => list?.favorites.some((f) => f.url === u) ?? false;
   const addFav = async (t: MenuTarget) => {
@@ -1209,6 +1264,7 @@ function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () =
   );
 
   const viewTitle = () => {
+    if (view === "pinned") return t("Radios épinglées");
     if (view === "fav") return t("Mes radios");
     if (view === "builtin") return t("Radios par défaut");
     if (view === "sources") return t("Sources radio");
@@ -1223,6 +1279,7 @@ function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () =
   };
 
   const tiles = [
+    { id: "pinned", icon: "pin", label: t("Épinglées"), sub: t("{count} radio(s)", { count: pins.radios.length }) },
     { id: "fav", icon: "heart", label: t("Mes radios"), sub: t("{count} radio(s)", { count: list?.favorites.length ?? 0 }) },
     { id: "builtin", icon: "radio", label: t("Radios par défaut"), sub: t("{count} radio(s)", { count: list?.builtin.length ?? 0 }) },
     { id: "sources", icon: "server", label: t("Sources radio"), sub: t("{count} source(s)", { count: list?.sources.length ?? 0 }) },
@@ -1245,8 +1302,34 @@ function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () =
     }
   };
 
+  const pinnedEntries = (): RadioEntry[] => {
+    if (!list) return [];
+    const all = [...list.favorites, ...list.builtin, ...list.sources];
+    return pins.radios
+      .map((pid) => all.find((r) => r.id === pid))
+      .filter((r): r is RadioEntry => !!r);
+  };
+
   const subView = () => {
     if (!list) return <div className="empty">{t("Chargement…")}</div>;
+    if (view === "pinned") {
+      const entries = pinnedEntries();
+      const urls = pins.radios.filter((pid) => !entries.some((r) => r.id === pid));
+      return (
+        <>
+          {entries.length === 0 && urls.length === 0 && <div className="empty">{t("Aucune radio épinglée — menu ⋮ d'une radio puis « Épingler ».")}</div>}
+          {entries.map(row)}
+          {urls.map((u) => (
+            <div key={u} className="browse-row" onClick={() => act(() => api.playRadioUrl(u, u), `Lecture de « ${u} »`)} title={u}>
+              <span className="row-ico"><Icon name="radio" size={20} /></span>
+              <span className="name">{u}</span>
+              <span className="meta">{t("épinglée")}</span>
+              <button className="icon-btn" title={t("Retirer des épingles")} onClick={(ev) => { ev.stopPropagation(); onTogglePin("radio", u); }}><Icon name="pin" size={16} filled /></button>
+            </div>
+          ))}
+        </>
+      );
+    }
     if (view === "fav") return list.favorites.length ? list.favorites.map(row) : <div className="empty">{t("Aucune radio favorite — ajoutez-en via « Ajouter une radio » ou le menu ⋮ d'une radio.")}</div>;
     if (view === "builtin") return list.builtin.map(row);
     if (view === "sources") return list.sources.length ? list.sources.map(row) : <div className="empty">{t("Aucune source radio configurée.")}</div>;
@@ -1314,6 +1397,7 @@ function Radios({ state, act, say }: { state: PlayerState | null; act: (fn: () =
               {tgt.kind === "entry" && tgt.entry.origin === "favorite" && (
                 <div className="ctx-item" onClick={() => { delFav(tgt.entry); closeMenu(); }}><Icon name="trash" size={16} /> {t("Supprimer des favoris")}</div>
               )}
+              <div className="ctx-item" onClick={() => { onTogglePin("radio", targetPinId(tgt)); closeMenu(); }}><Icon name="pin" size={16} filled={isPinned(tgt)} /> {isPinned(tgt) ? t("Retirer des épingles") : t("Épingler")}</div>
             </div>
           </>
         );
@@ -1367,7 +1451,7 @@ function Queue({ state, act, say, playAll }: { state: PlayerState | null; act: (
 
 // ---------- Listes de lecture ----------
 
-function Playlists({ act, say, playAll, playTrack }: { act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; playAll: (t: Track[]) => void; playTrack: (t: Track) => void }) {
+function Playlists({ act, say, playAll, playTrack, pins, onTogglePin }: { act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; playAll: (t: Track[]) => void; playTrack: (t: Track) => void; pins: Pins; onTogglePin: (kind: PinKind, id: string) => void }) {
   const [pls, setPls] = useState<{ id: string; name: string; track_ids: string[]; created_at: number }[]>([]);
   const [detail, setDetail] = useState<PlaylistDetail | null>(null);
   const load = useCallback(() => { api.playlists().then(setPls).catch(() => {}); }, []);
@@ -1402,9 +1486,11 @@ function Playlists({ act, say, playAll, playTrack }: { act: (fn: () => Promise<u
     <div>
       {pls.length === 0 && <div className="empty">Aucune liste — enregistrez la file d'attente pour en créer une.</div>}
       <div className="grid">
-        {pls.map((p) => (
+        {[...pls].sort((a, b) => (pins.playlists.includes(b.id) ? 1 : 0) - (pins.playlists.includes(a.id) ? 1 : 0)).map((p) => (
           <div key={p.id} className="card" onClick={() => api.playlist(p.id).then(setDetail).catch((e) => say(String(e)))}>
-            <div className="cover"><Icon name="playlist" size={44} /></div>
+            <div className="cover"><Icon name="playlist" size={44} />
+              <PinButton on={pins.playlists.includes(p.id)} onToggle={() => onTogglePin("playlist", p.id)} />
+            </div>
             <div className="t">{p.name}</div>
             <div className="s">{p.track_ids.length} titre(s)</div>
           </div>

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use auris_core::{
     Album, Artist, AurisError, DecadeFacet, FavKind, Favorites, GenreFacet, HistoryEntry,
-    LibraryStats, Playlist, Result, ShareKind, ShareLink, Source, Track,
+    LibraryStats, PinKind, Pins, Playlist, Result, ShareKind, ShareLink, Source, Track,
 };
 use auris_player::probe_meta;
 use auris_sources::{make_uri, SourcesManager};
@@ -42,6 +42,8 @@ const TREE_HISTORY: &str = "history";
 const HISTORY_KEY: &str = "all";
 /// Historique d'écoute : nombre max d'entrées conservées (#69).
 const HISTORY_CAP: usize = 500;
+const TREE_PINS: &str = "pins";
+const PINS_KEY: &str = "all";
 
 pub struct Library {
     db: sled::Db,
@@ -78,6 +80,7 @@ impl Library {
             TREE_BIOS,
             TREE_FAVS,
             TREE_HISTORY,
+            TREE_PINS,
         ] {
             db.open_tree(t)
                 .map_err(|e| AurisError::Storage(e.to_string()))?;
@@ -657,6 +660,67 @@ impl Library {
         self.history(limit)
             .into_iter()
             .filter_map(|e| self.track(&e.track_id).map(|t| (t, e.played_at)))
+            .collect()
+    }
+
+    // ---------- épingles (#70) ----------
+
+    /// Épingles courantes (listes d'IDs, ordre d'ajout).
+    pub fn pins(&self) -> Pins {
+        self.tree(TREE_PINS)
+            .get(PINS_KEY)
+            .ok()
+            .flatten()
+            .and_then(|b| dec::<Pins>(&b).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_pins(&self, p: &Pins) -> Result<()> {
+        self.tree(TREE_PINS).insert(PINS_KEY, enc(p)?).map_err(se)?;
+        Ok(())
+    }
+
+    /// Bascule une épingle. Retourne `true` si la ressource est maintenant épinglée.
+    pub fn toggle_pin(&self, kind: PinKind, id: &str) -> Result<bool> {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(AurisError::other("id vide".to_string()));
+        }
+        let mut p = self.pins();
+        let list = match kind {
+            PinKind::Album => &mut p.albums,
+            PinKind::Playlist => &mut p.playlists,
+            PinKind::Radio => &mut p.radios,
+        };
+        let on = match list.iter().position(|x| x == id) {
+            Some(i) => {
+                list.remove(i);
+                false
+            }
+            None => {
+                list.push(id.to_string());
+                true
+            }
+        };
+        self.save_pins(&p)?;
+        Ok(on)
+    }
+
+    /// Albums épinglés résolus (ordre d'épinglage, IDs inconnus ignorés).
+    pub fn pinned_albums(&self) -> Vec<Album> {
+        self.pins()
+            .albums
+            .iter()
+            .filter_map(|id| self.album(id).map(|(a, _)| a))
+            .collect()
+    }
+
+    /// Playlists épinglées résolues (ordre d'épinglage).
+    pub fn pinned_playlists(&self) -> Vec<Playlist> {
+        self.pins()
+            .playlists
+            .iter()
+            .filter_map(|id| self.playlist(id).map(|(p, _)| p))
             .collect()
     }
 
