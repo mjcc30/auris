@@ -447,6 +447,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/radios/dir/genres", get(radios::get_dir_genres))
         .route("/api/radios/dir/countries", get(radios::get_dir_countries))
         .route("/api/radios/dir/stations", get(radios::get_dir_stations))
+        .route("/api/radios/selection", get(radios::get_selection))
+        .route("/api/radios/artist", get(radios::get_artist_radio))
+        .route("/api/radios/artist-radio", post(radios::post_artist_radio))
         .route("/api/radios/play-url", post(radios::post_play_url))
         // rip CD (whipper) — #27
         .route("/api/ripcd/status", get(ripcd::get_status))

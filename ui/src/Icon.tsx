@@ -53,6 +53,8 @@ export function Icon({ name, size = 24, filled = false, className = "" }: { name
     trophy: (<><path d="M7 4h10v4a5 5 0 0 1-10 0V4z" /><path d="M7 5H4a3 3 0 0 0 3 4M17 5h3a3 3 0 0 1-3 4" /><path d="M12 13v4" /><path d="M8 21h8M10 17h4v4h-4z" /></>),
     marker: (<><path d="M12 21c-4-4.5-7-8-7-11a7 7 0 0 1 14 0c0 3-3 6.5-7 11z" /><circle cx="12" cy="10" r="2.5" /></>),
     puzzle: (<><path d="M10 3.5a2 2 0 0 1 4 0V5h4a1.5 1.5 0 0 1 1.5 1.5V10h-1.5a2 2 0 0 0 0 4h1.5v4.5A1.5 1.5 0 0 1 18 20h-4v-1.5a2 2 0 0 0-4 0V20H6a1.5 1.5 0 0 1-1.5-1.5V14H6a2 2 0 0 0 0-4H4.5V6.5A1.5 1.5 0 0 1 6 5h4V3.5z" /></>),
+    sparkles: (<><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" /><path d="M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" /></>),
+    user: (<><circle cx="12" cy="8" r="4" /><path d="M4 20c1.5-3.5 4.5-5 8-5s6.5 1.5 8 5" /></>),
   };
   return (
     <svg

@@ -263,6 +263,26 @@ export interface DirCountry {
   count: number;
 }
 
+export interface DirSection {
+  name: string;
+  stations: DirStation[];
+}
+
+/** Radio contextuelle d'un artiste (#78) : genre retenu + stations. */
+export interface ArtistRadio {
+  artist: string;
+  tag: string;
+  stations: DirStation[];
+}
+
+/** Résultat du lancement d'une radio d'artiste (#78). */
+export interface ArtistRadioPlayed {
+  artist: string;
+  tag: string;
+  count: number;
+  state: PlayerState;
+}
+
 export interface DirStation {
   id: string;
   name: string;
@@ -791,6 +811,9 @@ export const api = {
   radiosDirCountries: () => req<DirCountry[]>("/api/radios/dir/countries"),
   radiosDirStations: (kind: string, value = "", limit = 100) =>
     req<DirStation[]>(`/api/radios/dir/stations?kind=${encodeURIComponent(kind)}&value=${encodeURIComponent(value)}&limit=${limit}`),
+  radiosSelection: () => req<DirSection[]>("/api/radios/selection"),
+  artistRadio: (name: string) => req<ArtistRadio>(`/api/radios/artist?name=${encodeURIComponent(name)}`),
+  playArtistRadio: (name: string) => req<ArtistRadioPlayed>("/api/radios/artist-radio", post({ name })),
   browseTree: (uri: string) => req<BrowseEntry[]>(`/api/browse/tree?uri=${encodeURIComponent(uri)}`),
   usbDevices: () => req<MountInfo[]>("/api/usb/devices"),
   /** Découverte SSDP des serveurs UPnP/DLNA du LAN (cache 30 s côté serveur). */

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type InputDevice, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type InputDevice, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirSection, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -242,6 +242,20 @@ export default function App() {
     try { await fn(); if (okMsg) say(okMsg); await refresh(); }
     catch (e) { say(e instanceof Error ? e.message : String(e)); }
   }, [refresh, say]);
+
+  // Radio contextuelle d'un artiste (#78) — émise par les lignes de pistes.
+  useEffect(() => {
+    const h = (e: Event) => {
+      const artist = (e as CustomEvent<string>).detail;
+      if (!artist) return;
+      act(async () => {
+        const r = await api.playArtistRadio(artist);
+        say(t("Radio « {tag} » lancée pour « {artist} » ({count} radios)", { tag: r.tag, artist: r.artist, count: r.count }));
+      });
+    };
+    window.addEventListener("auris:artist-radio", h);
+    return () => window.removeEventListener("auris:artist-radio", h);
+  }, [act, say]);
 
   const updateSettings = async (patch: (s: Settings) => Settings, okMsg?: string) => {
     if (!settings) return;
@@ -1111,7 +1125,15 @@ function TrackTable({ tracks, current, playTrack, playAll, albumCover, favs, onT
             <td>{tr.title}</td><td>{tr.artist}</td><td>{tr.album}</td>
             <td><span className="badge">{tr.format ? fmtFormat(tr.format) : ""}</span></td>
             <td className="num-time">{tr.duration_secs != null ? fmtTime(tr.duration_secs) : "—"}</td>
-            <td className="num">{favs && onToggleFav && <FavHeart on={favs.tracks.includes(tr.id)} onToggle={() => onToggleFav("track", tr.id)} />}</td>
+            <td className="num">
+              {tr.artist && (
+                <button className="icon-btn" title={t("Lancer une radio basée sur {artist}", { artist: tr.artist })}
+                  onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent("auris:artist-radio", { detail: tr.artist })); }}>
+                  <Icon name="radio" size={16} />
+                </button>
+              )}
+              {favs && onToggleFav && <FavHeart on={favs.tracks.includes(tr.id)} onToggle={() => onToggleFav("track", tr.id)} />}
+            </td>
           </tr>
         ))}
       </tbody>
@@ -1344,7 +1366,7 @@ type MenuTarget =
   | { kind: "station"; station: DirStation };
 type RadioMenuState = { x: number; y: number; target: MenuTarget } | null;
 
-type DirData = DirTag[] | DirCountry[] | DirStation[];
+type DirData = DirTag[] | DirCountry[] | DirStation[] | DirSection[];
 
 // ---------- Plugins communautaires (#8) ----------
 
@@ -1576,7 +1598,8 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
     const load = async () => {
       try {
         let data: DirData;
-        if (view === "genres") data = await api.radiosDirGenres();
+        if (view === "selection") data = await api.radiosSelection();
+        else if (view === "genres") data = await api.radiosDirGenres();
         else if (view === "countries") data = await api.radiosDirCountries();
         else if (view === "top") data = await api.radiosDirStations("top");
         else if (view === "top500") data = await api.radiosDirStations("top", "", 500);
@@ -1685,6 +1708,7 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
   );
 
   const viewTitle = () => {
+    if (view === "selection") return t("Sélection Auris");
     if (view === "pinned") return t("Radios épinglées");
     if (view === "fav") return t("Mes radios");
     if (view === "top") return t("Top radios");
@@ -1712,6 +1736,7 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
   };
 
   const tiles = [
+    { id: "selection", icon: "sparkles", label: t("Sélection Auris"), sub: t("sélection éditoriale") },
     { id: "pinned", icon: "pin", label: t("Épinglées"), sub: t("{count} radio(s)", { count: pins.radios.length }) },
     { id: "fav", icon: "heart", label: t("Mes radios"), sub: t("{count} radio(s)", { count: list?.favorites.length ?? 0 }) },
     { id: "builtin", icon: "radio", label: t("Radios par défaut"), sub: t("{count} radio(s)", { count: list?.builtin.length ?? 0 }) },
@@ -1722,12 +1747,22 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
     { id: "popular", icon: "flame", label: t("Radios populaires"), sub: t("les plus écoutées") },
     { id: "genres", icon: "note", label: t("Par genre"), sub: t("rock, jazz, classique…") },
     { id: "countries", icon: "globe", label: t("Par pays"), sub: t("du monde entier") },
+    { id: "__artist", icon: "user", label: t("Radio d'artiste…"), sub: t("basée sur un artiste") },
     { id: "__search", icon: "search", label: t("Rechercher"), sub: t("par nom de radio") },
     { id: "__add", icon: "plus", label: t("Ajouter une radio"), sub: t("URL de flux personnalisée") },
   ];
 
   const onTile = (id: string) => {
-    if (id === "__search") {
+    if (id === "__artist") {
+      const a = window.prompt(t("Radio basée sur quel artiste ?"));
+      if (a && a.trim()) {
+        const name = a.trim();
+        act(async () => {
+          const r = await api.playArtistRadio(name);
+          say(t("Radio « {tag} » lancée pour « {artist} » ({count} radios)", { tag: r.tag, artist: r.artist, count: r.count }));
+        });
+      }
+    } else if (id === "__search") {
       const q = window.prompt(t("Rechercher une radio (nom) :"));
       if (q && q.trim()) setView(`search:${q.trim()}`);
     } else if (id === "__add") {
@@ -1779,6 +1814,19 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
     // ne rend les données de l'annuaire que si elles correspondent à la vue courante
     const data = dir && dir.view === view ? dir.data : null;
     if (dirLoading || !data) return <div className="empty">{t("Chargement de l'annuaire…")}</div>;
+    if (view === "selection") {
+      const sections = data as DirSection[];
+      return (
+        <>
+          {sections.map((sec) => (
+            <div key={sec.name}>
+              <h3 style={{ margin: "14px 4px 6px", textTransform: "capitalize" }}>{sec.name}</h3>
+              {sec.stations.map(stationRow)}
+            </div>
+          ))}
+        </>
+      );
+    }
     if (view === "genres") return (data as DirTag[]).map(tagRow);
     if (view === "countries") return (data as DirCountry[]).map(countryRow);
     const stations = data as DirStation[];

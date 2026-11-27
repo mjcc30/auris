@@ -344,20 +344,27 @@ fn dir_fetch(path: &str) -> auris_core::Result<String> {
         .map_err(|e| AurisError::other(format!("radio-browser {path}: {e}")))
 }
 
-/// GET sur l'annuaire avec cache mémoire (TTL en secondes).
-async fn dir_get(path: &str, ttl: i64) -> ApiResult<String> {
+/// GET bloquant sur l'annuaire avec cache mémoire (TTL en secondes).
+/// Appelé depuis `dir_get` (async, via `offload_io`) ou directement dans une
+/// tâche bloquante (résolution radio d'artiste #78).
+fn dir_get_sync(path: &str, ttl: i64) -> auris_core::Result<String> {
     if let Some((ts, body)) = DIR_CACHE.lock().unwrap().get(path) {
         if now_secs() - *ts < ttl {
             return Ok(body.clone());
         }
     }
-    let p = path.to_string();
-    let body = crate::offload_io(move || dir_fetch(&p)).await?;
+    let body = dir_fetch(path)?;
     DIR_CACHE
         .lock()
         .unwrap()
         .insert(path.to_string(), (now_secs(), body.clone()));
     Ok(body)
+}
+
+/// GET sur l'annuaire avec cache mémoire (TTL en secondes).
+async fn dir_get(path: &str, ttl: i64) -> ApiResult<String> {
+    let p = path.to_string();
+    crate::offload_io(move || dir_get_sync(&p, ttl)).await
 }
 
 /// `GET /api/radios/dir/genres` — tags triés par nombre de stations.
@@ -448,33 +455,37 @@ pub async fn get_dir_stations(
         }
     };
     let body = dir_get(&path, 300).await?;
-    let raw: Vec<RawStation> = serde_json::from_str(&body)
+    Ok(Json(parse_stations(&body)?))
+}
+
+/// Transforme le JSON brut de radio-browser en stations exploitables.
+fn parse_stations(body: &str) -> auris_core::Result<Vec<DirStation>> {
+    let raw: Vec<RawStation> = serde_json::from_str(body)
         .map_err(|e| AurisError::other(format!("radio-browser stations: {e}")))?;
-    Ok(Json(
-        raw.into_iter()
-            .filter_map(|s| {
-                let url = if s.url_resolved.trim().is_empty() {
-                    s.url
-                } else {
-                    s.url_resolved
-                };
-                if s.name.trim().is_empty() || url.trim().is_empty() {
-                    return None;
-                }
-                Some(DirStation {
-                    id: s.stationuuid,
-                    name: s.name,
-                    url,
-                    favicon: s.favicon,
-                    bitrate: s.bitrate,
-                    codec: s.codec,
-                    tags: s.tags,
-                    country: s.country,
-                    votes: s.votes,
-                })
+    Ok(raw
+        .into_iter()
+        .filter_map(|s| {
+            let url = if s.url_resolved.trim().is_empty() {
+                s.url
+            } else {
+                s.url_resolved
+            };
+            if s.name.trim().is_empty() || url.trim().is_empty() {
+                return None;
+            }
+            Some(DirStation {
+                id: s.stationuuid,
+                name: s.name,
+                url,
+                favicon: s.favicon,
+                bitrate: s.bitrate,
+                codec: s.codec,
+                tags: s.tags,
+                country: s.country,
+                votes: s.votes,
             })
-            .collect(),
-    ))
+        })
+        .collect())
 }
 
 #[derive(Debug, Deserialize)]
@@ -501,4 +512,207 @@ pub async fn post_play_url(
     let t = radio_track(&name, &url);
     s.engine.play_queue(vec![t], 0);
     Ok(Json(s.engine.state()))
+}
+
+// ---------- Sélection éditoriale + radio d'artiste (#78) ----------
+
+/// Section de la sélection éditoriale : un genre et ses meilleures radios.
+#[derive(Debug, Serialize)]
+pub struct DirSection {
+    pub name: String,
+    pub stations: Vec<DirStation>,
+}
+
+/// Genres mis en avant dans la « Sélection Auris » (tile éditoriale, #78).
+const SELECTION_TAGS: &[&str] = &[
+    "jazz",
+    "classical",
+    "rock",
+    "news",
+    "france",
+    "world",
+    "ambient",
+    "electronic",
+];
+
+/// `GET /api/radios/selection` — sélections éditoriales par genre, triées par
+/// votes radio-browser, dédoublonnées entre sections.
+pub async fn get_selection() -> ApiResult<Json<Vec<DirSection>>> {
+    let sections = crate::offload_io(|| {
+        let mut out: Vec<DirSection> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for tag in SELECTION_TAGS {
+            let path = format!(
+                "/stations/bytagexact/{}?hidebroken=true&order=votes&reverse=true&limit=8",
+                pct(tag)
+            );
+            let body = dir_get_sync(&path, 1800)?;
+            let mut stations = parse_stations(&body)?;
+            stations.retain(|st| seen.insert(st.url.clone()));
+            if !stations.is_empty() {
+                out.push(DirSection {
+                    name: (*tag).to_string(),
+                    stations,
+                });
+            }
+        }
+        Ok(out)
+    })
+    .await?;
+    Ok(Json(sections))
+}
+
+/// Base de l'API MusicBrainz (tags d'artistes, sans clé).
+const MB_BASE: &str = "https://musicbrainz.org/ws/2";
+
+/// Requête GET bloquante sur MusicBrainz (User-Agent obligatoire côté MB).
+fn mb_fetch(path: &str) -> auris_core::Result<String> {
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(15))
+        .user_agent(concat!(
+            "auris/",
+            env!("CARGO_PKG_VERSION"),
+            " (https://auris.audio)"
+        ))
+        .build()
+        .map_err(|e| AurisError::other(format!("client musicbrainz: {e}")))?;
+    let url = format!("{MB_BASE}{path}");
+    let resp = client
+        .get(&url)
+        .send()
+        .map_err(|e| AurisError::other(format!("musicbrainz {path}: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(AurisError::other(format!(
+            "musicbrainz {path}: HTTP {}",
+            resp.status()
+        )));
+    }
+    resp.text()
+        .map_err(|e| AurisError::other(format!("musicbrainz {path}: {e}")))
+}
+
+#[derive(Debug, Deserialize)]
+struct MbTag {
+    name: String,
+    #[serde(default)]
+    count: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct MbArtist {
+    #[serde(default)]
+    tags: Vec<MbTag>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MbSearch {
+    #[serde(default)]
+    artists: Vec<MbArtist>,
+}
+
+/// Réponse de `GET /api/radios/artist?name=…` : genre retenu + radios du genre.
+#[derive(Debug, Serialize)]
+pub struct ArtistRadio {
+    pub artist: String,
+    pub tag: String,
+    pub stations: Vec<DirStation>,
+}
+
+/// Réponse de `POST /api/radios/artist-radio` : la radio est lancée.
+#[derive(Debug, Serialize)]
+pub struct ArtistRadioPlayed {
+    pub artist: String,
+    pub tag: String,
+    pub count: i64,
+    pub state: PlayerState,
+}
+
+/// Résout un artiste en genre musical (tags MusicBrainz) puis en radios
+/// web de ce genre (radio-browser, triées par votes). Bloquant : à appeler
+/// via `crate::offload_io`.
+fn resolve_artist_radio(name: &str) -> auris_core::Result<ArtistRadio> {
+    let q = format!(
+        "/artist/?query=artist:%22{}%22&fmt=json&limit=3&inc=tags",
+        pct(name)
+    );
+    let body = mb_fetch(&q)?;
+    let parsed: MbSearch = serde_json::from_str(&body)
+        .map_err(|e| AurisError::other(format!("musicbrainz artist: {e}")))?;
+    // tags de l'artiste, triés par pertinence (count MB), en minuscules
+    let mut tags: Vec<(String, i64)> = parsed
+        .artists
+        .iter()
+        .flat_map(|a| a.tags.iter())
+        .map(|t| (t.name.trim().to_lowercase(), t.count))
+        .filter(|(n, _)| !n.is_empty())
+        .collect();
+    tags.sort_by_key(|a| std::cmp::Reverse(a.1));
+    let mut seen = std::collections::HashSet::new();
+    tags.retain(|(n, _)| seen.insert(n.clone()));
+    tags.truncate(8);
+    // premier tag ayant suffisamment de radios dans l'annuaire
+    for (tag, _) in &tags {
+        let path = format!(
+            "/stations/bytagexact/{}?hidebroken=true&order=votes&reverse=true&limit=12",
+            pct(tag)
+        );
+        if let Ok(body) = dir_get_sync(&path, 300) {
+            if let Ok(stations) = parse_stations(&body) {
+                if stations.len() >= 3 {
+                    return Ok(ArtistRadio {
+                        artist: name.to_string(),
+                        tag: tag.clone(),
+                        stations,
+                    });
+                }
+            }
+        }
+    }
+    Err(AurisError::other(format!(
+        "aucune radio trouvée pour l'artiste « {name} »"
+    )))
+}
+
+/// `GET /api/radios/artist?name=…` — stations du genre de l'artiste (#78).
+pub async fn get_artist_radio(
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiResult<Json<ArtistRadio>> {
+    let name = q.get("name").cloned().unwrap_or_default();
+    let n = name.clone();
+    let radio = crate::offload_io(move || resolve_artist_radio(&n)).await?;
+    Ok(Json(radio))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ArtistRadioBody {
+    pub name: String,
+}
+
+/// `POST /api/radios/artist-radio {"name": "…"}` — lance une radio contextuelle
+/// : la file devient les meilleures radios du genre de l'artiste (#78).
+pub async fn post_artist_radio(
+    State(s): State<AppState>,
+    Json(b): Json<ArtistRadioBody>,
+) -> ApiResult<Json<ArtistRadioPlayed>> {
+    let name = b.name.trim().to_string();
+    if name.is_empty() {
+        return Err(AurisError::InvalidUri("name requis".into()).into());
+    }
+    let n = name.clone();
+    let radio = crate::offload_io(move || resolve_artist_radio(&n)).await?;
+    let count = radio.stations.len() as i64;
+    let tracks: Vec<Track> = radio
+        .stations
+        .iter()
+        .take(8)
+        .map(|st| radio_track(&st.name, &st.url))
+        .collect();
+    s.engine.play_queue(tracks, 0);
+    Ok(Json(ArtistRadioPlayed {
+        artist: radio.artist,
+        tag: radio.tag,
+        count,
+        state: s.engine.state(),
+    }))
 }
