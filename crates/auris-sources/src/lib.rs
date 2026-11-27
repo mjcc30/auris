@@ -19,6 +19,7 @@ pub use usb::{discover_removable, MountInfo};
 use async_trait::async_trait;
 use auris_core::{AurisError, BrowseEntry, Result};
 use std::io::{Read, Seek};
+use std::path::PathBuf;
 
 /// Flux binaire seekable (implante Read + Seek + Send + Sync).
 pub trait SeekRead: Read + Seek + Send + Sync {}
@@ -97,6 +98,13 @@ pub trait SourceBackend: Send + Sync {
     async fn list(&self, rel_path: &str) -> Result<Vec<BrowseEntry>>;
     /// Ouvre un fichier relatif a la racine de la source.
     async fn open(&self, rel_path: &str) -> Result<Box<dyn SeekRead>>;
+    /// Chemin local absolu du fichier, si la source est un montage local/USB
+    /// (`None` pour SMB/HTTP/UPnP/radio). Sert au repli ffmpeg : avec un path,
+    /// `ffmpeg -ss <s> -i <path>` seek nativement dans le conteneur (#54) ;
+    /// sans path, le flux est pipe et le seek re-decode depuis le debut.
+    fn local_path(&self, _rel_path: &str) -> Option<PathBuf> {
+        None
+    }
     /// Taille d'un fichier, si connue.
     async fn size(&self, _rel_path: &str) -> Result<Option<u64>> {
         Ok(None)

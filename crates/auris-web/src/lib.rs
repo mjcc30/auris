@@ -26,7 +26,7 @@ use auris_core::{
 };
 use auris_library::Library;
 use auris_player::{
-    probe_meta, wasapi_dop, wasapi_exclusive, AudioOutput, PlayerEngine, TrackMeta,
+    probe_meta_with_path, wasapi_dop, wasapi_exclusive, AudioOutput, PlayerEngine, TrackMeta,
 };
 use auris_sources::{discover_removable, SourcesManager};
 use auris_updater::Updater;
@@ -1114,10 +1114,14 @@ async fn probe_track_meta(s: &AppState, t: &Track) -> ApiResult<TrackMeta> {
         .next()
         .unwrap_or("")
         .to_string();
-    tokio::task::spawn_blocking(move || probe_meta(reader, &ext).map(|(m, _, _)| m))
-        .await
-        .map_err(|e| AurisError::other(format!("join sonde: {e}")))?
-        .map_err(ApiError)
+    // Chemin local si dispo : ffprobe lit le fichier directement (#54).
+    let local_path = s.sources.local_path_for_uri(&t.uri);
+    tokio::task::spawn_blocking(move || {
+        probe_meta_with_path(reader, &ext, local_path).map(|(m, _, _)| m)
+    })
+    .await
+    .map_err(|e| AurisError::other(format!("join sonde: {e}")))?
+    .map_err(ApiError)
 }
 
 /// GET /api/lyrics/{track_id} — paroles d'une piste.

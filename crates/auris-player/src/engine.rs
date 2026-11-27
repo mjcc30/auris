@@ -14,7 +14,7 @@ use auris_sources::SourcesManager;
 use ringbuf::traits::{Observer, Producer};
 use tokio::sync::broadcast;
 
-use crate::decoder::{open_decoder, Chunk, Decoder, OutputSpec, TrackMeta};
+use crate::decoder::{open_decoder_with_path, Chunk, Decoder, OutputSpec, TrackMeta};
 use crate::eq::{EqBandParams, EqConfig};
 use crate::output::{make_ring, AudioOutput, Cons, Prod};
 
@@ -168,13 +168,17 @@ fn spawn_worker(
             .next()
             .unwrap_or("")
             .to_string();
-        let mut decoder: Box<dyn Decoder> = match open_decoder(reader, &ext, TrackMeta::default()) {
-            Ok(d) => d,
-            Err(e) => {
-                let _ = msg_tx.send(WorkerMsg::Error(format!("decode {uri}: {e}")));
-                return;
-            }
-        };
+        // Chemin local si la source est un montage local/USB : le repli ffmpeg
+        // seek alors nativement dans le conteneur au lieu de re-decoder (#54).
+        let local_path = sources.local_path_for_uri(&uri);
+        let mut decoder: Box<dyn Decoder> =
+            match open_decoder_with_path(reader, &ext, TrackMeta::default(), local_path) {
+                Ok(d) => d,
+                Err(e) => {
+                    let _ = msg_tx.send(WorkerMsg::Error(format!("decode {uri}: {e}")));
+                    return;
+                }
+            };
         let spec = decoder.spec();
         let meta = Box::new(decoder.meta().clone());
         let duration = decoder.duration_secs();

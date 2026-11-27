@@ -10,7 +10,7 @@ use auris_core::{
     LibraryStats, PinKind, Pins, Playlist, Result, SearchGroup, SearchResults, ShareKind,
     ShareLink, Source, Track,
 };
-use auris_player::probe_meta;
+use auris_player::probe_meta_with_path;
 use auris_sources::{make_uri, SourcesManager};
 
 /// Etat d'un scan en cours (expose a l'UI).
@@ -1012,7 +1012,9 @@ async fn probe_and_store(db: &sled::Db, sources: &Arc<SourcesManager>, uri: &str
         .next()
         .unwrap_or("")
         .to_string();
-    let (meta, _spec, dur) = probe_meta(reader, &ext)?;
+    // Chemin local si dispo : ffprobe sonde le fichier directement (#54).
+    let local_path = sources.local_path_for_uri(uri);
+    let (meta, _spec, dur) = probe_meta_with_path(reader, &ext, local_path)?;
     let (source_id, rel) =
         auris_sources::parse_src_uri(uri).ok_or_else(|| AurisError::InvalidUri(uri.into()))?;
     let mut t = Track::new(uri.to_string(), source_id);

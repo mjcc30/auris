@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -25,13 +25,28 @@ use crate::decoder::{ChunkData, Decoder, OutputSpec, TrackMeta};
 #[derive(Clone)]
 pub struct SharedReader {
     inner: Arc<Mutex<Box<dyn SeekRead>>>,
+    local_path: Option<PathBuf>,
 }
 
 impl SharedReader {
     pub fn new(r: Box<dyn SeekRead>) -> Self {
         SharedReader {
             inner: Arc::new(Mutex::new(r)),
+            local_path: None,
         }
+    }
+    /// Attache le chemin local du fichier (source local/USB) : le repli ffmpeg
+    /// lira alors le fichier directement (`-i <path>`) au lieu du pipe, ce qui
+    /// rend ffprobe et le seek natifs et instantanés (#54).
+    pub fn with_local_path(r: Box<dyn SeekRead>, path: PathBuf) -> Self {
+        SharedReader {
+            inner: Arc::new(Mutex::new(r)),
+            local_path: Some(path),
+        }
+    }
+    /// Chemin local du fichier sous-jacent, si connu.
+    pub fn local_path(&self) -> Option<&Path> {
+        self.local_path.as_deref()
     }
     fn lock(&self) -> std::sync::MutexGuard<'_, Box<dyn SeekRead>> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
@@ -129,7 +144,9 @@ fn bits_from_stream(st: &serde_json::Value) -> u8 {
     }
 }
 
-/// Sonde un flux via ffprobe (lit depuis pipe:0, le lecteur revient au debut ensuite).
+/// Sonde un flux via ffprobe. Si la source a un chemin local (#54), ffprobe
+/// lit le fichier directement (`-i <path>`, seekable) ; sinon le flux est
+/// pipe depuis `pipe:0` (le lecteur revient au debut ensuite).
 fn run_ffprobe(src: SharedReader) -> Result<ProbeInfo> {
     let ffprobe = ffprobe_path().ok_or_else(|| {
         AurisError::UnsupportedFormat(
@@ -137,41 +154,56 @@ fn run_ffprobe(src: SharedReader) -> Result<ProbeInfo> {
         )
     })?;
     src.rewind()?;
-    let mut child = Command::new(ffprobe)
-        .args([
-            "-v",
-            "error",
-            "-print_format",
-            "json",
-            "-show_format",
-            "-show_streams",
-            "pipe:0",
-        ])
-        .stdin(Stdio::piped())
+    let mut cmd = Command::new(ffprobe);
+    cmd.args([
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+    ]);
+    let direct = src.local_path().map(|p| p.to_path_buf());
+    match &direct {
+        Some(p) => {
+            cmd.arg(p);
+        }
+        None => {
+            cmd.arg("pipe:0");
+            cmd.stdin(Stdio::piped());
+        }
+    }
+    let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| AurisError::Decode(format!("spawn ffprobe: {e}")))?;
-    let mut stdin = child.stdin.take().unwrap();
-    let mut src2 = src.clone();
-    let feeder = std::thread::spawn(move || {
-        let mut buf = [0u8; 65536];
-        loop {
-            match src2.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if stdin.write_all(&buf[..n]).is_err() {
-                        break;
+    let feeder = if direct.is_none() {
+        let mut stdin = child.stdin.take().unwrap();
+        let mut src2 = src.clone();
+        Some(std::thread::spawn(move || {
+            let mut buf = [0u8; 65536];
+            loop {
+                match src2.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if stdin.write_all(&buf[..n]).is_err() {
+                            break;
+                        }
                     }
+                    Err(_) => break,
                 }
-                Err(_) => break,
             }
-        }
-    });
+        }))
+    } else {
+        None
+    };
     let out = child
         .wait_with_output()
         .map_err(|e| AurisError::Decode(format!("ffprobe: {e}")))?;
-    let _ = feeder.join();
+    if let Some(f) = feeder {
+        let _ = f.join();
+    }
     src.rewind()?;
     if !out.status.success() {
         return Err(AurisError::UnsupportedFormat(
@@ -281,41 +313,44 @@ fn count_decoded_frames(src: SharedReader, channels: u8) -> Result<u64> {
         AurisError::UnsupportedFormat("ffmpeg introuvable (AURIS_FFMPEG ou PATH)".into())
     })?;
     src.rewind()?;
-    let mut child = Command::new(ffmpeg)
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            "pipe:0",
-            "-vn",
-            "-f",
-            "f32le",
-            "-acodec",
-            "pcm_f32le",
-            "pipe:1",
-        ])
-        .stdin(Stdio::piped())
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args(["-hide_banner", "-loglevel", "error"]);
+    let direct = src.local_path().map(|p| p.to_path_buf());
+    match &direct {
+        Some(p) => {
+            cmd.arg("-i").arg(p);
+        }
+        None => {
+            cmd.arg("-i").arg("pipe:0");
+            cmd.stdin(Stdio::piped());
+        }
+    }
+    cmd.args(["-vn", "-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"]);
+    let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| AurisError::Decode(format!("spawn ffmpeg: {e}")))?;
-    let mut stdin = child.stdin.take().unwrap();
-    let mut src2 = src.clone();
-    let feeder = std::thread::spawn(move || {
-        let mut buf = [0u8; 65536];
-        loop {
-            match src2.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if stdin.write_all(&buf[..n]).is_err() {
-                        break;
+    let feeder = if direct.is_none() {
+        let mut stdin = child.stdin.take().unwrap();
+        let mut src2 = src.clone();
+        Some(std::thread::spawn(move || {
+            let mut buf = [0u8; 65536];
+            loop {
+                match src2.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if stdin.write_all(&buf[..n]).is_err() {
+                            break;
+                        }
                     }
+                    Err(_) => break,
                 }
-                Err(_) => break,
             }
-        }
-    });
+        }))
+    } else {
+        None
+    };
     let mut stdout = child.stdout.take().unwrap();
     let mut total = 0u64;
     let mut buf = [0u8; 65536];
@@ -327,7 +362,9 @@ fn count_decoded_frames(src: SharedReader, channels: u8) -> Result<u64> {
         }
     }
     let _ = child.wait();
-    let _ = feeder.join();
+    if let Some(f) = feeder {
+        let _ = f.join();
+    }
     src.rewind()?;
     Ok(total / 4 / channels.max(1) as u64)
 }
@@ -355,6 +392,9 @@ pub fn ffmpeg_probe(src: SharedReader) -> Result<(TrackMeta, OutputSpec, Option<
 /// Decodeur PCM base sur un processus ffmpeg (`-f f32le` en sortie).
 pub struct FfmpegDecoder {
     src: SharedReader,
+    /// Chemin local du fichier (#54) : si present, ffmpeg lit le fichier
+    /// directement et un seek devient un `-ss` en entree (natif, instantané).
+    local_path: Option<PathBuf>,
     spec: OutputSpec,
     duration: Option<f64>,
     meta: TrackMeta,
@@ -373,6 +413,7 @@ impl FfmpegDecoder {
                 "ffmpeg introuvable (definir AURIS_FFMPEG ou installer ffmpeg)".into(),
             ));
         }
+        let local_path = src.local_path().map(|p| p.to_path_buf());
         let info = run_ffprobe(src.clone())?;
         let spec = OutputSpec {
             rate: info.rate,
@@ -389,6 +430,7 @@ impl FfmpegDecoder {
         };
         let mut d = FfmpegDecoder {
             src,
+            local_path,
             spec,
             duration,
             meta: meta_from_probe(&info),
@@ -413,11 +455,26 @@ impl FfmpegDecoder {
         let ffmpeg = ffmpeg_path().unwrap();
         let mut cmd = Command::new(ffmpeg);
         cmd.args(["-hide_banner", "-loglevel", "error"]);
-        cmd.arg("-i").arg("pipe:0");
-        if ss > 0.0 {
-            // seek en sortie (apres -i) : un pipe n'est pas seekable, un -ss
-            // en entree ne produirait aucun octet.
-            cmd.arg("-ss").arg(format!("{ss:.3}"));
+        let direct = self.local_path.clone();
+        match &direct {
+            Some(p) => {
+                // Fichier local : `-ss` AVANT `-i` = seek natif du conteneur,
+                // quasi instantané même sur un gros fichier (#54). L'entree
+                // n'est plus un pipe : pas de feeder.
+                if ss > 0.0 {
+                    cmd.arg("-ss").arg(format!("{ss:.3}"));
+                }
+                cmd.arg("-i").arg(p);
+            }
+            None => {
+                cmd.arg("-i").arg("pipe:0");
+                cmd.stdin(Stdio::piped());
+                if ss > 0.0 {
+                    // seek en sortie (apres -i) : un pipe n'est pas seekable, un -ss
+                    // en entree ne produirait aucun octet.
+                    cmd.arg("-ss").arg(format!("{ss:.3}"));
+                }
+            }
         }
         cmd.args([
             "-vn",
@@ -430,29 +487,32 @@ impl FfmpegDecoder {
             "pipe:1",
         ]);
         let mut child = cmd
-            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| AurisError::Decode(format!("spawn ffmpeg: {e}")))?;
-        let mut stdin = child.stdin.take().unwrap();
-        let mut src = self.src.clone();
-        let feeder = std::thread::spawn(move || {
-            let mut buf = [0u8; 65536];
-            loop {
-                match src.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if stdin.write_all(&buf[..n]).is_err() {
-                            break;
+        let feeder = if direct.is_none() {
+            let mut stdin = child.stdin.take().unwrap();
+            let mut src = self.src.clone();
+            Some(std::thread::spawn(move || {
+                let mut buf = [0u8; 65536];
+                loop {
+                    match src.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if stdin.write_all(&buf[..n]).is_err() {
+                                break;
+                            }
                         }
+                        Err(_) => break,
                     }
-                    Err(_) => break,
                 }
-            }
-        });
+            }))
+        } else {
+            None
+        };
         self.child = Some(child);
-        self.feeder = Some(feeder);
+        self.feeder = feeder;
         Ok(())
     }
 

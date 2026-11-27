@@ -1,6 +1,7 @@
 //! Gestionnaire des sources: registre id -> backend, resolution d'URI.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use auris_core::{AurisError, BrowseEntry, Result, Source, SourceKind};
@@ -167,6 +168,16 @@ impl SourcesManager {
                     Ok(Box::new(f))
                 }
             }
+        }
+    }
+
+    /// Chemin local absolu derrière un URI `src://`, si la source est un
+    /// montage local/USB. `None` pour SMB/HTTP/UPnP/radio et les URI invalides.
+    /// Utilisé par le repli ffmpeg pour un seek natif instantané (#54).
+    pub fn local_path_for_uri(&self, uri: &str) -> Option<PathBuf> {
+        match resolve_uri(uri).ok()? {
+            UriRef::Src { source_id, path } => self.backend(&source_id)?.local_path(&path),
+            UriRef::Http(_) => None,
         }
     }
 

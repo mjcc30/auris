@@ -71,3 +71,33 @@ async fn local_list_walk_open() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn local_path_renseigne_pour_source_locale() {
+    let root = unique_tmp("lp");
+    std::fs::create_dir_all(&root).unwrap();
+    let src = Source::new_local("t", root.to_str().unwrap());
+    let backend = LocalSource::new(src).unwrap();
+    // chemin relatif résolu sous la racine
+    assert_eq!(backend.local_path("a/b.flac"), Some(root.join("a/b.flac")));
+    // sortie de racine refusée -> None
+    assert_eq!(backend.local_path("../escape"), None);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn local_path_for_uri_manager() {
+    let root = unique_tmp("lpm");
+    std::fs::create_dir_all(&root).unwrap();
+    let src = Source::new_local("t", root.to_str().unwrap());
+    let id = src.id.clone();
+    let mgr = auris_sources::SourcesManager::new(vec![src]).unwrap();
+    // src:// local -> Some(chemin absolu)
+    let uri = auris_sources::make_uri(&id, "x.opus");
+    assert_eq!(mgr.local_path_for_uri(&uri), Some(root.join("x.opus")));
+    // http / source inconnue / uri invalide -> None (retombe sur le pipe, #54)
+    assert_eq!(mgr.local_path_for_uri("http://example.com/x.opus"), None);
+    assert_eq!(mgr.local_path_for_uri("src://inconnue/x.opus"), None);
+    assert_eq!(mgr.local_path_for_uri("pas-un-uri"), None);
+    let _ = std::fs::remove_dir_all(&root);
+}

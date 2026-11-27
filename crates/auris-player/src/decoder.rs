@@ -393,11 +393,26 @@ pub fn open_decoder(
     ext: &str,
     meta: TrackMeta,
 ) -> Result<Box<dyn Decoder>> {
+    open_decoder_with_path(reader, ext, meta, None)
+}
+
+/// Variante de [`open_decoder`] avec le chemin local du fichier (#54) :
+/// le repli ffmpeg lit alors le fichier directement (`-i <path>`), ce qui rend
+/// le seek natif et instantané au lieu d'un re-decodage depuis le debut.
+pub fn open_decoder_with_path(
+    reader: Box<dyn SeekRead>,
+    ext: &str,
+    meta: TrackMeta,
+    local_path: Option<std::path::PathBuf>,
+) -> Result<Box<dyn Decoder>> {
     let ext = ext.to_ascii_lowercase();
     if ext == "dsf" || ext == "dff" {
         return Ok(Box::new(DsdDecoder::new(reader, meta)?));
     }
-    let shared = crate::ffmpeg::SharedReader::new(reader);
+    let shared = match local_path {
+        Some(p) => crate::ffmpeg::SharedReader::with_local_path(reader, p),
+        None => crate::ffmpeg::SharedReader::new(reader),
+    };
     match PcmDecoder::new(Box::new(shared.clone()), &ext) {
         Ok(d) => Ok(Box::new(d)),
         Err(e) => match crate::ffmpeg::FfmpegDecoder::new(shared) {
@@ -424,6 +439,16 @@ pub fn probe_meta(
     reader: Box<dyn SeekRead>,
     ext: &str,
 ) -> Result<(TrackMeta, OutputSpec, Option<f64>)> {
+    probe_meta_with_path(reader, ext, None)
+}
+
+/// Variante de [`probe_meta`] avec le chemin local du fichier (#54) : ffprobe
+/// sonde alors le fichier directement au lieu du pipe.
+pub fn probe_meta_with_path(
+    reader: Box<dyn SeekRead>,
+    ext: &str,
+    local_path: Option<std::path::PathBuf>,
+) -> Result<(TrackMeta, OutputSpec, Option<f64>)> {
     let ext_l = ext.to_ascii_lowercase();
     if ext_l == "dsf" || ext_l == "dff" {
         let d = DsdDecoder::new(reader, TrackMeta::default())?;
@@ -437,7 +462,10 @@ pub fn probe_meta(
         });
         return Ok((meta, spec, dur));
     }
-    let shared = crate::ffmpeg::SharedReader::new(reader);
+    let shared = match local_path {
+        Some(p) => crate::ffmpeg::SharedReader::with_local_path(reader, p),
+        None => crate::ffmpeg::SharedReader::new(reader),
+    };
     match PcmDecoder::new(Box::new(shared.clone()), &ext_l) {
         Ok(pcm) => {
             let meta = pcm.meta().clone();

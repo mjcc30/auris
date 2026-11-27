@@ -10,7 +10,10 @@ pub mod output;
 pub mod wasapi_dop;
 pub mod wasapi_exclusive;
 
-pub use decoder::{open_decoder, probe_meta, Chunk, ChunkData, Decoder, OutputSpec, TrackMeta};
+pub use decoder::{
+    open_decoder, open_decoder_with_path, probe_meta, probe_meta_with_path, Chunk, ChunkData,
+    Decoder, OutputSpec, TrackMeta,
+};
 pub use engine::{Command, PlayerEngine, WorkerMsg};
 pub use eq::{Biquad, EqBandParams, EqChain, EqConfig, EqProcessor};
 pub use ffmpeg::SharedReader;

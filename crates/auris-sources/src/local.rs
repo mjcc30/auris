@@ -131,6 +131,10 @@ impl SourceBackend for LocalSource {
         Ok(Box::new(BufReader::with_capacity(256 * 1024, f)))
     }
 
+    fn local_path(&self, rel_path: &str) -> Option<std::path::PathBuf> {
+        self.abs(rel_path).ok()
+    }
+
     async fn size(&self, rel_path: &str) -> Result<Option<u64>> {
         Ok(fs::metadata(self.abs(rel_path)?).ok().map(|m| m.len()))
     }
@@ -177,6 +181,9 @@ impl SourceBackend for UsbSource {
     }
     async fn open(&self, rel_path: &str) -> Result<Box<dyn SeekRead>> {
         self.inner.open(rel_path).await
+    }
+    fn local_path(&self, rel_path: &str) -> Option<std::path::PathBuf> {
+        self.inner.local_path(rel_path)
     }
     async fn size(&self, rel_path: &str) -> Result<Option<u64>> {
         self.inner.size(rel_path).await
