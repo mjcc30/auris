@@ -57,7 +57,8 @@ jobs:
       - name: compresse
         run: |
           img="auris-${{ matrix.type }}-${{ steps.ver.outputs.version }}.img"
-          xz -T0 -k -9 "$img"
+          # -c : xz tente sinon de chown le .xz (interdit hors root sur le runner)
+          xz -T0 -9 -c "$img" > "$img.xz"
       - uses: actions/upload-artifact@v4
         with:
           name: auris-${{ matrix.type }}-${{ steps.ver.outputs.version }}
