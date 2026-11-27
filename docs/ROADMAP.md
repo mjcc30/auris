@@ -127,18 +127,21 @@ Livré dans cette beta :
   paquets `.deb` (amd64/arm64) et `.rpm` (x86_64/aarch64) publiés à chaque release avec
   `checksums.txt` et `.sha256`, signature GPG optionnelle (secrets), formule Homebrew
   (`packaging/brew/auris.rb` + tap `mjcc30/homebrew-auris`), manifeste winget
-  (`packaging/winget/mjcc30.Auris.yaml` → PR `microsoft/winget-pkgs`), scripts de mise à
-  jour auto (`update-formula.py`, `update-manifest.py`, `update-spec.py`), lint
-  `packaging/lint.py` en CI. Pipeline images disque prête (#46) : `packaging/image/build-image.sh`
-  + workflow `image.yml` (PC x86_64 Debian bootable, RPi arm64 Raspberry Pi OS Lite, artefacts
-  `.img.xz` attachés à la release) — build CI à valider sur une vraie exécution.
+  (`packaging/winget/mjcc30.Auris.yaml` → PR `microsoft/winget-pkgs`), installeur Windows
+  `.exe` (Inno Setup), bundle Flatpak, flake Nix, scripts de mise à jour auto
+  (`update-formula.py`, `update-manifest.py`, `update-spec.py`, `update-iss.py`,
+  `update-flatpak.py`, `update-nix.py`), lint `packaging/lint.py` en CI.
+- **Images disque prêtes à flasher** (#46) : `packaging/image/build-image.sh` + workflow
+  `image.yml` — validé en CI (run du 27/11/2026) : `auris-pc-v0.8.0.img.xz` (Debian x86_64
+  bootable) et `auris-rpi-v0.8.0.img.xz` (Raspberry Pi OS Lite arm64, ssh au 1er boot),
+  publiés avec `.sha256` sur la release.
 - À part : **plugin YouTube Music (compte Google + cookies)** dans un repo plugin
   séparé (catégorie `source`, manifeste `auris-plugin.toml`) — voir issue dédiée.
 
-Reste du backlog embarqué dans cette beta (milestone v0.9.0) : #46 images disque
-(artefact à produire/valider), #24 Spotify Connect, #25 Tidal & Qobuz, #28 Cast
-(Chromecast/AirPlay), #34 sortie Bluetooth, #42 affichage HDMI, #43 GPIO/IR,
-#44 Ethernet+Wi-Fi, #83 éditorial Qobuz, #88 plugin YT Music.
+Reste du backlog embarqué dans cette beta (milestone v0.9.0) : #24 Spotify Connect,
+#25 Tidal & Qobuz, #28 Cast (Chromecast/AirPlay), #34 sortie Bluetooth,
+#42 affichage HDMI, #43 GPIO/IR, #44 Ethernet+Wi-Fi, #83 éditorial Qobuz,
+#88 plugin YT Music.
 
 ## Au-delà (idées, non planifiées)
 
