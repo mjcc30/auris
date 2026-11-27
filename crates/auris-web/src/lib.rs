@@ -466,8 +466,18 @@ pub fn router(state: AppState) -> Router {
         .route("/api/radios/{id}/play", post(radios::post_radio_play))
         // packs d'interface (thèmes CSS + langues) embarqués ou communautaires
         .route("/api/packs", get(packs::get_packs))
-        .route("/api/packs/theme/{file}", get(packs::get_theme_css))
-        .route("/api/packs/locale/{file}", get(packs::get_locale_json))
+        .route(
+            "/api/packs/theme/{file}",
+            get(packs::get_theme_css)
+                .post(packs::post_theme)
+                .delete(packs::delete_theme),
+        )
+        .route(
+            "/api/packs/locale/{file}",
+            get(packs::get_locale_json)
+                .post(packs::post_locale)
+                .delete(packs::delete_locale),
+        )
         .route("/api/upnp/discover", get(get_upnp_discover))
         .route("/api/usb/devices", get(get_usb_devices))
         // import / export

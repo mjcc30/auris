@@ -2294,6 +2294,33 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
   const loadShares = useCallback(() => { api.listShares().then(setShares).catch(() => {}); }, []);
   useEffect(() => { loadShares(); }, [loadShares]);
 
+  // Édition de packs communautaires (thème CSS / pack de langue) — #41.
+  const [packKind, setPackKind] = useState<"theme" | "locale">("theme");
+  const [packId, setPackId] = useState("");
+  const [packBody, setPackBody] = useState("");
+  const [packBusy, setPackBusy] = useState(false);
+  const savePack = async () => {
+    const id = packId.trim();
+    if (!id || !packBody.trim() || packBusy) return;
+    setPackBusy(true);
+    try {
+      if (packKind === "theme") await api.saveThemePack(id, packBody);
+      else await api.saveLocalePack(id, packBody);
+      say(t("Pack « {id} » enregistré", { id }));
+      setPackId(""); setPackBody("");
+      await refresh();
+    } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+    finally { setPackBusy(false); }
+  };
+  const delPack = async (kind: "theme" | "locale", id: string) => {
+    try {
+      if (kind === "theme") await api.deleteThemePack(id);
+      else await api.deleteLocalePack(id);
+      say(t("Pack « {id} » supprimé", { id }));
+      await refresh();
+    } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+  };
+
   // Statut DoP/WASAPI des périphériques (Windows uniquement).
   const [dop, setDop] = useState<DopStatus | null>(null);
   const [dopRate, setDopRate] = useState(176400);
@@ -2569,6 +2596,39 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
           </SetRow>
         ),
       ].filter(Boolean) as React.ReactNode[],
+    },
+    {
+      title: t("Packs communautaires"),
+      rows: ([
+        <SetRow key="pack-edit" label={t("Nouveau pack")} desc={t("Thème CSS ou pack de langue JSON — utilisable ensuite dans la section Apparence ci-dessus")}>
+          <div className="seg" style={{ marginRight: 8 }}>
+            <button className={`seg-btn ${packKind === "theme" ? "active" : ""}`} onClick={() => setPackKind("theme")}>{t("Thème CSS")}</button>
+            <button className={`seg-btn ${packKind === "locale" ? "active" : ""}`} onClick={() => setPackKind("locale")}>{t("Langue JSON")}</button>
+          </div>
+          <input type="text" value={packId} placeholder={packKind === "theme" ? "mon-theme" : "pt-BR"} style={{ width: 120 }}
+            onChange={(e) => setPackId(e.target.value)} />
+        </SetRow>,
+        <div key="pack-body" style={{ margin: "-6px 4px 10px" }}>
+          <textarea value={packBody} rows={6} style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }}
+            placeholder={packKind === "theme"
+              ? t("/* variables CSS : --accent, --bg, --panel, --text… */")
+              : t('{ "Clé française": "traduction" }')}
+            onChange={(e) => setPackBody(e.target.value)} />
+          <button className="btn sm" disabled={packBusy || !packId.trim() || !packBody.trim()} onClick={savePack}>
+            <Icon name="download" size={14} /> {packBusy ? t("Enregistrement…") : t("Enregistrer le pack")}
+          </button>
+        </div>,
+        ...(packs?.themes.filter((th) => !th.builtin).map((th) => (
+          <SetRow key={`th-${th.id}`} label={`${t("Thème")} : ${th.id}`} desc={t("Pack déposé dans <data-dir>/themes")}>
+            <button className="btn ghost sm" onClick={() => delPack("theme", th.id)}><Icon name="trash" size={14} /> {t("Supprimer")}</button>
+          </SetRow>
+        )) ?? []),
+        ...(packs?.locales.filter((lo) => !lo.builtin).map((lo) => (
+          <SetRow key={`lo-${lo.id}`} label={`${t("Langue")} : ${lo.id}`} desc={t("Pack déposé dans <data-dir>/locales")}>
+            <button className="btn ghost sm" onClick={() => delPack("locale", lo.id)}><Icon name="trash" size={14} /> {t("Supprimer")}</button>
+          </SetRow>
+        )) ?? []),
+      ] as React.ReactNode[]),
     },
     {
       title: t("Système"),

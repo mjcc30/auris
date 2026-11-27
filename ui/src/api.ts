@@ -721,7 +721,9 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     } catch { /* garde le status */ }
     throw new Error(msg);
   }
-  return r.json() as Promise<T>;
+  if (r.status === 204) return null as T;
+  const txt = await r.text();
+  return (txt ? JSON.parse(txt) : null) as T;
 }
 
 export const api = {
@@ -862,6 +864,12 @@ export const api = {
   loudnessOf: (trackId: string) =>
     req<{ track_id: string; lufs: number | null; cached_count: number }>(`/api/library/loudness/${encodeURIComponent(trackId)}`),
   packs: () => req<Packs>("/api/packs"),
+  saveThemePack: (id: string, css: string) =>
+    req<PackEntry>(`/api/packs/theme/${encodeURIComponent(id)}`, postText(css, "text/css; charset=utf-8")),
+  deleteThemePack: (id: string) => req<null>(`/api/packs/theme/${encodeURIComponent(id)}`, { ...del(), body: undefined }),
+  saveLocalePack: (lang: string, json: string) =>
+    req<PackEntry>(`/api/packs/locale/${encodeURIComponent(lang)}`, postText(json, "application/json; charset=utf-8")),
+  deleteLocalePack: (lang: string) => req<null>(`/api/packs/locale/${encodeURIComponent(lang)}`, { ...del(), body: undefined }),
   alarms: () => req<AlarmsInfo>("/api/alarms"),
   updateSettings: (s: Settings) =>
     req<Settings>("/api/settings", {
@@ -920,6 +928,10 @@ function post(body: unknown): RequestInit {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   };
+}
+
+function postText(body: string, contentType: string): RequestInit {
+  return { method: "POST", headers: { "Content-Type": contentType }, body };
 }
 
 function del(): RequestInit {

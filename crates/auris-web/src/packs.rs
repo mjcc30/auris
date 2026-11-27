@@ -20,7 +20,7 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::{AppState, UiAssets};
+use crate::{ApiResult, AppState, UiAssets};
 
 /// Entrée de pack exposé à l'UI.
 #[derive(Debug, Serialize)]
@@ -214,4 +214,199 @@ pub async fn get_locale_json(
         true,
         "application/json; charset=utf-8",
     )
+}
+
+// ---------- Création / suppression de packs communautaires (#41) ----------
+
+/// Taille max d'un pack déposé : 256 Ko.
+const MAX_PACK_BYTES: usize = 256 * 1024;
+
+/// Valide un id de pack communautaire : `[a-z0-9-]` (majuscules autorisées pour
+/// les codes langue), 1..=64 caractères, et pas un id réservé/embarqué.
+fn valid_custom_id(id: &str, upper: bool, reserved: &[&str], builtin: &[String]) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id.chars().all(|c| {
+            c.is_ascii_lowercase()
+                || c.is_ascii_digit()
+                || c == '-'
+                || (upper && c.is_ascii_uppercase())
+        })
+        && !reserved.contains(&id)
+        && !builtin.iter().any(|b| b == id)
+}
+
+/// Ids des thèmes embarqués dans l'UI (ui/dist/themes/*.css).
+fn builtin_theme_ids() -> Vec<String> {
+    UiAssets::iter()
+        .filter_map(|f| {
+            f.strip_prefix("themes/")
+                .and_then(|r| safe_stem(r, ".css", false))
+        })
+        .collect()
+}
+
+/// `POST /api/packs/theme/{id}` — enregistre un thème CSS communautaire
+/// (`<data-dir>/themes/{id}.css`). Body = CSS brut.
+pub async fn post_theme(
+    State(s): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    body: String,
+) -> ApiResult<Json<PackEntry>> {
+    let reserved: Vec<&str> = RESERVED_THEMES.iter().map(|(id, _)| *id).collect();
+    if !valid_custom_id(&id, false, &reserved, &builtin_theme_ids()) {
+        return Err(auris_core::AurisError::InvalidUri(format!(
+            "id de thème invalide (attendu [a-z0-9-], non réservé) : {id}"
+        ))
+        .into());
+    }
+    if body.len() > MAX_PACK_BYTES {
+        return Err(auris_core::AurisError::other(format!(
+            "thème trop volumineux ({} o > {MAX_PACK_BYTES} o)",
+            body.len()
+        ))
+        .into());
+    }
+    let dir = s.data_dir.join("themes");
+    let file = format!("{id}.css");
+    let name = file.clone();
+    crate::offload_io(move || {
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            auris_core::AurisError::other(format!("création de {}: {e}", dir.display()))
+        })?;
+        std::fs::write(dir.join(&file), &body)
+            .map_err(|e| auris_core::AurisError::other(format!("écriture du thème {file}: {e}")))?;
+        Ok(())
+    })
+    .await?;
+    Ok(Json(PackEntry {
+        id,
+        name,
+        builtin: false,
+    }))
+}
+
+/// `DELETE /api/packs/theme/{id}` — supprime un thème communautaire
+/// (les thèmes réservés/embarqués sont protégés).
+pub async fn delete_theme(
+    State(s): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> ApiResult<StatusCode> {
+    let reserved: Vec<&str> = RESERVED_THEMES.iter().map(|(id, _)| *id).collect();
+    if !valid_custom_id(&id, false, &reserved, &builtin_theme_ids()) {
+        return Err(auris_core::AurisError::InvalidUri(format!(
+            "id de thème invalide ou protégé : {id}"
+        ))
+        .into());
+    }
+    let dir = s.data_dir.join("themes");
+    let file = format!("{id}.css");
+    let existed = crate::offload_io(move || {
+        let p = dir.join(&file);
+        match std::fs::remove_file(&p) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(auris_core::AurisError::other(format!(
+                "suppression de {}: {e}",
+                p.display()
+            ))),
+        }
+    })
+    .await?;
+    if existed {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(auris_core::AurisError::other(format!("thème communautaire introuvable : {id}")).into())
+    }
+}
+
+/// `POST /api/packs/locale/{lang}` — enregistre un pack de langue communautaire
+/// (`<data-dir>/locales/{lang}.json`). Body = JSON `{ "clé FR": "traduction" }`.
+pub async fn post_locale(
+    State(s): State<AppState>,
+    AxumPath(lang): AxumPath<String>,
+    body: String,
+) -> ApiResult<Json<PackEntry>> {
+    let builtin: Vec<String> = BUILTIN_LOCALES
+        .iter()
+        .map(|(id, _)| id.to_string())
+        .collect();
+    if !valid_custom_id(&lang, true, &[], &builtin) {
+        return Err(auris_core::AurisError::InvalidUri(format!(
+            "code langue invalide (attendu ex. en, pt-BR, non intégré) : {lang}"
+        ))
+        .into());
+    }
+    if body.len() > MAX_PACK_BYTES {
+        return Err(auris_core::AurisError::other(format!(
+            "pack de langue trop volumineux ({} o > {MAX_PACK_BYTES} o)",
+            body.len()
+        ))
+        .into());
+    }
+    // validation : le body doit être un objet JSON string -> string
+    let parsed: std::collections::BTreeMap<String, String> =
+        serde_json::from_str(&body).map_err(|e| {
+            auris_core::AurisError::InvalidUri(format!(
+                "pack de langue invalide (JSON objet {{\"clé\": \"traduction\"}} attendu) : {e}"
+            ))
+        })?;
+    if parsed.is_empty() {
+        return Err(auris_core::AurisError::InvalidUri("pack de langue vide".into()).into());
+    }
+    let dir = s.data_dir.join("locales");
+    let file = format!("{lang}.json");
+    let name = file.clone();
+    let pretty = serde_json::to_string_pretty(&parsed).unwrap_or(body);
+    crate::offload_io(move || {
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            auris_core::AurisError::other(format!("création de {}: {e}", dir.display()))
+        })?;
+        std::fs::write(dir.join(&file), pretty)
+            .map_err(|e| auris_core::AurisError::other(format!("écriture de {file}: {e}")))?;
+        Ok(())
+    })
+    .await?;
+    Ok(Json(PackEntry {
+        id: lang,
+        name,
+        builtin: false,
+    }))
+}
+
+/// `DELETE /api/packs/locale/{lang}` — supprime un pack de langue communautaire
+/// (les langues embarquées fr/en sont protégées).
+pub async fn delete_locale(
+    State(s): State<AppState>,
+    AxumPath(lang): AxumPath<String>,
+) -> ApiResult<StatusCode> {
+    let builtin: Vec<String> = BUILTIN_LOCALES
+        .iter()
+        .map(|(id, _)| id.to_string())
+        .collect();
+    if !valid_custom_id(&lang, true, &[], &builtin) {
+        return Err(auris_core::AurisError::InvalidUri(format!(
+            "code langue invalide ou protégé : {lang}"
+        ))
+        .into());
+    }
+    let dir = s.data_dir.join("locales");
+    let file = format!("{lang}.json");
+    let existed = crate::offload_io(move || {
+        let p = dir.join(&file);
+        match std::fs::remove_file(&p) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(auris_core::AurisError::other(format!(
+                "suppression de {}: {e}",
+                p.display()
+            ))),
+        }
+    })
+    .await?;
+    if existed {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(auris_core::AurisError::other(format!("pack de langue introuvable : {lang}")).into())
+    }
 }
