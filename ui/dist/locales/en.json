@@ -119,5 +119,6 @@
   "Rechercher un titre, un album, un artiste…": "Search a track, album, artist…",
   "Effacer": "Clear",
   "Scan…": "Scanning…",
-  "Scanner la source": "Scan source"
+  "Scanner la source": "Scan source",
+  "Couleur principale de l'interface — presets ou #RRGGBB": "Main interface color — presets or #RRGGBB"
 }

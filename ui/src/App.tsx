@@ -47,6 +47,9 @@ function cl(n: number, one: string, many: string): string {
 }
 
 /// Assombrit/éclaircit une couleur `#RRGGBB` (amt en [-255, 255]).
+/// Presets de couleur d'accent proposés dans les réglages (#72).
+const ACCENT_PRESETS = ["#1ed760", "#ff8800", "#ff4d4d", "#2979ff", "#aa00ff", "#00bfa5", "#ffd600", "#f5f5f5"];
+
 function shade(hex: string, amt: number): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
   if (!m) return hex;
@@ -165,6 +168,16 @@ export default function App() {
     if (appearance) applyAppearance(appearance);
     // Dépendances sur les champs primitifs : évite de réécrire les styles du document à chaque message WS.
   }, [appearance?.theme, appearance?.accent, appearance?.background]);
+
+  // Thème « system » : re-applique en live si l'OS change de préférence clair/sombre.
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: light)");
+    const onChange = () => {
+      if (appearance && appearance.theme === "system") applyAppearance(appearance);
+    };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [appearance]);
 
   // Langue de l'interface : charge le pack de langue (embarqué ou communautaire) puis re-render.
   const language = appearance?.language ?? "fr";
@@ -1937,9 +1950,16 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
             </select>
           </SetRow>
         ),
-        show(t("Couleur d'accent"), "Couleur principale de l'interface (#RRGGBB)") && (
-          <SetRow key="accent" label={t("Couleur d'accent")} desc="Couleur principale de l'interface">
+        show(t("Couleur d'accent"), "Couleur principale de l'interface — presets ou #RRGGBB") && (
+          <SetRow key="accent" label={t("Couleur d'accent")} desc={t("Couleur principale de l'interface — presets ou #RRGGBB")}>
             <div className="range-ctrl">
+              <div className="swatches">
+                {ACCENT_PRESETS.map((c) => (
+                  <button key={c} type="button" className={`swatch ${ap.accent.toLowerCase() === c ? "active" : ""}`}
+                    style={{ background: c }} title={c} aria-label={`${t("Couleur d'accent")} ${c}`}
+                    onClick={() => setAppearance("accent", c)} />
+                ))}
+              </div>
               <input type="color" value={ap.accent} aria-label="Couleur d'accent"
                 onChange={(e) => setAppearance("accent", e.target.value)} style={{ width: 44, height: 32, padding: 2, border: "1px solid var(--border)", borderRadius: 6, background: "none" }} />
               <input type="text" value={ap.accent} style={{ width: 90 }}
