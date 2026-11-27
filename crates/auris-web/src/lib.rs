@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 
 use auris_core::{
-    lyrics, Alarm, AlarmState, AurisError, BrowseEntry, OutputMode, PlayStatus, Playlist,
-    RepeatMode, Settings, ShareKind, ShareLink, Source, Track, WsEvent, ZipWriter,
+    lyrics, Alarm, AlarmState, AurisError, BrowseEntry, FavKind, Favorites, OutputMode, PlayStatus,
+    Playlist, RepeatMode, Settings, ShareKind, ShareLink, Source, Track, WsEvent, ZipWriter,
 };
 use auris_library::Library;
 use auris_player::{
@@ -345,6 +345,9 @@ pub fn router(state: AppState) -> Router {
         // bibliotheque
         .route("/api/library/tracks", get(get_tracks))
         .route("/api/library/facets", get(get_facets))
+        .route("/api/favorites", get(get_favorites))
+        .route("/api/favorites/toggle", post(post_favorite_toggle))
+        .route("/api/favorites/resolved", get(get_favorites_resolved))
         .route("/api/library/albums", get(get_albums))
         .route("/api/library/albums/{id}", get(get_album))
         .route("/api/library/artists", get(get_artists))
@@ -770,6 +773,54 @@ async fn get_facets(State(s): State<AppState>) -> Json<serde_json::Value> {
         })
         .collect();
     Json(serde_json::json!({ "genres": genres, "decades": decades }))
+}
+
+/// `GET /api/favorites` — IDs des favoris (pistes / albums / artistes).
+async fn get_favorites(State(s): State<AppState>) -> Json<Favorites> {
+    Json(s.library.favorites())
+}
+
+#[derive(Deserialize)]
+struct FavToggleBody {
+    kind: FavKind,
+    id: String,
+}
+
+/// `POST /api/favorites/toggle` — bascule un favori, renvoie le nouvel état.
+async fn post_favorite_toggle(
+    State(s): State<AppState>,
+    Json(b): Json<FavToggleBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let favorited = s.library.toggle_favorite(b.kind, &b.id)?;
+    Ok(Json(serde_json::json!({
+        "kind": b.kind,
+        "id": b.id,
+        "favorited": favorited,
+    })))
+}
+
+/// `GET /api/favorites/resolved` — favoris résolus en objets complets (pour la vue Favoris).
+async fn get_favorites_resolved(State(s): State<AppState>) -> Json<serde_json::Value> {
+    let tracks = s.library.favorite_tracks();
+    let albums: Vec<serde_json::Value> = s
+        .library
+        .favorite_albums()
+        .into_iter()
+        .map(|a| {
+            let mut v = serde_json::to_value(&a).unwrap_or_default();
+            if let Some(cover_id) = &a.cover_track_id {
+                v["cover_url"] =
+                    serde_json::Value::String(format!("/api/library/cover/{cover_id}"));
+            }
+            v
+        })
+        .collect();
+    let artists = s.library.favorite_artists();
+    Json(serde_json::json!({
+        "tracks": tracks,
+        "albums": albums,
+        "artists": artists,
+    }))
 }
 async fn get_albums(State(s): State<AppState>) -> Json<serde_json::Value> {
     let albums = s.library.albums();

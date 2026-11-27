@@ -306,6 +306,26 @@ impl ShareLink {
     }
 }
 
+/// Sorte de ressource mise en favori.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FavKind {
+    Track,
+    Album,
+    Artist,
+}
+
+/// Favoris locaux de la bibliothèque (persistés côté serveur).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Favorites {
+    #[serde(default)]
+    pub tracks: Vec<String>,
+    #[serde(default)]
+    pub albums: Vec<String>,
+    #[serde(default)]
+    pub artists: Vec<String>,
+}
+
 /// Entree de navigation dans une source (dossier ou fichier).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowseEntry {

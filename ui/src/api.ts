@@ -168,6 +168,22 @@ export interface PlaylistDetail {
   tracks: Track[];
 }
 
+export type FavKind = "track" | "album" | "artist";
+
+/** Favoris locaux de la bibliothèque (#68) : IDs par catégorie, ordre d'ajout. */
+export interface Favorites {
+  tracks: string[];
+  albums: string[];
+  artists: string[];
+}
+
+/** Favoris résolus en objets complets (vue Favoris). */
+export interface FavoritesResolved {
+  tracks: Track[];
+  albums: Album[];
+  artists: Artist[];
+}
+
 /** Lien de partage public (v0.6) : /share/<token>. */
 export interface ShareLink {
   token: string;
@@ -429,6 +445,10 @@ export const api = {
     return req<Track[]>(`/api/library/tracks${qs ? `?${qs}` : ""}`);
   },
   facets: () => req<Facets>("/api/library/facets"),
+  favorites: () => req<Favorites>("/api/favorites"),
+  favoritesResolved: () => req<FavoritesResolved>("/api/favorites/resolved"),
+  toggleFavorite: (kind: FavKind, id: string) =>
+    req<{ kind: FavKind; id: string; favorited: boolean }>("/api/favorites/toggle", post({ kind, id })),
   albums: () => req<Album[]>("/api/library/albums"),
   artists: () => req<Artist[]>("/api/library/artists"),
   artist: (id: string) => req<ArtistDetail>(`/api/library/artists/${encodeURIComponent(id)}`),

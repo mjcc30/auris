@@ -6,8 +6,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use auris_core::{
-    Album, Artist, AurisError, DecadeFacet, GenreFacet, Playlist, Result, ShareKind, ShareLink,
-    Source, Track,
+    Album, Artist, AurisError, DecadeFacet, FavKind, Favorites, GenreFacet, Playlist, Result,
+    ShareKind, ShareLink, Source, Track,
 };
 use auris_player::probe_meta;
 use auris_sources::{make_uri, SourcesManager};
@@ -36,6 +36,8 @@ const TREE_ARTIST_BY_KEY: &str = "artist_by_key";
 const TREE_PLAYLISTS: &str = "playlists";
 const TREE_SHARES: &str = "shares";
 const TREE_BIOS: &str = "bios";
+const TREE_FAVS: &str = "favs";
+const FAVS_KEY: &str = "all";
 
 pub struct Library {
     db: sled::Db,
@@ -70,6 +72,7 @@ impl Library {
             TREE_PLAYLISTS,
             TREE_SHARES,
             TREE_BIOS,
+            TREE_FAVS,
         ] {
             db.open_tree(t)
                 .map_err(|e| AurisError::Storage(e.to_string()))?;
@@ -513,6 +516,76 @@ impl Library {
             .remove(id.as_bytes())
             .map_err(se)?
             .is_some())
+    }
+
+    // ---------- favoris ----------
+
+    /// Favoris courants (liste d'IDs, ordre d'ajout).
+    pub fn favorites(&self) -> Favorites {
+        self.tree(TREE_FAVS)
+            .get(FAVS_KEY)
+            .ok()
+            .flatten()
+            .and_then(|b| dec::<Favorites>(&b).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_favorites(&self, f: &Favorites) -> Result<()> {
+        self.tree(TREE_FAVS).insert(FAVS_KEY, enc(f)?).map_err(se)?;
+        Ok(())
+    }
+
+    /// Bascule un favori. Retourne `true` si la ressource est maintenant favorite.
+    pub fn toggle_favorite(&self, kind: FavKind, id: &str) -> Result<bool> {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(AurisError::other("id de favori vide"));
+        }
+        let mut f = self.favorites();
+        let list = match kind {
+            FavKind::Track => &mut f.tracks,
+            FavKind::Album => &mut f.albums,
+            FavKind::Artist => &mut f.artists,
+        };
+        let now = match list.iter().position(|x| x == id) {
+            Some(pos) => {
+                list.remove(pos);
+                false
+            }
+            None => {
+                list.push(id.to_string());
+                true
+            }
+        };
+        self.save_favorites(&f)?;
+        Ok(now)
+    }
+
+    /// Pistes favorites résolues (les IDs inconnus sont ignorés).
+    pub fn favorite_tracks(&self) -> Vec<Track> {
+        self.favorites()
+            .tracks
+            .iter()
+            .filter_map(|id| self.track(id))
+            .collect()
+    }
+
+    /// Albums favoris résolus.
+    pub fn favorite_albums(&self) -> Vec<Album> {
+        self.favorites()
+            .albums
+            .iter()
+            .filter_map(|id| self.album(id).map(|(a, _)| a))
+            .collect()
+    }
+
+    /// Artistes favoris résolus.
+    pub fn favorite_artists(&self) -> Vec<Artist> {
+        self.favorites()
+            .artists
+            .iter()
+            .filter_map(|id| self.artist(id).map(|(a, _)| a))
+            .collect()
     }
 
     // ---------- liens de partage ----------

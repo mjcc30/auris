@@ -74,7 +74,6 @@
   "Partage": "Sharing",
   "Sombre": "Dark",
   "Clair": "Light",
-  "Système": "System",
   "Français": "French",
   "En lecture": "Now playing",
   "Genres": "Genres",
@@ -93,5 +92,9 @@
   "Artiste": "Artist",
   "désactivée": "disabled",
   "Aucune source — ajoutez-en une dans « Sources & réglages ».": "No source yet — add one in “Sources & settings”.",
-  "Scannez une source pour remplir la bibliothèque.": "Scan a source to fill the library."
+  "Scannez une source pour remplir la bibliothèque.": "Scan a source to fill the library.",
+  "Favoris": "Favorites",
+  "Artistes favoris": "Favorite artists",
+  "Retirer des favoris": "Remove from favorites",
+  "Aucun favori pour l’instant — touchez le cœur sur un titre, un album ou un artiste.": "No favorites yet — tap the heart on a track, album or artist."
 }

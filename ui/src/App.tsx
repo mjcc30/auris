@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type InfosResponse, type LyricsResponse, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type InfosResponse, type LyricsResponse, type MountInfo, type Packs, type Playlist, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
 
-type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "sources" | "settings";
+type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "favorites" | "sources" | "settings";
 type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http";
 /** Onglets du panneau lecture en cours (style Volumio: Pochette / Infos / Paroles). */
 type NpTab = "cover" | "infos" | "lyrics";
@@ -100,6 +100,7 @@ export default function App() {
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [packs, setPacks] = useState<Packs | null>(null);
+  const [favs, setFavs] = useState<Favorites>({ tracks: [], albums: [], artists: [] });
   const [, setLocaleTick] = useState(0);
   const [alarms, setAlarms] = useState<AlarmsInfo | null>(null);
   const [browseSrc, setBrowseSrc] = useState<string | null>(null);
@@ -123,11 +124,13 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, srcs, devs, sys, st, pk] = await Promise.all([
+      const [s, srcs, devs, sys, st, pk, fv] = await Promise.all([
         api.state(), api.sources(), api.devices(), api.system(), api.settings(),
         api.packs().catch(() => null),
+        api.favorites().catch(() => null),
       ]);
       setState(s); setSources(srcs); setDevices(devs); setSystem(sys); setSettings(st); setPacks(pk);
+      if (fv) setFavs(fv);
     } catch { /* backend indisponible pour l'instant */ }
   }, []);
 
@@ -215,6 +218,14 @@ export default function App() {
   const playTrack = (t: Track) => act(() => api.playTrack(t.id));
   const playAll = (tracks: Track[]) => act(() => api.playQueue(tracks, 0));
   const playUri = (u: string) => act(() => api.play(u));
+
+  /// Bascule un favori (piste/album/artiste) et resynchronise l'état local.
+  const toggleFav = useCallback((kind: FavKind, id: string) => {
+    act(async () => {
+      await api.toggleFavorite(kind, id);
+      setFavs(await api.favorites());
+    });
+  }, [act]);
   const openSource = (id: string) => { setBrowseSrc(id); setView("browse"); };
   const globalSearch = () => { if (searchQ.trim()) { setSearchNonce((n) => n + 1); setView("library"); } };
   const refreshDevices = useCallback(async () => {
@@ -227,7 +238,7 @@ export default function App() {
         <Sidebar view={view} setView={setView} sources={sources} browseSrc={browseSrc} openSource={openSource} system={system} />
         <main className="content">
           <div className="topbar">
-            <div className="topbar-title">{view === "home" ? t("Accueil") : view === "library" ? t("Bibliothèque") : view === "browse" ? t("Parcourir") : view === "radios" ? t("Radios") : view === "queue" ? t("File d'attente") : view === "playlists" ? t("Listes de lecture") : view === "sources" ? t("Sources") : t("Réglages")}</div>
+            <div className="topbar-title">{view === "home" ? t("Accueil") : view === "library" ? t("Bibliothèque") : view === "browse" ? t("Parcourir") : view === "radios" ? t("Radios") : view === "queue" ? t("File d'attente") : view === "playlists" ? t("Listes de lecture") : view === "favorites" ? t("Favoris") : view === "sources" ? t("Sources") : t("Réglages")}</div>
             <div className="topbar-search">
               <Icon name="search" size={18} />
               <input type="text" placeholder={t("Rechercher un titre, un artiste…")} value={searchQ}
@@ -236,14 +247,20 @@ export default function App() {
             </div>
           </div>
           {view === "home" && (
-            <Home state={state} sources={sources} playTrack={playTrack} playAll={playAll} openSource={openSource}
+            <Home state={state} sources={sources} favs={favs} onToggleFav={toggleFav} playTrack={playTrack} playAll={playAll} openSource={openSource}
               openArtist={(a) => { setPendingArtist(a); setPendingAlbum(null); setView("library"); }}
               openAlbum={(a) => { setPendingAlbum(a); setPendingArtist(null); setView("library"); }} />
           )}
           {view === "library" && (
             <Library playTrack={playTrack} playAll={playAll} say={say} refresh={refresh} searchNonce={searchNonce} searchQ={searchQ}
+              favs={favs} onToggleFav={toggleFav}
               pendingArtist={pendingArtist} onPendingArtistDone={() => setPendingArtist(null)}
               pendingAlbum={pendingAlbum} onPendingAlbumDone={() => setPendingAlbum(null)} />
+          )}
+          {view === "favorites" && (
+            <FavoritesView playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={toggleFav}
+              openAlbum={(a) => { setPendingAlbum(a); setPendingArtist(null); setView("library"); }}
+              openArtist={(a) => { setPendingArtist(a); setPendingAlbum(null); setView("library"); }} />
           )}
           {view === "browse" && <Browse sources={sources} src={browseSrc} playUri={playUri} act={act} say={say} />}
           {view === "radios" && <Radios state={state} act={act} say={say} />}
@@ -283,6 +300,7 @@ function Sidebar({ view, setView, sources, browseSrc, openSource, system }: {
     ["radios", t("Radios"), "radio"],
     ["queue", t("File d'attente"), "queue"],
     ["playlists", t("Listes de lecture"), "playlist"],
+    ["favorites", t("Favoris"), "heart"],
     ["sources", t("Sources"), "server"],
     ["settings", t("Réglages"), "gear"],
   ];
@@ -319,10 +337,25 @@ function Rail({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
-function FacetCard({ coverUrl, icon, title, sub, round, onClick }: { coverUrl: string | null; icon: string; title: string; sub: string; round?: boolean; onClick: () => void }) {
+/// Bouton cœur de favori (#68) : `on` = rempli. Le clic ne propage pas (cartes/ lignes cliquables).
+function FavHeart({ on, onToggle, title }: { on: boolean; onToggle: () => void; title?: string }) {
+  return (
+    <button
+      className={`fav-heart${on ? " on" : ""}`}
+      title={title ?? (on ? t("Retirer des favoris") : t("Ajouter aux favoris"))}
+      onClick={(e) => { e.stopPropagation(); e.preventDefault(); onToggle(); }}
+    >
+      <Icon name="heart" size={16} filled={on} />
+    </button>
+  );
+}
+
+function FacetCard({ coverUrl, icon, title, sub, round, fav, onToggleFav, onClick }: { coverUrl: string | null; icon: string; title: string; sub: string; round?: boolean; fav?: boolean; onToggleFav?: () => void; onClick: () => void }) {
   return (
     <div className={`card${round ? " round" : ""}`} onClick={onClick}>
-      <div className="cover">{coverUrl ? <img src={coverUrl} alt="" loading="lazy" /> : <Icon name={icon} size={44} />}</div>
+      <div className="cover">{coverUrl ? <img src={coverUrl} alt="" loading="lazy" /> : <Icon name={icon} size={44} />}
+        {onToggleFav && <FavHeart on={!!fav} onToggle={onToggleFav} />}
+      </div>
       <div className="t">{title}</div>
       <div className="s">{sub}</div>
     </div>
@@ -331,7 +364,9 @@ function FacetCard({ coverUrl, icon, title, sub, round, onClick }: { coverUrl: s
 
 type Facet = { kind: "genre"; name: string } | { kind: "decade"; decade: number };
 
-function Home({ state, sources, playTrack, playAll, openSource, openArtist, openAlbum }: { state: PlayerState | null; sources: Source[]; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; openSource: (id: string) => void; openArtist: (a: { id: string; name: string }) => void; openAlbum: (a: { id: string; title: string; artist: string }) => void }) {
+type FavProps = { favs: Favorites; onToggleFav: (kind: FavKind, id: string) => void };
+
+function Home({ state, sources, favs, onToggleFav, playTrack, playAll, openSource, openArtist, openAlbum }: { state: PlayerState | null; sources: Source[]; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; openSource: (id: string) => void; openArtist: (a: { id: string; name: string }) => void; openAlbum: (a: { id: string; title: string; artist: string }) => void } & FavProps) {
   const [albums, setAlbums] = useState<Album[]>([]);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [artists, setArtists] = useState<Artist[]>([]);
@@ -350,21 +385,38 @@ function Home({ state, sources, playTrack, playAll, openSource, openArtist, open
         facet={facet}
         playTrack={playTrack}
         playAll={playAll}
+        favs={favs}
+        onToggleFav={onToggleFav}
         onBack={() => setFacet(null)}
         onOpenAlbum={openAlbum}
       />
     );
   }
 
+  const favAlbums = albums.filter((a) => favs.albums.includes(a.id));
+  const favArtists = artists.filter((a) => favs.artists.includes(a.id));
+
   return (
     <div>
       {state?.current && (
         <Rail title={t("En lecture")}>
           <div className="card" onClick={() => playTrack(state.current!)}>
-            <div className="cover">{state.current.has_cover ? <img src={api.coverUrl(state.current.id)} alt="" /> : <Icon name="note" size={44} />}</div>
+            <div className="cover">{state.current.has_cover ? <img src={api.coverUrl(state.current.id)} alt="" /> : <Icon name="note" size={44} />}
+              <FavHeart on={favs.tracks.includes(state.current.id)} onToggle={() => onToggleFav("track", state.current!.id)} />
+            </div>
             <div className="t">{state.current.title}</div>
             <div className="s">{state.current.artist} — {state.current.album}</div>
           </div>
+        </Rail>
+      )}
+      {favAlbums.length > 0 && (
+        <Rail title={t("Favoris")}>
+          {favAlbums.slice(0, 14).map((a) => (
+            <FacetCard key={a.id} coverUrl={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} icon="note" title={a.title}
+              sub={`${a.artist}${a.year ? ` · ${a.year}` : ""}`}
+              fav onToggleFav={() => onToggleFav("album", a.id)}
+              onClick={() => openAlbum({ id: a.id, title: a.title, artist: a.artist })} />
+          ))}
         </Rail>
       )}
       {facets && facets.genres.length > 0 && (
@@ -390,6 +442,8 @@ function Home({ state, sources, playTrack, playAll, openSource, openArtist, open
           {artists.slice(0, 14).map((a) => (
             <FacetCard key={a.id} coverUrl={null} icon="group" title={a.name} round
               sub={cl(a.album_count, "album", "albums")}
+              fav={favs.artists.includes(a.id)}
+              onToggleFav={() => onToggleFav("artist", a.id)}
               onClick={() => openArtist({ id: a.id, name: a.name })} />
           ))}
         </Rail>
@@ -398,10 +452,22 @@ function Home({ state, sources, playTrack, playAll, openSource, openArtist, open
         {albums.slice(0, 14).map((a) => (
           <FacetCard key={a.id} coverUrl={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} icon="note" title={a.title}
             sub={`${a.artist}${a.year ? ` · ${a.year}` : ""}`}
+            fav={favs.albums.includes(a.id)}
+            onToggleFav={() => onToggleFav("album", a.id)}
             onClick={() => openAlbum({ id: a.id, title: a.title, artist: a.artist })} />
         ))}
         {albums.length === 0 && <div className="empty">{t("Scannez une source pour remplir la bibliothèque.")}</div>}
       </Rail>
+      {favArtists.length > 0 && (
+        <Rail title={t("Artistes favoris")}>
+          {favArtists.slice(0, 14).map((a) => (
+            <FacetCard key={a.id} coverUrl={null} icon="group" title={a.name} round
+              sub={cl(a.album_count, "album", "albums")}
+              fav onToggleFav={() => onToggleFav("artist", a.id)}
+              onClick={() => openArtist({ id: a.id, name: a.name })} />
+          ))}
+        </Rail>
+      )}
       <Rail title={t("Vos sources")}>
         {sources.map((s) => (
           <FacetCard key={s.id} coverUrl={null} icon={kindIconName(s.kind)} title={s.name}
@@ -411,13 +477,13 @@ function Home({ state, sources, playTrack, playAll, openSource, openArtist, open
         {sources.length === 0 && <div className="empty">{t("Aucune source — ajoutez-en une dans « Sources & réglages ».")}</div>}
       </Rail>
       <h2>{t("Titres récents")}</h2>
-      <TrackTable tracks={tracks} current={state?.current?.id} playTrack={playTrack} playAll={playAll} />
+      <TrackTable tracks={tracks} current={state?.current?.id} favs={favs} onToggleFav={onToggleFav} playTrack={playTrack} playAll={playAll} />
     </div>
   );
 }
 
 /// Vue d'une facette (genre ou décennie) : en-tête + albums concernés + titres.
-function FacetView({ facet, playTrack, playAll, onBack, onOpenAlbum }: { facet: Facet; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; onBack: () => void; onOpenAlbum: (a: { id: string; title: string; artist: string }) => void }) {
+function FacetView({ facet, playTrack, playAll, favs, onToggleFav, onBack, onOpenAlbum }: { facet: Facet; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; onBack: () => void; onOpenAlbum: (a: { id: string; title: string; artist: string }) => void } & FavProps) {
   const [tracks, setTracks] = useState<Track[] | null>(null);
   const [albums, setAlbums] = useState<Album[]>([]);
   const title = facet.kind === "genre" ? facet.name : t("Années {y}", { y: facet.decade });
@@ -450,7 +516,9 @@ function FacetView({ facet, playTrack, playAll, onBack, onOpenAlbum }: { facet: 
           <div className="grid">
             {facetAlbums.map((a) => (
               <div key={a.id} className="card" onClick={() => onOpenAlbum({ id: a.id, title: a.title, artist: a.artist })}>
-                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}</div>
+                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+                  <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
+                </div>
                 <div className="t">{a.title}</div>
                 <div className="s">{a.artist}{a.year ? ` · ${a.year}` : ""} · {cl(a.track_count, "titre", "titres")}</div>
               </div>
@@ -459,12 +527,12 @@ function FacetView({ facet, playTrack, playAll, onBack, onOpenAlbum }: { facet: 
         </>
       )}
       <h2>{t("Titres")}</h2>
-      {tracks === null ? <div className="empty">{t("Chargement…")}</div> : <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} />}
+      {tracks === null ? <div className="empty">{t("Chargement…")}</div> : <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={onToggleFav} />}
     </div>
   );
 }
 
-function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendingArtist, onPendingArtistDone, pendingAlbum, onPendingAlbumDone }: { playTrack: (t: Track) => void; playAll: (t: Track[]) => void; say: (m: string) => void; refresh: () => Promise<void>; searchNonce: number; searchQ: string; pendingArtist: { id: string; name: string } | null; onPendingArtistDone: () => void; pendingAlbum: { id: string; title: string; artist: string } | null; onPendingAlbumDone: () => void }) {
+function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendingArtist, onPendingArtistDone, pendingAlbum, onPendingAlbumDone, favs, onToggleFav }: { playTrack: (t: Track) => void; playAll: (t: Track[]) => void; say: (m: string) => void; refresh: () => Promise<void>; searchNonce: number; searchQ: string; pendingArtist: { id: string; name: string } | null; onPendingArtistDone: () => void; pendingAlbum: { id: string; title: string; artist: string } | null; onPendingAlbumDone: () => void } & FavProps) {
   const [tab, setTab] = useState<"tracks" | "albums" | "artists">("tracks");
   const [tracks, setTracks] = useState<Track[]>([]);
   const [albums, setAlbums] = useState<Album[]>([]);
@@ -517,10 +585,10 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
     } catch (e) { say(e instanceof Error ? e.message : String(e)); setScanning(false); }
   };
   if (albumDetail) {
-    return <AlbumView id={albumDetail.id} title={albumDetail.title} artist={albumDetail.artist} playAll={playAll} playTrack={playTrack} say={say} onBack={() => setAlbumDetail(null)} />;
+    return <AlbumView id={albumDetail.id} title={albumDetail.title} artist={albumDetail.artist} playAll={playAll} playTrack={playTrack} say={say} favs={favs} onToggleFav={onToggleFav} onBack={() => setAlbumDetail(null)} />;
   }
   if (artistDetail) {
-    return <ArtistView id={artistDetail.id} name={artistDetail.name} playAll={playAll} playTrack={playTrack} onBack={() => setArtistDetail(null)} onOpenAlbum={(a) => setAlbumDetail(a)} />;
+    return <ArtistView id={artistDetail.id} name={artistDetail.name} playAll={playAll} playTrack={playTrack} favs={favs} onToggleFav={onToggleFav} onBack={() => setArtistDetail(null)} onOpenAlbum={(a) => setAlbumDetail(a)} />;
   }
   const ql = q.trim().toLowerCase();
   const hitArtists = searching ? artists.filter((a) => a.name.toLowerCase().includes(ql)) : artists;
@@ -539,21 +607,23 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
           <h2>Artistes ({hitArtists.length})</h2>
           {hitArtists.length === 0 && <div className="empty">Aucun artiste ne correspond.</div>}
           <table className="tracks"><tbody>
-            {hitArtists.map((a) => <tr key={a.id} className="link" onClick={() => setArtistDetail({ id: a.id, name: a.name })}><td>{a.name}</td><td className="meta">{cl(a.album_count, "album", "albums")}</td></tr>)}
+            {hitArtists.map((a) => <tr key={a.id} className="link" onClick={() => setArtistDetail({ id: a.id, name: a.name })}><td>{a.name}</td><td className="meta"><FavHeart on={favs.artists.includes(a.id)} onToggle={() => onToggleFav("artist", a.id)} /> {cl(a.album_count, "album", "albums")}</td></tr>)}
           </tbody></table>
           <h2>Albums ({hitAlbums.length})</h2>
           {hitAlbums.length === 0 && <div className="empty">Aucun album ne correspond.</div>}
           <div className="grid">
             {hitAlbums.map((a) => (
               <div key={a.id} className="card" onClick={() => setAlbumDetail({ id: a.id, title: a.title, artist: a.artist })}>
-                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}</div>
+                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+                  <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
+                </div>
                 <div className="t">{a.title}</div>
                 <div className="s">{a.artist} · {cl(a.track_count, "titre", "titres")} · {fmtTime(a.duration_secs)}</div>
               </div>
             ))}
           </div>
           <h2>Titres ({tracks.length})</h2>
-          <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} />
+          <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={onToggleFav} />
         </div>
       ) : (
         <>
@@ -562,12 +632,14 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
           <button key={t} className={`seg-btn ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{label}</button>
         ))}
       </div>
-      {tab === "tracks" && <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} />}
+      {tab === "tracks" && <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={onToggleFav} />}
       {tab === "albums" && (
         <div className="grid">
           {albums.map((a) => (
             <div key={a.id} className="card" onClick={() => setAlbumDetail({ id: a.id, title: a.title, artist: a.artist })}>
-              <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}</div>
+              <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+                <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
+              </div>
               <div className="t">{a.title}</div>
               <div className="s">{a.artist} · {a.track_count} titres · {fmtTime(a.duration_secs)}</div>
             </div>
@@ -576,7 +648,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
       )}
       {tab === "artists" && (
         <table className="tracks"><tbody>
-          {artists.map((a) => <tr key={a.id} className="link" onClick={() => setArtistDetail({ id: a.id, name: a.name })}><td>{a.name}</td><td className="meta">{cl(a.album_count, "album", "albums")}</td></tr>)}
+          {artists.map((a) => <tr key={a.id} className="link" onClick={() => setArtistDetail({ id: a.id, name: a.name })}><td>{a.name}</td><td className="meta"><FavHeart on={favs.artists.includes(a.id)} onToggle={() => onToggleFav("artist", a.id)} /> {cl(a.album_count, "album", "albums")}</td></tr>)}
         </tbody></table>
       )}
         </>
@@ -586,7 +658,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
 }
 
 
-function ArtistView({ id, name, playAll, playTrack, onBack, onOpenAlbum }: { id: string; name: string; playAll: (t: Track[]) => void; playTrack: (t: Track) => void; onBack: () => void; onOpenAlbum: (a: { id: string; title: string; artist: string }) => void }) {
+function ArtistView({ id, name, playAll, playTrack, favs, onToggleFav, onBack, onOpenAlbum }: { id: string; name: string; playAll: (t: Track[]) => void; playTrack: (t: Track) => void; onBack: () => void; onOpenAlbum: (a: { id: string; title: string; artist: string }) => void } & FavProps) {
   const [detail, setDetail] = useState<ArtistDetail | null>(null);
   useEffect(() => { api.artist(id).then(setDetail).catch(() => {}); }, [id]);
   const tracks = detail?.tracks ?? [];
@@ -602,7 +674,9 @@ function ArtistView({ id, name, playAll, playTrack, onBack, onOpenAlbum }: { id:
         <button className="btn sm" disabled={!tracks.length} onClick={() => playAll(tracks)}><Icon name="play" size={14} filled /> {t("Tout lire")}</button>
       </div>
       <div className="artist-head">
-        <div className="cover big">{detail?.cover_url ? <img src={detail.cover_url} alt="" /> : <Icon name="user" size={44} />}</div>
+        <div className="cover big">{detail?.cover_url ? <img src={detail.cover_url} alt="" /> : <Icon name="user" size={44} />}
+          <FavHeart on={favs.artists.includes(id)} onToggle={() => onToggleFav("artist", id)} />
+        </div>
         <div>
           <div className="s" style={{ textTransform: "uppercase", letterSpacing: 1 }}>{t("Artiste")}</div>
           <h1 style={{ margin: "4px 0" }}>{name}</h1>
@@ -623,7 +697,9 @@ function ArtistView({ id, name, playAll, playTrack, onBack, onOpenAlbum }: { id:
           <div className="grid">
             {albums.map((a) => (
               <div key={a.id} className="card" onClick={() => onOpenAlbum({ id: a.id, title: a.title, artist: a.artist })}>
-                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}</div>
+                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+                  <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
+                </div>
                 <div className="t">{a.title}</div>
                 <div className="s">{a.artist}{a.year ? ` · ${a.year}` : ""} · {cl(a.track_count, "titre", "titres")}</div>
               </div>
@@ -632,12 +708,12 @@ function ArtistView({ id, name, playAll, playTrack, onBack, onOpenAlbum }: { id:
         </>
       )}
       <h2>{t("Titres")}</h2>
-      <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} />
+      <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={onToggleFav} />
     </div>
   );
 }
 
-function AlbumView({ id, title, artist, playAll, playTrack, say, onBack }: { id: string; title: string; artist: string; playAll: (t: Track[]) => void; playTrack: (t: Track) => void; say: (m: string) => void; onBack: () => void }) {
+function AlbumView({ id, title, artist, playAll, playTrack, say, favs, onToggleFav, onBack }: { id: string; title: string; artist: string; playAll: (t: Track[]) => void; playTrack: (t: Track) => void; say: (m: string) => void; onBack: () => void } & FavProps) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [cover, setCover] = useState<string | null>(null);
   useEffect(() => {
@@ -661,9 +737,62 @@ function AlbumView({ id, title, artist, playAll, playTrack, say, onBack }: { id:
           } catch (e) { say(e instanceof Error ? e.message : String(e)); }
         }}><Icon name="share" size={16} /> Partager</button>
       </div>
-      <h1>{title}</h1>
+      <h1>{title} <FavHeart on={favs.albums.includes(id)} onToggle={() => onToggleFav("album", id)} /></h1>
       <h2 style={{ marginTop: 0 }}>{artist}</h2>
-      <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} albumCover={cover} />
+      <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={onToggleFav} albumCover={cover} />
+    </div>
+  );
+}
+
+/// Vue Favoris (#68) : albums, artistes et titres aimés, résolus côté serveur.
+function FavoritesView({ playTrack, playAll, favs, onToggleFav, openAlbum, openArtist }: { playTrack: (t: Track) => void; playAll: (t: Track[]) => void; openAlbum: (a: { id: string; title: string; artist: string }) => void; openArtist: (a: { id: string; name: string }) => void } & FavProps) {
+  const [data, setData] = useState<FavoritesResolved | null>(null);
+  useEffect(() => { api.favoritesResolved().then(setData).catch(() => setData({ tracks: [], albums: [], artists: [] })); }, [favs]);
+  const empty = !data || (data.tracks.length === 0 && data.albums.length === 0 && data.artists.length === 0);
+  return (
+    <div>
+      <h1 style={{ display: "flex", alignItems: "center", gap: 8 }}><Icon name="heart" size={22} filled /> {t("Favoris")}</h1>
+      {!data ? <div className="empty">{t("Chargement…")}</div> : empty ? (
+        <div className="empty">{t("Aucun favori pour l’instant — touchez le cœur sur un titre, un album ou un artiste.")}</div>
+      ) : (
+        <>
+          {data.albums.length > 0 && (
+            <>
+              <h2>{t("Albums")} ({data.albums.length})</h2>
+              <div className="grid">
+                {data.albums.map((a) => (
+                  <div key={a.id} className="card" onClick={() => openAlbum({ id: a.id, title: a.title, artist: a.artist })}>
+                    <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+                      <FavHeart on onToggle={() => onToggleFav("album", a.id)} />
+                    </div>
+                    <div className="t">{a.title}</div>
+                    <div className="s">{a.artist}{a.year ? ` · ${a.year}` : ""} · {cl(a.track_count, "titre", "titres")}</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          {data.artists.length > 0 && (
+            <>
+              <h2>{t("Artistes")} ({data.artists.length})</h2>
+              <table className="tracks"><tbody>
+                {data.artists.map((a) => (
+                  <tr key={a.id} className="link" onClick={() => openArtist({ id: a.id, name: a.name })}>
+                    <td>{a.name}</td>
+                    <td className="meta"><FavHeart on onToggle={() => onToggleFav("artist", a.id)} /> {cl(a.album_count, "album", "albums")}</td>
+                  </tr>
+                ))}
+              </tbody></table>
+            </>
+          )}
+          {data.tracks.length > 0 && (
+            <>
+              <h2>{t("Titres")} ({data.tracks.length})</h2>
+              <TrackTable tracks={data.tracks} favs={favs} onToggleFav={onToggleFav} playTrack={playTrack} playAll={playAll} />
+            </>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -679,18 +808,19 @@ function fmtFormat(f: NonNullable<Track["format"]>): string {
   return [f.kind, sr, bits, ch].filter(Boolean).join(" · ");
 }
 
-function TrackTable({ tracks, current, playTrack, playAll, albumCover }: { tracks: Track[]; current?: string | null; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; albumCover?: string | null }) {
+function TrackTable({ tracks, current, playTrack, playAll, albumCover, favs, onToggleFav }: { tracks: Track[]; current?: string | null; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; albumCover?: string | null; favs?: Favorites; onToggleFav?: (kind: FavKind, id: string) => void }) {
   if (tracks.length === 0) return <div className="empty">Aucun titre.</div>;
   return (
     <table className="tracks">
-      <thead><tr><th>#</th><th>Titre</th><th>Artiste</th><th>Album</th><th>Format</th><th>Durée</th></tr></thead>
+      <thead><tr><th>#</th><th>Titre</th><th>Artiste</th><th>Album</th><th>Format</th><th>Durée</th><th></th></tr></thead>
       <tbody>
-        {tracks.map((t, i) => (
-          <tr key={t.id} className={current === t.id ? "playing" : ""} onDoubleClick={() => playTrack(t)} onClick={() => playAll(tracks.slice(i))}>
+        {tracks.map((tr, i) => (
+          <tr key={tr.id} className={current === tr.id ? "playing" : ""} onDoubleClick={() => playTrack(tr)} onClick={() => playAll(tracks.slice(i))}>
             <td className="num">{albumCover && i === 0 ? <img src={albumCover} alt="" style={{ width: 28, height: 28, borderRadius: 4, verticalAlign: "middle" }} /> : i + 1}</td>
-            <td>{t.title}</td><td>{t.artist}</td><td>{t.album}</td>
-            <td><span className="badge">{t.format ? fmtFormat(t.format) : ""}</span></td>
-            <td className="num-time">{t.duration_secs != null ? fmtTime(t.duration_secs) : "—"}</td>
+            <td>{tr.title}</td><td>{tr.artist}</td><td>{tr.album}</td>
+            <td><span className="badge">{tr.format ? fmtFormat(tr.format) : ""}</span></td>
+            <td className="num-time">{tr.duration_secs != null ? fmtTime(tr.duration_secs) : "—"}</td>
+            <td className="num">{favs && onToggleFav && <FavHeart on={favs.tracks.includes(tr.id)} onToggle={() => onToggleFav("track", tr.id)} />}</td>
           </tr>
         ))}
       </tbody>
