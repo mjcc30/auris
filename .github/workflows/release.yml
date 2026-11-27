@@ -256,9 +256,77 @@ jobs:
             auris_*.rpm
             auris_*.rpm.sha256
 
+  installer-win:
+    name: Installeur Windows (.exe, Inno Setup)
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: auris-x86_64-pc-windows-msvc.zip
+          path: pkg
+      - name: extrait le binaire
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force app | Out-Null
+          Expand-Archive pkg/*.zip -DestinationPath app -Force
+          Get-ChildItem app/auris.exe
+      - name: installe Inno Setup
+        run: choco install innosetup --version=6.3.3 -y
+      - name: compile l'installeur
+        env:
+          VERSION: ${{ github.ref_name }}
+        shell: pwsh
+        run: |
+          python3 packaging/windows/update-iss.py "$env:VERSION"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /Q /DAppDir="$PWD\app" packaging\windows\auris.iss
+          Get-Item auris-setup-x64.exe
+          sha256sum auris-setup-x64.exe > checksums-installer-win.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-win
+          path: auris-setup-x64.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checksums-installer-win
+          path: checksums-installer-win.txt
+
+  flatpak:
+    name: Bundle Flatpak (x86_64)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: installe flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+      - name: runtimes Freedesktop
+        run: |
+          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install -y flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08
+      - name: construit le bundle
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          python3 packaging/flatpak/update-flatpak.py "$VERSION"
+          cd packaging/flatpak
+          flatpak-builder --force-clean --disable-rofiles-fuse --repo="$PWD/repo" build audio.auris.Auris.yml
+          flatpak build-bundle repo "$PWD/auris.flatpak" audio.auris.Auris
+          cd - >/dev/null
+          sha256sum packaging/flatpak/auris.flatpak > auris.flatpak.sha256
+          mv packaging/flatpak/auris.flatpak .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-x64
+          path: |
+            auris.flatpak
+            auris.flatpak.sha256
+
   release:
     name: Publie la release GitHub
-    needs: [build, deb, rpm]
+    needs: [build, deb, rpm, installer-win, flatpak]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -276,6 +344,16 @@ jobs:
         with:
           path: artifacts
           pattern: rpm-*
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: installer-win
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: flatpak-*
           merge-multiple: true
       - uses: actions/download-artifact@v4
         with:

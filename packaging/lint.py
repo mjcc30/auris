@@ -116,15 +116,18 @@ def check_workflows() -> None:
 
     rel = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"))
     jobs = rel.get("jobs", {})
-    for j in ("build", "deb", "rpm", "release"):
+    for j in ("build", "deb", "rpm", "installer-win", "flatpak", "release"):
         if j not in jobs:
             err(f"release.yml: job manquant: {j}")
-    if "rpm" in jobs:
-        needs = jobs["release"].get("needs", [])
-        if isinstance(needs, str):
-            needs = [needs]
-        if "rpm" not in needs:
-            err("release.yml: le job release ne dépend pas de rpm")
+    needs = jobs.get("release", {}).get("needs", [])
+    if isinstance(needs, str):
+        needs = [needs]
+    for j in ("deb", "rpm", "installer-win", "flatpak"):
+        if j in jobs and j not in needs:
+            err(f"release.yml: le job release ne dépend pas de {j}")
+    ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    if "nix" not in ci.get("jobs", {}):
+        err("ci.yml: job nix manquant")
     # bug checksums : noms de fichiers uniques par target
     build_steps = jobs.get("build", {}).get("steps", [])
     uploads = [
@@ -144,13 +147,67 @@ def check_workflows() -> None:
     ok("workflows: cohérents") if not errors else None
 
 
+def check_windows_iss() -> None:
+    p = ROOT / "packaging/windows/auris.iss"
+    if not p.exists():
+        err("packaging/windows/auris.iss manquant")
+        return
+    src = p.read_text(encoding="utf-8")
+    for token in ("AppId=", "OutputBaseFilename=auris-setup-x64", "MyAppVersion", "auris.exe", "[Uninstall]") if "[Uninstall]" in src else ("AppId=", "OutputBaseFilename=auris-setup-x64", "MyAppVersion", "auris.exe"):
+        if token not in src:
+            err(f"auris.iss: manquant: {token}")
+    if not re.search(r'^#define MyAppVersion "\d+\.\d+\.\d+"', src, re.M):
+        err("auris.iss: MyAppVersion semver invalide")
+    ok("auris.iss: cohérent") if not errors else None
+
+
+def check_flatpak() -> None:
+    import yaml
+
+    d = ROOT / "packaging/flatpak"
+    p = d / "audio.auris.Auris.yml"
+    if not p.exists():
+        err("flatpak: audio.auris.Auris.yml manquant")
+        return
+    data = yaml.safe_load(p.read_text(encoding="utf-8"))
+    if data.get("app-id") != "audio.auris.Auris":
+        err(f"flatpak: app-id invalide: {data.get('app-id')}")
+    if data.get("command") != "auris":
+        err("flatpak: command != auris")
+    srcs = (data.get("modules") or [{}])[0].get("sources", [])
+    arch = [s for s in srcs if s.get("type") == "archive"]
+    if not arch or not re.fullmatch(r"[0-9a-f]{64}", str(arch[0].get("sha256", ""))):
+        err("flatpak: source archive sans sha256 64 hex")
+    if arch and "/releases/download/v" not in arch[0].get("url", ""):
+        err("flatpak: url de la source archive invalide")
+    for f in ("audio.auris.Auris.metainfo.xml", "audio.auris.Auris.desktop", "auris.svg"):
+        if not (d / f).exists():
+            err(f"flatpak: fichier manquant: {f}")
+    ok("flatpak: manifeste cohérent") if not errors else None
+
+
+def check_nix() -> None:
+    p = ROOT / "packaging/nix/flake.nix"
+    if not p.exists():
+        err("packaging/nix/flake.nix manquant")
+        return
+    src = p.read_text(encoding="utf-8")
+    if not re.search(r'^\s+version = "\d+\.\d+\.\d+";', src, re.M):
+        err("flake.nix: version semver manquante")
+    if len(re.findall(r'sha256 = "[0-9a-f]{64}"', src)) < 3:
+        err("flake.nix: moins de 3 sha256 d'assets (x86_64-linux, aarch64-linux, aarch64-darwin)")
+    if "releases/download/v${version}" not in src:
+        err("flake.nix: fetchurl ne pointe pas sur la release v${version}")
+    ok("flake.nix: cohérent") if not errors else None
+
+
 def check_docs() -> None:
     p = ROOT / "docs/install.md"
     if not p.exists():
         err("docs/install.md manquant")
         return
     src = p.read_text(encoding="utf-8").lower()
-    for token in ("install.sh", ".deb", ".rpm", "brew", "winget", "img"):
+    for token in ("install.sh", ".deb", ".rpm", "brew", "winget", "img", ".exe", "flatpak", "nix"):
         if token not in src:
             err(f"docs/install.md: méthode d'installation non documentée: {token}")
     if not errors:
@@ -167,6 +224,9 @@ def main() -> int:
     check_brew()
     check_winget()
     check_rpm_spec()
+    check_windows_iss()
+    check_flatpak()
+    check_nix()
     check_workflows()
     check_docs()
     if errors:

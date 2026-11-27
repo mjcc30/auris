@@ -1,0 +1,38 @@
+# Manifeste flatpak-builder pour Auris (x86_64 Linux).
+# Build CI (job flatpak de release.yml) ; soumission Flathub : copier ce fichier +
+# audio.auris.Auris.metainfo.xml dans un PR sur flathub/<app-id>.
+# Version/url/sha256 mis à jour par packaging/flatpak/update-flatpak.py.
+app-id: audio.auris.Auris
+runtime: org.freedesktop.Platform
+runtime-version: "24.08"
+sdk: org.freedesktop.Sdk
+command: auris
+
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=pipewire
+  - --socket=pulseaudio
+  - --talk-name=org.freedesktop.Notifications
+  - --filesystem=/mnt/nas/musique:ro
+  - --filesystem=xdg-music:ro
+
+modules:
+  - name: auris
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 auris /app/bin/auris
+      - install -Dm644 /app/share/metainfo/audio.auris.Auris.metainfo.xml /app/share/metainfo/audio.auris.Auris.metainfo.xml 2>/dev/null || true
+    sources:
+      - type: archive
+        url: https://github.com/mjcc30/auris/releases/download/v0.8.0/auris-x86_64-unknown-linux-gnu.tar.gz
+        sha256: cdf11327a588de4bfdf59243067499116c4b15a71b3421deab40a244537abe0e
+      - type: file
+        path: audio.auris.Auris.metainfo.xml
+        dest: /app/share/metainfo
+      - type: file
+        path: audio.auris.Auris.desktop
+        dest: /app/share/applications
+      - type: file
+        path: auris.svg
+        dest: /app/share/icons/hicolor/scalable/apps

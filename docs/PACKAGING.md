@@ -8,8 +8,11 @@ binaires de release (assets `auris-<target>`) :
 | Script one-liner (RPi/Linux/macOS) | `install.sh` / `uninstall.sh` (racine) | — (télécharge la release) |
 | Paquet `.deb` (amd64, arm64) | job `deb` de `.github/workflows/release.yml` | CI |
 | Paquet `.rpm` (x86_64, aarch64) | `packaging/rpm/auris.spec` + job `rpm` | CI (`rpmbuild`) |
+| Installeur Windows `.exe` (x64) | `packaging/windows/auris.iss` + job `installer-win` | CI (Inno Setup) |
 | Formule Homebrew (macOS arm64) | `packaging/brew/auris.rb` | manuel / tap `mjcc30/homebrew-auris` |
 | Manifeste winget (Windows x64) | `packaging/winget/mjcc30.Auris.yaml` | PR vers `microsoft/winget-pkgs` |
+| Bundle Flatpak (x86_64) | `packaging/flatpak/audio.auris.Auris.yml` + job `flatpak` | CI (`flatpak-builder`) ; Flathub via PR dédié |
+| Paquet Nix (linux x86_64/aarch64, darwin arm64) | `packaging/nix/flake.nix` | validé en CI (job `nix`), build côté client |
 | Images disque (PC x86_64, RPi arm64) | `packaging/image/build-image.sh` | workflow `.github/workflows/image.yml` |
 
 ## Cycle de release
@@ -20,9 +23,12 @@ binaires de release (assets `auris-<target>`) :
 3. Mettre à jour les gestionnaires de paquets externes :
 
 ```bash
-python3 packaging/brew/update-formula.py vX.Y.Z    # met à jour version/url/sha256 de la formule
+python3 packaging/brew/update-formula.py vX.Y.Z     # met à jour version/url/sha256 de la formule
 python3 packaging/winget/update-manifest.py vX.Y.Z  # idem pour le manifeste winget
 python3 packaging/rpm/update-spec.py vX.Y.Z         # idem pour le spec RPM (utilisé aussi en CI)
+python3 packaging/windows/update-iss.py vX.Y.Z      # idem pour l'installeur Inno Setup
+python3 packaging/flatpak/update-flatpak.py vX.Y.Z  # idem pour le manifeste flatpak-builder
+python3 packaging/nix/update-nix.py vX.Y.Z          # idem pour le flake Nix (3 assets)
 ```
 
 4. Ouvrir les PR externes :

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>audio.auris.Auris</id>
+  <name>Auris</name>
+  <summary>Lecteur audiophile style Volumio</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+  <description>
+    <p>
+      Auris est un lecteur audiophile open source en un seul binaire : bibliothèque
+      musicale indexée, lecture gapless, DSD jusqu'au DSD256 en DoP, radios internet,
+      sources NAS/UPnP/YouTube/Jamendo, multiroom. Interface web sur http://localhost:3000/.
+    </p>
+  </description>
+  <launchable type="desktop-id">audio.auris.Auris.desktop</launchable>
+  <url type="homepage">https://auris.audio</url>
+  <url type="bugtracker">https://github.com/mjcc30/auris/issues</url>
+  <developer_name>mjcc30</developer_name>
+  <releases>
+    <release version="0.8.0" date="2026-01-01">
+      <description><p>Release v0.8.0.</p></description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

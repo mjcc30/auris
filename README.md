@@ -25,7 +25,8 @@ curl -fsSL https://raw.githubusercontent.com/mjcc30/auris/main/install.sh | sudo
 http://<ip-de-la-machine>:3000
 ```
 
-Autres méthodes : paquet `.deb` / `.rpm`, `brew install mjcc30/auris`, `winget install mjcc30.Auris`,
+Autres méthodes : paquet `.deb` / `.rpm`, installeur Windows `auris-setup-x64.exe`,
+`brew install mjcc30/auris`, `winget install mjcc30.Auris`, flatpak, `nix run …#auris`,
 ou image disque prête à flasher (PC x86_64 / Raspberry Pi) — voir [docs/install.md](docs/install.md).
 
 Depuis les sources :

@@ -46,6 +46,33 @@ winget install mjcc30.Auris
 auris serve --port 3000    # ou via le menu Démarrer
 ```
 
+## Installeur Windows (.exe, Inno Setup)
+
+Téléchargez `auris-setup-x64.exe` dans les [releases](https://github.com/mjcc30/auris/releases)
+(vérifiez avec le `.sha256` voisin) et lancez-le : il installe Auris dans
+`C:\Program Files\Auris`, crée les raccourcis et peut démarrer Auris au login
+(interface web http://localhost:3000).
+
+## Flatpak (Linux x86_64)
+
+```bash
+# bundle signé de la release :
+curl -fsSLO https://github.com/mjcc30/auris/releases/download/v0.8.0/auris.flatpak
+flatpak install --user auris.flatpak
+flatpak run audio.auris.Auris serve --port 3000
+# ou via Flathub quand le paquet y sera soumis : flatpak install flathub audio.auris.Auris
+```
+
+## Nix (Linux x86_64/aarch64, macOS arm64)
+
+```bash
+nix run github:mjcc30/auris/packaging/nix#auris -- serve --port 3000
+# ou : nix profile install github:mjcc30/auris/packaging/nix#auris
+```
+
+Le flake empaquette le binaire de la release correspondant à votre plateforme
+(`packaging/nix/flake.nix`, validé en CI par `nix build`).
+
 ## Image disque prête à flasher
 
 Depuis les [releases](https://github.com/mjcc30/auris/releases), téléchargez :
