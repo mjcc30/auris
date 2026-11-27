@@ -81,6 +81,19 @@ name = "NAS"
 enabled = true
 kind = "local"
 path = "/mnt/nas/musique"
+
+# Sources gratuites intégrées (v0.8) — zéro compte requis.
+[[sources]]
+id = "archive"
+name = "Internet Archive"
+enabled = true
+kind = "archive"
+
+[[sources]]
+id = "deezer"
+name = "Deezer · extraits 30 s"
+enabled = true
+kind = "deezer"
 EOF
   chown "$USER_NAME:$USER_NAME" "$DATA_DIR/config.toml"
   chmod 640 "$DATA_DIR/config.toml"

@@ -271,6 +271,10 @@ pub enum SourceKind {
         #[serde(default)]
         api_base: Option<String>,
     },
+    /// Internet Archive (archive.org) — catalogue audio gratuit, sans compte — #84.
+    Archive,
+    /// Deezer — extraits 30 s via l'API publique (sans clé ni compte) — #85.
+    Deezer,
 }
 
 fn default_qobuz_quality() -> String {

@@ -6,7 +6,7 @@ import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
 
 type View = "home" | "library" | "browse" | "radios" | "queue" | "playlists" | "favorites" | "sources" | "multiroom" | "plugins" | "settings" | "display";
-type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp" | "qobuz" | "tidal" | "linein";
+type SourceKindTab = "local" | "usb" | "smb" | "radio" | "http" | "upnp" | "qobuz" | "tidal" | "linein" | "archive" | "deezer";
 /** Onglets du panneau lecture en cours (style Volumio: Pochette / Infos / Paroles). */
 type NpTab = "cover" | "infos" | "lyrics";
 
@@ -20,6 +20,8 @@ function kindIconName(kind: string): string {
     case "qobuz": return "note";
     case "tidal": return "note";
     case "linein": return "link";
+    case "archive": return "globe";
+    case "deezer": return "note";
     default: return "folder";
   }
 }
@@ -34,6 +36,8 @@ function kindLabel(kind: string): string {
     case "qobuz": return "Qobuz";
     case "tidal": return "Tidal";
     case "linein": return "Line-in / optique / HDMI";
+    case "archive": return "Internet Archive";
+    case "deezer": return "Deezer (extraits 30 s)";
     default: return "Dossier local";
   }
 }
@@ -2229,6 +2233,8 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
       case "qobuz": return user.trim() && password ? makeSource(id, name.trim(), "qobuz", { user: user.trim(), password, quality }) : null;
       case "tidal": return token.trim() ? makeSource(id, name.trim(), "tidal", { token: token.trim(), session_id: sessionId.trim() || null, quality: quality === "hires" ? "hires" : "lossless" }) : null;
       case "linein": return makeSource(id, name.trim(), "linein", { device: inDevice || null });
+      case "archive": return makeSource(id, name.trim(), "archive", {});
+      case "deezer": return makeSource(id, name.trim(), "deezer", {});
     }
   };
 
@@ -2253,7 +2259,7 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
     finally { setDetecting(false); }
   };
 
-  const kinds: [SourceKindTab, string][] = [["local", "Dossier local"], ["usb", "USB"], ["smb", "NAS (SMB/CIFS)"], ["radio", "Radio"], ["http", "URL HTTP"], ["upnp", "UPnP/DLNA"], ["qobuz", "Qobuz"], ["tidal", "Tidal"], ["linein", "Line-in"]];
+  const kinds: [SourceKindTab, string][] = [["local", "Dossier local"], ["usb", "USB"], ["smb", "NAS (SMB/CIFS)"], ["radio", "Radio"], ["http", "URL HTTP"], ["upnp", "UPnP/DLNA"], ["qobuz", "Qobuz"], ["tidal", "Tidal"], ["linein", "Line-in"], ["archive", "Internet Archive"], ["deezer", "Deezer (30 s)"]];
 
   useEffect(() => {
     if (tab === "linein") api.inputDevices().then(setInDevices).catch(() => {});
@@ -2309,6 +2315,12 @@ function SourceModal({ source, sources, onClose, refresh, say }: { source: Sourc
           )}
           {(tab === "radio" || tab === "http") && (
             <label className="span2">URL{tab === "http" ? " (m3u/m3u8 ou fichier direct, facultatif)" : " du flux"}<input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" /></label>
+          )}
+          {tab === "archive" && (
+            <div className="span2 meta">Catalogue audio gratuit d'archive.org (Internet Archive) — recherche, albums et lecture complète, sans compte ni clé.</div>
+          )}
+          {tab === "deezer" && (
+            <div className="span2 meta">Extraits 30 s via l'API publique Deezer — recherche et top du chart jouables directement, sans compte ni clé.</div>
           )}
           {tab === "upnp" && (
             <label className="span2">URL de description du serveur UPnP/DLNA (ex. http://192.168.1.10:8200/desc.xml) — utile si la découverte SSDP est bloquée<input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://…/desc.xml" /></label>

@@ -68,6 +68,8 @@ impl SourcesManager {
             } // capture entrée audio live (#75)
             SourceKind::Qobuz { .. } => Ok(Arc::new(crate::qobuz::QobuzSource::new(src.clone())?)),
             SourceKind::Tidal { .. } => Ok(Arc::new(crate::tidal::TidalSource::new(src.clone())?)),
+            SourceKind::Archive => Ok(Arc::new(crate::archive::ArchiveSource::new(src.clone())?)), // #84
+            SourceKind::Deezer => Ok(Arc::new(crate::deezer::DeezerSource::new(src.clone())?)), // #85
         }
     }
 

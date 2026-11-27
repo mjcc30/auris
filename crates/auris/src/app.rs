@@ -51,6 +51,29 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
     let data_dir = config.resolve_data_dir();
     std::fs::create_dir_all(&data_dir).context("création du data-dir")?;
     if !config.config_path().exists() {
+        // Sources gratuites intégrées par défaut à la première exécution (#84, #85) :
+        // Internet Archive (audio libre) + Deezer (extraits 30 s), zéro compte requis.
+        for (id, name, kind) in [
+            (
+                "archive",
+                "Internet Archive",
+                auris_core::SourceKind::Archive,
+            ),
+            (
+                "deezer",
+                "Deezer · extraits 30 s",
+                auris_core::SourceKind::Deezer,
+            ),
+        ] {
+            if !config.sources.iter().any(|s| s.id == id) {
+                config.sources.push(auris_core::Source {
+                    id: id.into(),
+                    name: name.into(),
+                    kind,
+                    enabled: true,
+                });
+            }
+        }
         config.save().context("écriture de la config par défaut")?;
         tracing::info!("config créée: {}", config.config_path().display());
     }

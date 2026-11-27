@@ -1,5 +1,7 @@
 //! Sources musicales: local, USB, SMB (NAS), HTTP, UPnP/DLNA, webradios.
 
+pub mod archive;
+pub mod deezer;
 pub mod http;
 pub mod http_raw;
 pub mod linein;
