@@ -30,7 +30,7 @@ jobs:
           - type: pc
             deps: debootstrap parted dosfstools xz-utils
           - type: rpi
-            deps: qemu-user-static kpartx parted xz-utils
+            deps: kpartx parted xz-utils dpkg-dev
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:

@@ -9,7 +9,7 @@
 #
 # Prérequis (hôte Linux x86_64, root) :
 #   pc : debootstrap parted dosfstools xz-utils
-#   rpi: qemu-user-static kpartx parted xz-utils curl ca-certificates
+#   rpi: kpartx parted xz-utils dpkg-dev curl ca-certificates   (pas besoin de qemu)
 set -euo pipefail
 
 log()  { printf '\033[1;32m[image]\033[0m %s\n' "$*"; }
@@ -44,7 +44,8 @@ resolve_version() {
 }
 
 download_deb() { # $1=arch (amd64|arm64) -> chemin local
-  local arch="$1" f="$WORK/auris_${VERSION#v}-1_$arch.deb"
+  local arch="$1"
+  local f="$WORK/auris_${VERSION#v}-1_$arch.deb"
   curl -fsSL -H 'User-Agent: auris-image' -o "$f" \
     "https://github.com/$REPO/releases/download/$VERSION/auris_${VERSION#v}-1_$arch.deb" \
     || die "téléchargement du .deb $arch échoué (release $VERSION)"
@@ -161,11 +162,14 @@ CHROOT
 
 # ---------------------------------------------------------------------------
 # Raspberry Pi : Raspberry Pi OS Lite (arm64) + .deb arm64 d'Auris + ssh actif.
+# Pas de qemu : on extrait le .deb avec dpkg-deb -x (pas de postinst) et on crée
+# l'utilisateur système + le symlink d'activation du service à la main. Le binaire
+# arm64 s'exécutera nativement sur le Pi. (qemu-user-static n'existe plus dans les
+# dépôts Ubuntu >= 24.04.)
 # ---------------------------------------------------------------------------
 build_rpi() {
-  command -v qemu-aarch64-static >/dev/null || command -v /usr/bin/qemu-aarch64-static >/dev/null \
-    || die "qemu-user-static requis (apt install qemu-user-static)"
   command -v kpartx >/dev/null || die "kpartx requis (apt install kpartx)"
+  command -v dpkg-deb >/dev/null || die "dpkg-deb requis (apt install dpkg-dev)"
   local base="2025-05-06-raspios-bookworm-arm64-lite"
   local src_url="https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2025-05-06/2025-05-06-raspios-bookworm-arm64-lite.img.xz"
   local img_xz="$WORK/raspios.img.xz"
@@ -182,21 +186,23 @@ build_rpi() {
   mkdir -p "$WORK/mnt/boot/firmware"
   mount "${map}p1" "$WORK/mnt/boot/firmware"  # partition boot FAT
 
-  cp /usr/bin/qemu-aarch64-static "$WORK/mnt/usr/bin/" 2>/dev/null || true
   local deb; deb="$(download_deb arm64)"
-  cp "$deb" "$WORK/mnt/tmp/auris.deb"
-  chroot "$WORK/mnt" /usr/bin/qemu-aarch64-static /bin/bash -e <<'CHROOT'
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
-    dpkg -i /tmp/auris.deb || apt-get -f install -y -qq
-    rm -f /tmp/auris.deb
-    useradd --system --home /var/lib/auris --shell /usr/sbin/nologin auris 2>/dev/null || true
-    systemctl enable auris.service
-    systemctl enable ssh
-    rm -f /usr/bin/qemu-aarch64-static
-CHROOT
-  write_default_config "$WORK/mnt"
+  log "extraction du .deb arm64 dans l'image (dpkg-deb -x, sans postinst)…"
+  dpkg-deb -x "$deb" "$WORK/mnt"
+
+  # Utilisateur système auris (uid/gid 999, comme sur Debian/RPi OS)
+  grep -q '^auris:' "$WORK/mnt/etc/passwd" || echo 'auris:x:999:999:Auris:/var/lib/auris:/usr/sbin/nologin' >> "$WORK/mnt/etc/passwd"
+  grep -q '^auris:' "$WORK/mnt/etc/group" || echo 'auris:x:999:' >> "$WORK/mnt/etc/group"
+  grep -q '^auris:' "$WORK/mnt/etc/shadow" || echo 'auris:!:19000:0:99999:7:::' >> "$WORK/mnt/etc/shadow"
+  chown 999:999 "$WORK/mnt/var/lib/auris"
+
+  # Active auris.service et ssh au boot (équivalent systemctl enable, sans chroot arm64)
+  mkdir -p "$WORK/mnt/etc/systemd/system/multi-user.target.wants"
+  ln -sf /etc/systemd/system/auris.service "$WORK/mnt/etc/systemd/system/multi-user.target.wants/auris.service"
+  ln -sf /lib/systemd/system/ssh.service "$WORK/mnt/etc/systemd/system/multi-user.target.wants/ssh.service" 2>/dev/null || true
   touch "$WORK/mnt/boot/firmware/ssh"   # ssh actif au premier boot
+
+  write_default_config "$WORK/mnt"
 
   umount "$WORK/mnt/boot/firmware" "$WORK/mnt"
   kpartx -d "$LOOP"; losetup -d "$LOOP"; LOOP=""
