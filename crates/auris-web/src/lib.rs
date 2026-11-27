@@ -40,6 +40,7 @@ mod network;
 mod packs;
 mod plugins;
 mod radios;
+pub mod ripcd;
 pub mod socketio;
 
 pub use multiroom::{peer_id, MultiroomHub};
@@ -107,6 +108,8 @@ pub struct AppState {
     pub plugins: Arc<auris_plugins::PluginHost>,
     /// Hub socket.io (Engine.IO v3) pour clients mobiles Volumio (#45).
     pub socketio: Arc<socketio::SocketIoHub>,
+    /// Rip CD via whipper (#27).
+    pub ripcd: Arc<ripcd::RipCdHub>,
 }
 
 /// Action d'alimentation (redémarrer / éteindre la machine hôte).
@@ -144,6 +147,7 @@ impl AppState {
             )),
             plugins: Arc::new(auris_plugins::PluginHost::new(&data_dir)),
             socketio: socketio::SocketIoHub::new(),
+            ripcd: ripcd::RipCdHub::new(),
             data_dir,
             power_control: false,
             power_ops: None,
@@ -181,7 +185,7 @@ impl AppState {
 }
 
 /// Erreur API -> JSON {"error": ...}.
-struct ApiError(AurisError);
+pub struct ApiError(pub(crate) AurisError);
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let msg = self.0.to_string();
@@ -433,6 +437,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/radios/dir/countries", get(radios::get_dir_countries))
         .route("/api/radios/dir/stations", get(radios::get_dir_stations))
         .route("/api/radios/play-url", post(radios::post_play_url))
+        // rip CD (whipper) — #27
+        .route("/api/ripcd/status", get(ripcd::get_status))
+        .route("/api/ripcd/info", post(ripcd::post_info))
+        .route("/api/ripcd/rip", post(ripcd::post_rip))
+        .route("/api/ripcd/stop", post(ripcd::post_stop))
+        .route("/api/ripcd/eject", post(ripcd::post_eject))
         .route("/api/radios/{id}", delete(radios::delete_radio))
         .route("/api/radios/{id}/play", post(radios::post_radio_play))
         // packs d'interface (thèmes CSS + langues) embarqués ou communautaires

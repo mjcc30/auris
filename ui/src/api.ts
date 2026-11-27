@@ -88,6 +88,26 @@ export interface LibraryStats {
   playtime_secs: number;
 }
 
+export type RipPhase = "idle" | "info" | "ripping" | "done" | "error";
+export interface RipTrack {
+  n: number;
+  duration_secs: number;
+  title: string | null;
+}
+export interface RipStatus {
+  whipper_available: boolean;
+  whipper_version: string;
+  phase: RipPhase;
+  device: string | null;
+  progress: number;
+  current_track: number;
+  total_tracks: number;
+  toc: RipTrack[];
+  output_dir: string | null;
+  log: string[];
+  error: string | null;
+}
+
 /** Piste de l'historique d'écoute (#69) : Track + `last_played` (timestamp Unix). */
 export type HistoryTrack = Track & { last_played: number };
 
@@ -789,6 +809,11 @@ export const api = {
   lastfmSession: (token: string) => req<{ session_key: string; name: string }>("/api/lastfm/session", post({ token })),
   reboot: () => req<unknown>("/api/system/reboot", post({})),
   shutdown: () => req<unknown>("/api/system/shutdown", post({})),
+  ripStatus: () => req<RipStatus>("/api/ripcd/status"),
+  ripInfo: (device?: string | null) => req<RipStatus>("/api/ripcd/info", post({ device: device ?? null })),
+  ripStart: (device?: string | null) => req<RipStatus>("/api/ripcd/rip", post({ device: device ?? null })),
+  ripStop: () => req<RipStatus>("/api/ripcd/stop", post({})),
+  ripEject: (device?: string | null) => req<{ ok: boolean; stderr: string }>("/api/ripcd/eject", post({ device: device ?? null })),
   coverUrl: (trackId: string) => `/api/library/cover/${encodeURIComponent(trackId)}`,
   lyrics: (trackId: string) => req<LyricsResponse>(`/api/lyrics/${encodeURIComponent(trackId)}`),
   infos: (trackId: string) => req<InfosResponse>(`/api/infos/${encodeURIComponent(trackId)}`),

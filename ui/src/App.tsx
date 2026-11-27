@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type Source, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -2727,7 +2727,94 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
           </div>
         </div>
       )}
+      {show("Rip CD", "Ripper un CD audio avec whipper (AccurateRip)") && (
+        <RipCdCard say={say} />
+      )}
     </div>
+  );
+}
+
+// ---------- Rip CD (whipper) — #27 ----------
+
+function RipCdCard({ say }: { say: (m: string) => void }) {
+  const [st, setSt] = useState<RipStatus | null>(null);
+  const [busy, setBusy] = useState("");
+  const load = useCallback(() => { api.ripStatus().then(setSt).catch(() => {}); }, []);
+  useEffect(() => {
+    load();
+    const iv = setInterval(() => {
+      setSt((cur) => {
+        if (cur && (cur.phase === "ripping" || cur.phase === "info")) load();
+        return cur;
+      });
+    }, 2000);
+    return () => clearInterval(iv);
+  }, [load]);
+
+  const run = async (label: string, fn: () => Promise<RipStatus>) => {
+    setBusy(label);
+    try { setSt(await fn()); say(`${label} OK`); }
+    catch (e) { say(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(""); load(); }
+  };
+
+  const ripping = st?.phase === "ripping" || st?.phase === "info";
+  const phaseLabel: Record<string, string> = {
+    idle: "Prêt", info: "Analyse du CD…", ripping: "Rip en cours…", done: "Terminé", error: "Erreur",
+  };
+  return (
+    <section className="set-card">
+      <h2>{t("Rip CD")} — whipper</h2>
+      {!st && <div className="empty">{t("Chargement…")}</div>}
+      {st && (
+        <>
+          <SetRow label="État" desc={!st.whipper_available
+            ? "whipper introuvable dans le PATH — installez-le (ex. `apt install whipper`) pour activer le rip CD"
+            : `${st.whipper_version || "whipper"} détecté${st.device ? ` · lecteur : ${st.device}` : ""}${st.output_dir ? ` · sortie : ${st.output_dir}` : ""}`}>
+            <span className={`pill ${st.phase === "error" ? "warn" : st.phase === "done" ? "ok" : ""}`}>{t(phaseLabel[st.phase] ?? st.phase)}</span>
+          </SetRow>
+          <SetRow label="Actions" desc="Analyser lit la table des matières ; Ripper lance whipper (AccurateRip) dans la première source locale active">
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="btn ghost sm" disabled={!st.whipper_available || ripping || busy !== ""} onClick={() => run("Analyse", () => api.ripInfo(st.device))}>
+                <Icon name="refresh" size={16} /> {t("Analyser le CD")}
+              </button>
+              <button className="btn sm" disabled={!st.whipper_available || ripping || busy !== ""} onClick={() => run("Rip", () => api.ripStart(st.device))}>
+                <Icon name="disc" size={16} /> {t("Ripper le CD")}
+              </button>
+              <button className="btn danger sm" disabled={!ripping || busy !== ""} onClick={() => run("Arrêt", () => api.ripStop())}>{t("Arrêter")}</button>
+              <button className="btn ghost sm" disabled={busy !== ""} onClick={async () => { try { const r = await api.ripEject(st.device); say(r.ok ? "Tiroir éjecté" : `Éjection échouée : ${r.stderr}`); } catch (e) { say(e instanceof Error ? e.message : String(e)); } }}>{t("Éjecter")}</button>
+            </div>
+          </SetRow>
+          {(ripping || st.progress > 0) && (
+            <SetRow label="Progression" desc={st.total_tracks > 0 ? `Piste ${st.current_track}/${st.total_tracks}` : ""}>
+              <div className="rip-progress" style={{ width: 220 }}>
+                <div className="rip-progress-fill" style={{ width: `${Math.min(100, st.progress)}%` }} />
+              </div>
+              <span className="badge">{Math.round(st.progress)} %</span>
+            </SetRow>
+          )}
+          {st.toc.length > 0 && (
+            <SetRow label="Table des matières" desc={`${st.toc.length} piste(s)`}>
+              <div style={{ maxHeight: 160, overflowY: "auto", minWidth: 260 }}>
+                {st.toc.map((tr) => (
+                  <div key={tr.n} className="browse-row" style={{ cursor: "default", padding: "4px 8px" }}>
+                    <span className="row-ico"><Icon name="note" size={16} /></span>
+                    <span className="name">{tr.n}. {tr.title ?? ""}</span>
+                    <span className="meta">{fmtTime(tr.duration_secs)}</span>
+                  </div>
+                ))}
+              </div>
+            </SetRow>
+          )}
+          {st.error && <SetRow label="Erreur" desc={st.error}><span className="pill warn">!</span></SetRow>}
+          {st.log.length > 0 && (
+            <SetRow label="Journal whipper" desc="Dernières lignes de sortie">
+              <pre className="logs" style={{ maxHeight: 140, minWidth: 320 }}>{st.log.slice(-30).join("\n")}</pre>
+            </SetRow>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 

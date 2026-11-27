@@ -160,6 +160,21 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         }
     });
 
+    // après un rip CD réussi, rescan de la bibliothèque (#27)
+    let rip_lib = library.clone();
+    let ripcd = {
+        let hub = auris_web::ripcd::RipCdHub::new();
+        hub.set_on_finished(move |ok| {
+            if ok {
+                let lib = rip_lib.clone();
+                std::thread::spawn(move || {
+                    let _ = lib.scan_all();
+                });
+            }
+        });
+        hub
+    };
+
     let state = AppState {
         engine,
         library,
@@ -186,6 +201,7 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         )),
         plugins: Arc::new(auris_plugins::PluginHost::new(&data_dir)),
         socketio: auris_web::socketio::SocketIoHub::new(),
+        ripcd,
     };
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)
