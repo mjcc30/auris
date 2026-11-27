@@ -21,9 +21,10 @@ use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 
 use auris_core::{
-    lyrics, read_zip, Alarm, AlarmState, AurisError, BrowseEntry, FavKind, Favorites, HistoryEntry,
-    LibraryStats, OutputMode, PinKind, Pins, PlayStatus, Playlist, RepeatMode, SearchResults,
-    Settings, ShareKind, ShareLink, Source, Track, WsEvent, ZipWriter,
+    lyrics, read_zip, search_semantic, Alarm, AlarmState, AurisError, BrowseEntry, FavKind,
+    Favorites, HistoryEntry, LibraryStats, OutputMode, PinKind, Pins, PlayStatus, Playlist,
+    RadioEntry, RepeatMode, SearchGroup, SearchResults, Settings, ShareKind, ShareLink, Source,
+    Track, WsEvent, ZipWriter,
 };
 use auris_library::Library;
 use auris_player::{
@@ -1105,7 +1106,36 @@ async fn get_search(
 ) -> Json<SearchResults> {
     let query = q.get("q").cloned().unwrap_or_default();
     let source = q.get("source").map(String::as_str);
-    Json(s.library.search_grouped(&query, source))
+    let mut res = s.library.search_grouped(&query, source);
+    // Groupe radios (#38) : favoris + intégrées + sources radio, scorées comme le reste.
+    let terms = search_semantic::query_terms(&query);
+    let rl = radios::list_radios(&s);
+    let mut scored: Vec<(f64, RadioEntry)> = rl
+        .favorites
+        .into_iter()
+        .chain(rl.builtin)
+        .chain(rl.sources)
+        .map(|r| {
+            let sc = search_semantic::score_fields(&terms, &[(&r.name, 3.0)]);
+            (sc, r)
+        })
+        .filter(|(sc, _)| *sc > 0.0 || terms.is_empty()) // q vide = tout
+        .collect();
+    scored.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()))
+    });
+    let total = scored.len();
+    res.radios = SearchGroup {
+        total,
+        items: scored
+            .into_iter()
+            .take(auris_library::SEARCH_CAP)
+            .map(|(_, r)| r)
+            .collect(),
+    };
+    Json(res)
 }
 async fn get_cover(State(s): State<AppState>, Path(track_id): Path<String>) -> Response {
     match s.library.cover(&track_id) {

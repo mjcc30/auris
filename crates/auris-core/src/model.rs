@@ -338,6 +338,17 @@ pub struct SearchResults {
     pub albums: SearchGroup<Album>,
     pub artists: SearchGroup<Artist>,
     pub playlists: SearchGroup<Playlist>,
+    /// Radios web correspondant à la requête (#38) — default pour rester
+    /// compatible avec les anciennes réponses.
+    #[serde(default = "empty_search_group")]
+    pub radios: SearchGroup<RadioEntry>,
+}
+
+fn empty_search_group<T>() -> SearchGroup<T> {
+    SearchGroup {
+        total: 0,
+        items: Vec::new(),
+    }
 }
 
 /// Sorte de ressource partagee par un lien public.

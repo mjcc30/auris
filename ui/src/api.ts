@@ -244,6 +244,8 @@ export interface SearchResults {
   albums: SearchGroup<Album>;
   artists: SearchGroup<Artist>;
   playlists: SearchGroup<Playlist>;
+  /** Groupe radios (#38) — optionnel pour compatibilité anciennes réponses. */
+  radios?: SearchGroup<RadioEntry>;
 }
 
 /** Lien de partage public (v0.6) : /share/<token>. */

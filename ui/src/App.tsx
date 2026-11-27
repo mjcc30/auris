@@ -671,7 +671,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
   const [q, setQ] = useState("");
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<SearchResults | null>(null);
-  const [kind, setKind] = useState<"all" | "tracks" | "albums" | "artists" | "playlists">("all");
+  const [kind, setKind] = useState<"all" | "tracks" | "albums" | "artists" | "playlists" | "radios">("all");
   const [srcFilter, setSrcFilter] = useState("");
   const [sources, setSources] = useState<Source[]>([]);
   const [plDetail, setPlDetail] = useState<PlaylistDetail | null>(null);
@@ -765,7 +765,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
         results ? (
         <div>
           <div className="chips" style={{ marginTop: 0, marginBottom: 4 }}>
-            {([["all", t("Tous")], ["tracks", `${t("Titres")} (${results.tracks.total})`], ["albums", `${t("Albums")} (${results.albums.total})`], ["artists", `${t("Artistes")} (${results.artists.total})`], ["playlists", `${t("Listes")} (${results.playlists.total})`]] as const).map(([k, label]) => (
+            {([["all", t("Tous")], ["tracks", `${t("Titres")} (${results.tracks.total})`], ["albums", `${t("Albums")} (${results.albums.total})`], ["artists", `${t("Artistes")} (${results.artists.total})`], ["playlists", `${t("Listes")} (${results.playlists.total})`], ["radios", `${t("Radios")} (${results.radios?.total ?? 0})`]] as const).map(([k, label]) => (
               <button key={k} className={`chip chip-btn ${kind === k ? "active" : ""}`} onClick={() => setKind(k)}>{label}</button>
             ))}
           </div>
@@ -777,7 +777,7 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
               ))}
             </div>
           )}
-          {results.tracks.total + results.albums.total + results.artists.total + results.playlists.total === 0 && (
+          {results.tracks.total + results.albums.total + results.artists.total + results.playlists.total + (results.radios?.total ?? 0) === 0 && (
             <div className="empty">{t("Aucun résultat pour « {q} »", { q })}</div>
           )}
           {(kind === "all" || kind === "artists") && results.artists.items.length > 0 && (
@@ -813,6 +813,19 @@ function Library({ playTrack, playAll, say, refresh, searchNonce, searchQ, pendi
                   <tr key={p.id} className="link" onClick={() => api.playlist(p.id).then(setPlDetail).catch(() => {})}>
                     <td><Icon name="playlist" size={16} /> {p.name}</td>
                     <td className="meta"><PinButton on={pins.playlists.includes(p.id)} onToggle={() => onTogglePin("playlist", p.id)} /> {cl(p.track_ids.length, "titre", "titres")}</td>
+                  </tr>
+                ))}
+              </tbody></table>
+            </>
+          )}
+          {(kind === "all" || kind === "radios") && (results.radios?.items.length ?? 0) > 0 && results.radios && (
+            <>
+              <h2>{t("Radios")} ({results.radios.total})</h2>
+              <table className="tracks"><tbody>
+                {results.radios.items.map((r) => (
+                  <tr key={r.id} className="link" onClick={() => api.playRadio(r.id).catch(() => {})}>
+                    <td><Icon name="radio" size={16} /> {r.name}</td>
+                    <td className="meta">{r.origin === "favorite" ? t("Favori") : r.origin === "builtin" ? t("Intégrée") : t("Source")}</td>
                   </tr>
                 ))}
               </tbody></table>

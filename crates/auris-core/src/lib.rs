@@ -4,6 +4,7 @@ pub mod error;
 pub mod lyrics;
 pub mod model;
 pub mod schedule;
+pub mod search_semantic;
 pub mod settings;
 pub mod zip;
 

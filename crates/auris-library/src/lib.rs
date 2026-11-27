@@ -278,41 +278,36 @@ impl Library {
     /// Recherche groupée par type, façon Nova (#71) : pistes, albums, artistes, playlists.
     /// `source_id` restreint la recherche à une source (albums/artistes/playlists filtrés
     /// en conséquence). Chaque groupe est plafonné à `SEARCH_CAP` items, `total` garde le
-    /// vrai compte. Les pistes sont triées par pertinence (préfixe de titre d'abord).
+    /// vrai compte. Classement sémantique embarqué (#38) : BM25-lite pondéré par champ,
+    /// expansion par synonymes/humeurs, correspondance floue par trigrammes.
     pub fn search_grouped(&self, q: &str, source_id: Option<&str>) -> SearchResults {
-        let q = q.trim().to_lowercase();
         let src = source_id.map(str::trim).filter(|s| !s.is_empty());
+        let terms = auris_core::search_semantic::query_terms(q);
         let all = self.tracks();
-        let hit = |t: &Track| {
-            (src.map(|s| t.source_id == s).unwrap_or(true))
-                && (t.title.to_lowercase().contains(&q)
-                    || t.artist.to_lowercase().contains(&q)
-                    || t.album_artist.to_lowercase().contains(&q)
-                    || t.album.to_lowercase().contains(&q)
-                    || t.genre
-                        .as_deref()
-                        .map(|g| g.to_lowercase().contains(&q))
-                        .unwrap_or(false))
-        };
-        let mut tracks: Vec<Track> = all.iter().filter(|t| hit(t)).cloned().collect();
-        let rank = |t: &Track| {
-            if t.title.to_lowercase().starts_with(&q) {
-                0
-            } else if t.artist.to_lowercase().starts_with(&q)
-                || t.album_artist.to_lowercase().starts_with(&q)
-            {
-                1
-            } else if t.album.to_lowercase().starts_with(&q) {
-                2
-            } else {
-                3
-            }
-        };
-        tracks.sort_by(|a, b| {
-            rank(a)
-                .cmp(&rank(b))
-                .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+        let mut scored: Vec<(f64, Track)> = all
+            .iter()
+            .filter(|t| src.map(|s| t.source_id == s).unwrap_or(true))
+            .map(|t| {
+                let fields = auris_core::search_semantic::track_fields(
+                    &t.title,
+                    &t.artist,
+                    &t.album_artist,
+                    &t.album,
+                    t.genre.as_deref(),
+                );
+                (
+                    auris_core::search_semantic::score_fields(&terms, &fields),
+                    t.clone(),
+                )
+            })
+            .filter(|(s, _)| *s > 0.0 || terms.is_empty()) // q vide = tout, comme avant #38
+            .collect();
+        scored.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.title.to_lowercase().cmp(&b.1.title.to_lowercase()))
         });
+        let tracks: Vec<Track> = scored.into_iter().map(|(_, t)| t).collect();
 
         // Clés des albums/artistes présents dans la source filtrée (toutes les pistes).
         let src_album_keys: std::collections::HashSet<&str> = all
@@ -325,46 +320,77 @@ impl Library {
             .filter(|t| src.map(|s| t.source_id == s).unwrap_or(true))
             .map(|t| t.artist_key.as_str())
             .collect();
-        let albums: Vec<Album> = self
+        let mut albums: Vec<(f64, Album)> = self
             .albums()
             .into_iter()
-            .filter(|a| {
-                (a.title.to_lowercase().contains(&q) || a.artist.to_lowercase().contains(&q))
-                    && (src.is_none() || src_album_keys.contains(album_key_of(a).as_str()))
+            .filter(|a| src.is_none() || src_album_keys.contains(album_key_of(a).as_str()))
+            .map(|a| {
+                let s = auris_core::search_semantic::score_fields(
+                    &terms,
+                    &[(&a.title, 3.0), (&a.artist, 2.0)],
+                );
+                (s, a)
             })
+            .filter(|(s, _)| *s > 0.0 || terms.is_empty()) // q vide = tout, comme avant #38
             .collect();
-        let artists: Vec<Artist> = self
+        albums.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.title.to_lowercase().cmp(&b.1.title.to_lowercase()))
+        });
+        let albums: Vec<Album> = albums.into_iter().map(|(_, a)| a).collect();
+        let mut artists: Vec<(f64, Artist)> = self
             .artists()
             .into_iter()
-            .filter(|a| {
-                a.name.to_lowercase().contains(&q)
-                    && (src.is_none() || src_artist_keys.contains(a.name.to_lowercase().as_str()))
+            .filter(|a| src.is_none() || src_artist_keys.contains(a.name.to_lowercase().as_str()))
+            .map(|a| {
+                let s = auris_core::search_semantic::score_fields(&terms, &[(&a.name, 3.0)]);
+                (s, a)
             })
+            .filter(|(s, _)| *s > 0.0 || terms.is_empty()) // q vide = tout, comme avant #38
             .collect();
+        artists.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()))
+        });
+        let artists: Vec<Artist> = artists.into_iter().map(|(_, a)| a).collect();
         let track_src: HashMap<&str, &str> = all
             .iter()
             .map(|t| (t.id.as_str(), t.source_id.as_str()))
             .collect();
-        let playlists: Vec<Playlist> = self
+        let mut playlists: Vec<(f64, Playlist)> = self
             .playlists()
             .into_iter()
-            .filter(|p| {
-                p.name.to_lowercase().contains(&q)
-                    && match src {
-                        None => true,
-                        Some(s) => p
-                            .track_ids
-                            .iter()
-                            .any(|id| track_src.get(id.as_str()) == Some(&s)),
-                    }
+            .filter(|p| match src {
+                None => true,
+                Some(s) => p
+                    .track_ids
+                    .iter()
+                    .any(|id| track_src.get(id.as_str()) == Some(&s)),
             })
+            .map(|p| {
+                let s = auris_core::search_semantic::score_fields(&terms, &[(&p.name, 3.0)]);
+                (s, p)
+            })
+            .filter(|(s, _)| *s > 0.0 || terms.is_empty()) // q vide = tout, comme avant #38
             .collect();
+        playlists.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()))
+        });
+        let playlists: Vec<Playlist> = playlists.into_iter().map(|(_, p)| p).collect();
 
         SearchResults {
             tracks: cap_group(tracks),
             albums: cap_group(albums),
             artists: cap_group(artists),
             playlists: cap_group(playlists),
+            radios: SearchGroup {
+                total: 0,
+                items: Vec::new(),
+            },
         }
     }
 
@@ -896,7 +922,8 @@ fn merge_album_credits(a: &mut Album, t: &Track) {
 }
 
 /// Plafonnement des groupes de résultats de recherche (#71).
-const SEARCH_CAP: usize = 30;
+/// Plafond d'items par groupe de résultats de recherche (exposé pour le web).
+pub const SEARCH_CAP: usize = 30;
 
 fn cap_group<T>(v: Vec<T>) -> SearchGroup<T> {
     SearchGroup {
