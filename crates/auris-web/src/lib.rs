@@ -39,6 +39,7 @@ mod multiroom;
 mod network;
 mod packs;
 mod plugins;
+mod podcasts;
 mod radios;
 pub mod ripcd;
 pub mod signal_path;
@@ -451,6 +452,19 @@ pub fn router(state: AppState) -> Router {
         .route("/api/radios/artist", get(radios::get_artist_radio))
         .route("/api/radios/artist-radio", post(radios::post_artist_radio))
         .route("/api/radios/play-url", post(radios::post_play_url))
+        // podcasts (#81)
+        .route("/api/podcasts", get(podcasts::get_podcasts))
+        .route("/api/podcasts/feed", get(podcasts::get_feed))
+        .route(
+            "/api/podcasts/subscriptions",
+            get(podcasts::get_subscriptions),
+        )
+        .route("/api/podcasts/subscribe", post(podcasts::post_subscribe))
+        .route(
+            "/api/podcasts/subscriptions/{id}",
+            delete(podcasts::delete_subscription),
+        )
+        .route("/api/podcasts/play", post(podcasts::post_play))
         // rip CD (whipper) — #27
         .route("/api/ripcd/status", get(ripcd::get_status))
         .route("/api/ripcd/info", post(ripcd::post_info))

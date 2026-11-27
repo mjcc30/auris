@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type InputDevice, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirSection, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type InputDevice, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type PodcastEpisode, type PodcastFeed, type PodcastShow, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirSection, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -1582,6 +1582,51 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
   const [url, setUrl] = useState("");
   const [adding, setAdding] = useState(false);
   const [brokenFav, setBrokenFav] = useState<Set<string>>(new Set());
+  // podcasts (#81)
+  const [podQuery, setPodQuery] = useState("");
+  const [podSearch, setPodSearch] = useState("");
+  const [podResults, setPodResults] = useState<PodcastShow[] | null>(null);
+  const [podSubs, setPodSubs] = useState<PodcastShow[]>([]);
+  const [podFeed, setPodFeed] = useState<{ url: string; data: PodcastFeed } | null>(null);
+  const [podLoading, setPodLoading] = useState(false);
+
+  const reloadSubs = useCallback(async () => {
+    try { setPodSubs(await api.podcastSubscriptions()); }
+    catch (e) { say(e instanceof Error ? e.message : String(e)); }
+  }, [say]);
+
+  // recherche de podcasts (#81) — lancée quand on ouvre la vue ou on soumet
+  useEffect(() => {
+    if (view !== "podcasts") return;
+    reloadSubs();
+    let cancelled = false;
+    setPodLoading(true);
+    const run = async () => {
+      try {
+        const res = await api.podcasts(podSearch, 30);
+        if (!cancelled) setPodResults(res);
+      } catch (e) {
+        if (!cancelled) say(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setPodLoading(false);
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [view, podSearch, say]);
+
+  // chargement du flux RSS d'une émission (#81)
+  useEffect(() => {
+    if (!view.startsWith("podshow:")) return;
+    const feedUrl = decodeURIComponent(view.slice(8));
+    let cancelled = false;
+    setPodLoading(true);
+    api.podcastFeed(feedUrl)
+      .then((data) => { if (!cancelled) setPodFeed({ url: feedUrl, data }); })
+      .catch((e) => { if (!cancelled) say(e instanceof Error ? e.message : String(e)); })
+      .finally(() => { if (!cancelled) setPodLoading(false); });
+    return () => { cancelled = true; };
+  }, [view, say]);
 
   const reload = useCallback(async () => {
     try { setList(await api.radios()); }
@@ -1592,7 +1637,7 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
 
   // chargement de la sous-vue annuaire (top/popular/genres/pays/recherche…)
   useEffect(() => {
-    if (view === "root" || view === "pinned" || view === "fav" || view === "builtin" || view === "sources") return;
+    if (view === "root" || view === "pinned" || view === "fav" || view === "builtin" || view === "sources" || view === "podcasts" || view.startsWith("podshow:")) return;
     let cancelled = false;
     setDirLoading(true);
     const load = async () => {
@@ -1707,6 +1752,95 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
     </div>
   );
 
+  // ---------- Podcasts (#81) ----------
+
+  const subscribe = async (s: PodcastShow) => {
+    try {
+      setPodSubs(await api.podcastSubscribe({ feed_url: s.feed_url, title: s.title, artwork: s.artwork, author: s.author }));
+      setPodResults((rs) => rs?.map((x) => (x.feed_url === s.feed_url ? { ...x, subscribed: true } : x)) ?? rs);
+      say(t("« {title} » ajouté aux abonnements", { title: s.title }));
+    } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+  };
+  const unsubscribe = async (s: PodcastShow) => {
+    try {
+      setPodSubs(await api.podcastUnsubscribe(s.id));
+      setPodResults((rs) => rs?.map((x) => (x.feed_url === s.feed_url ? { ...x, subscribed: false } : x)) ?? rs);
+      say(t("« {title} » retiré des abonnements", { title: s.title }));
+    } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+  };
+  const playEpisode = (ep: PodcastEpisode, show: string) =>
+    act(() => api.playPodcastEpisode({ url: ep.url, title: ep.title, show, duration_secs: ep.duration_secs }), `Lecture de « ${ep.title} »`);
+
+  const showRow = (s: PodcastShow) => (
+    <div key={s.id} className="browse-row" onClick={() => setView(`podshow:${encodeURIComponent(s.feed_url)}`)} title={s.feed_url}>
+      <span className="row-ico">
+        {s.artwork ? <img src={s.artwork} alt="" style={{ width: 20, height: 20, borderRadius: 4, objectFit: "cover" }} /> : <Icon name="podcast" size={20} />}
+      </span>
+      <span className="name">{s.title}</span>
+      <span className="meta">{s.author}</span>
+      <button className="icon-btn" title={s.subscribed ? t("Se désabonner") : t("S'abonner")}
+        onClick={(ev) => { ev.stopPropagation(); s.subscribed ? unsubscribe(s) : subscribe(s); }}>
+        <Icon name="heart" size={18} filled={s.subscribed} />
+      </button>
+    </div>
+  );
+
+  const episodeRow = (ep: PodcastEpisode, show: string) => {
+    const current = state?.current?.uri === ep.url;
+    const dur = ep.duration_secs ? fmtTime(ep.duration_secs) : "";
+    return (
+      <div key={ep.id} className={`browse-row ${current ? "playing" : ""}`} onClick={() => playEpisode(ep, show)} title={ep.url}>
+        <span className="row-ico">
+          {ep.image ? <img src={ep.image} alt="" style={{ width: 20, height: 20, borderRadius: 4, objectFit: "cover" }} /> : <Icon name="play" size={20} />}
+        </span>
+        <span className="name">{ep.title}</span>
+        <span className="meta">{[ep.pub_date, dur].filter(Boolean).join(" · ")}{current ? ` · ${t("en lecture")}` : ""}</span>
+        <button className="icon-btn" title={t("Lire")} onClick={(ev) => { ev.stopPropagation(); playEpisode(ep, show); }}><Icon name="play" size={18} /></button>
+      </div>
+    );
+  };
+
+  const podcastsView = () => (
+    <>
+      <form className="browse-row" style={{ cursor: "default" }} onSubmit={(e) => { e.preventDefault(); setPodSearch(podQuery.trim()); }}>
+        <span className="row-ico"><Icon name="search" size={20} /></span>
+        <input
+          value={podQuery}
+          onChange={(e) => setPodQuery(e.target.value)}
+          placeholder={t("Rechercher un podcast…")}
+          style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "inherit", font: "inherit" }}
+        />
+        <button className="icon-btn" type="submit" title={t("Rechercher")}><Icon name="search" size={18} /></button>
+      </form>
+      {podLoading && <div className="empty">{t("Chargement…")}</div>}
+      {!podLoading && podSearch === "" && podSubs.length > 0 && (
+        <>
+          <h3 style={{ margin: "14px 4px 6px" }}>{t("Mes abonnements")}</h3>
+          {podSubs.map(showRow)}
+        </>
+      )}
+      {!podLoading && podSearch !== "" && podResults !== null && (
+        podResults.length ? podResults.map(showRow) : <div className="empty">{t("Aucun podcast trouvé.")}</div>
+      )}
+      {!podLoading && podSearch === "" && podSubs.length === 0 && (
+        <div className="empty">{t("Recherchez un podcast ou collez un flux RSS via « S'abonner » sur une émission.")}</div>
+      )}
+    </>
+  );
+
+  const podshowView = () => {
+    const feed = podFeed && podFeed.url === decodeURIComponent(view.slice(8)) ? podFeed.data : null;
+    if (podLoading || !feed) return <div className="empty">{t("Chargement du flux…")}</div>;
+    return (
+      <>
+        {feed.artwork && <img src={feed.artwork} alt="" style={{ width: 72, height: 72, borderRadius: 8, objectFit: "cover", margin: "4px" }} />}
+        {feed.episodes.length === 0
+          ? <div className="empty">{t("Aucun épisode dans ce flux.")}</div>
+          : feed.episodes.map((ep) => episodeRow(ep, feed.title))}
+      </>
+    );
+  };
+
   const viewTitle = () => {
     if (view === "selection") return t("Sélection Auris");
     if (view === "pinned") return t("Radios épinglées");
@@ -1722,6 +1856,8 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
     if (view.startsWith("genre:")) return t("Genre : {name}", { name: view.slice(6) });
     if (view.startsWith("country:")) return t("Pays : {name}", { name: view.slice(8) });
     if (view.startsWith("search:")) return t("Recherche : {q}", { q: view.slice(7) });
+    if (view === "podcasts") return t("Podcasts");
+    if (view.startsWith("podshow:")) return podFeed?.url === decodeURIComponent(view.slice(8)) ? podFeed.data.title : t("Podcast");
     return t("Radios");
   };
 
@@ -1750,6 +1886,7 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
     { id: "__artist", icon: "user", label: t("Radio d'artiste…"), sub: t("basée sur un artiste") },
     { id: "__search", icon: "search", label: t("Rechercher"), sub: t("par nom de radio") },
     { id: "__add", icon: "plus", label: t("Ajouter une radio"), sub: t("URL de flux personnalisée") },
+    { id: "podcasts", icon: "podcast", label: t("Podcasts"), sub: t("recherche & abonnements") },
   ];
 
   const onTile = (id: string) => {
@@ -1811,6 +1948,10 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
     if (view === "fav") return list.favorites.length ? list.favorites.map(row) : <div className="empty">{t("Aucune radio favorite — ajoutez-en via « Ajouter une radio » ou le menu ⋮ d'une radio.")}</div>;
     if (view === "builtin") return list.builtin.map(row);
     if (view === "sources") return list.sources.length ? list.sources.map(row) : <div className="empty">{t("Aucune source radio configurée.")}</div>;
+    // vues podcasts (#81)
+    if (view === "podcasts") return podcastsView();
+    if (view.startsWith("podshow:")) return podshowView();
+
     // ne rend les données de l'annuaire que si elles correspondent à la vue courante
     const data = dir && dir.view === view ? dir.data : null;
     if (dirLoading || !data) return <div className="empty">{t("Chargement de l'annuaire…")}</div>;

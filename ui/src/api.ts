@@ -295,6 +295,39 @@ export interface DirStation {
   votes: number;
 }
 
+/** Émission de podcast (#81) — résultat de recherche iTunes ou abonnement. */
+export interface PodcastShow {
+  id: string;
+  title: string;
+  author: string;
+  feed_url: string;
+  artwork: string;
+  description: string;
+  subscribed: boolean;
+}
+
+/** Épisode de podcast (#81) — item RSS. */
+export interface PodcastEpisode {
+  id: string;
+  title: string;
+  url: string;
+  pub_date: string;
+  duration_secs: number | null;
+  description: string;
+  image: string;
+  length_bytes: number | null;
+}
+
+/** Flux RSS complet d'une émission (#81). */
+export interface PodcastFeed {
+  title: string;
+  author: string;
+  artwork: string;
+  description: string;
+  feed_url: string;
+  episodes: PodcastEpisode[];
+}
+
 export interface CopyReport {
   files: number;
   bytes: number;
@@ -816,6 +849,15 @@ export const api = {
   radiosSelection: () => req<DirSection[]>("/api/radios/selection"),
   artistRadio: (name: string) => req<ArtistRadio>(`/api/radios/artist?name=${encodeURIComponent(name)}`),
   playArtistRadio: (name: string) => req<ArtistRadioPlayed>("/api/radios/artist-radio", post({ name })),
+  /** Podcasts (#81) : q vide = abonnements, sinon recherche iTunes. */
+  podcasts: (q = "", limit = 30) => req<PodcastShow[]>(`/api/podcasts?q=${encodeURIComponent(q)}&limit=${limit}`),
+  podcastFeed: (url: string) => req<PodcastFeed>(`/api/podcasts/feed?url=${encodeURIComponent(url)}`),
+  podcastSubscriptions: () => req<PodcastShow[]>("/api/podcasts/subscriptions"),
+  podcastSubscribe: (s: { feed_url: string; title: string; artwork: string; author: string }) =>
+    req<PodcastShow[]>("/api/podcasts/subscribe", post(s)),
+  podcastUnsubscribe: (id: string) => req<PodcastShow[]>(`/api/podcasts/subscriptions/${encodeURIComponent(id)}`, del()),
+  playPodcastEpisode: (e: { url: string; title: string; show: string; duration_secs?: number | null }) =>
+    req<PlayerState>("/api/podcasts/play", post(e)),
   browseTree: (uri: string) => req<BrowseEntry[]>(`/api/browse/tree?uri=${encodeURIComponent(uri)}`),
   usbDevices: () => req<MountInfo[]>("/api/usb/devices"),
   /** Découverte SSDP des serveurs UPnP/DLNA du LAN (cache 30 s côté serveur). */
