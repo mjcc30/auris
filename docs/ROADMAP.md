@@ -77,6 +77,25 @@ ouverts ou des intégrations communautaires avec compte utilisateur :
 
 *Sortie : un écosystème de plugins fonctionnel + multiroom de base.*
 
+## v0.7.0 — Podcasts & éditorial (taguée)
+
+- Abonnements podcasts (RSS), épisodes, lecture dans la file, page dédiée.
+- Radios web : lecture infinie, recherche, favoris.
+- API REST v1 façon Volumio (`/api/v1/*`, #76) pour apps tierces.
+
+## v0.8.0 — Sources gratuites sans compte (taguée)
+
+- **Internet Archive** (#84) : populaires, ajouts récents, recherche, lecture directe.
+- **Deezer extraits 30 s** (#85) : chart + recherche via API keyless.
+- Auto-ajout des deux sources dans les nouvelles installations.
+
+## v0.9.0 — Compat clients tiers (en cours)
+
+- **API Subsonic serveur v1 lecture seule** (#79) sur `/rest/*` : ping, artists,
+  albums, search3, playlists, coverArt, stream (Range/206) — DSub, Ultrasonic,
+  Strawberry… se connectent à Auris comme à un serveur perso.
+- API socket.io Volumio v1.7.4 (#45) et protocole MPD (#80) : en backlog.
+
 ## Au-delà (idées, non planifiées)
 
 - v1.1 : DSD natif (ASIO Windows, ALSA DSD), redémarrage auto après update,
