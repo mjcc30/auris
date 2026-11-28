@@ -40,6 +40,7 @@ mod auth;
 mod camilla;
 mod dlna_renderer;
 mod lastfm;
+mod mix;
 pub mod mpd;
 mod multiroom;
 mod network;
@@ -494,6 +495,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/radios/selection", get(radios::get_selection))
         .route("/api/radios/artist", get(radios::get_artist_radio))
         .route("/api/radios/artist-radio", post(radios::post_artist_radio))
+        // Instant Mix (#105)
+        .route("/api/mix", post(mix::post_mix))
         .route("/api/radios/play-url", post(radios::post_play_url))
         // podcasts (#81)
         .route("/api/podcasts", get(podcasts::get_podcasts))

@@ -334,6 +334,25 @@ export default function App() {
     return () => window.removeEventListener("auris:artist-radio", h);
   }, [act, say]);
 
+  // Instant Mix (#105) — émis par les boutons « Mix » (piste, album, artiste).
+  useEffect(() => {
+    const h = (e: Event) => {
+      const m = (e as CustomEvent<{ kind: "track" | "album" | "artist"; id: string }>).detail;
+      if (!m?.id) return;
+      act(async () => {
+        const r = await api.mix(m.kind, m.id, 50);
+        if (!r.tracks.length) {
+          say(t("Aucun titre similaire dans la bibliothèque"));
+          return;
+        }
+        await api.playQueue(r.tracks, 0);
+        say(t("Mix lancé depuis « {name} » — {count} titres", { name: r.seed, count: r.tracks.length }));
+      });
+    };
+    window.addEventListener("auris:mix", h);
+    return () => window.removeEventListener("auris:mix", h);
+  }, [act, say]);
+
   const updateSettings = async (patch: (s: Settings) => Settings, okMsg?: string) => {
     if (!settings) return;
     const next = patch(settings);
@@ -1119,6 +1138,10 @@ function ArtistView({ id, name, playAll, playTrack, favs, onToggleFav, pins, onT
       <div className="toolbar">
         <button className="btn ghost sm" onClick={onBack}><Icon name="back" size={16} /> {t("Retour")}</button>
         <button className="btn sm" disabled={!tracks.length} onClick={() => playAll(tracks)}><Icon name="play" size={14} filled /> {t("Tout lire")}</button>
+        <button className="btn ghost sm" title={t("Instant Mix depuis cet artiste")}
+          onClick={() => window.dispatchEvent(new CustomEvent("auris:mix", { detail: { kind: "artist", id } }))}>
+          <Icon name="shuffle" size={14} /> {t("Mix")}
+        </button>
       </div>
       <div className="artist-head">
         <div className="cover big"><SmartImg local={detail?.cover_url ?? null} fallback={api.artistImageUrl(id)} icon="user" size={44} />
@@ -1228,6 +1251,10 @@ function AlbumView({ id, title, artist, playAll, playTrack, say, favs, onToggleF
       <div className="toolbar">
         <button className="btn ghost sm" onClick={onBack}><Icon name="back" size={16} /> Retour</button>
         <button className="btn sm" onClick={() => tracks.length && playAll(tracks)}><Icon name="play" size={14} filled /> Tout lire</button>
+        <button className="btn ghost sm" title={t("Instant Mix depuis cet album")}
+          onClick={() => window.dispatchEvent(new CustomEvent("auris:mix", { detail: { kind: "album", id } }))}>
+          <Icon name="shuffle" size={14} /> {t("Mix")}
+        </button>
         <button className="btn ghost sm" onClick={() => { window.location.href = api.albumExportUrl(id); }}><Icon name="download" size={16} /> Export ZIP</button>
         <button className="btn ghost sm" onClick={async () => {
           try {
@@ -1349,6 +1376,10 @@ function TrackTable({ tracks, current, playTrack, playAll, albumCover, favs, onT
             <td className="hide-sm"><span className="badge">{tr.format ? fmtFormat(tr.format) : ""}</span></td>
             <td className="num-time">{tr.duration_secs != null ? fmtTime(tr.duration_secs) : "—"}</td>
             <td className="num">
+              <button className="icon-btn" title={t("Instant Mix depuis ce morceau")}
+                onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent("auris:mix", { detail: { kind: "track", id: tr.id } })); }}>
+                <Icon name="shuffle" size={16} />
+              </button>
               {tr.artist && (
                 <button className="icon-btn" title={t("Lancer une radio basée sur {artist}", { artist: tr.artist })}
                   onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent("auris:artist-radio", { detail: tr.artist })); }}>

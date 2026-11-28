@@ -660,6 +660,14 @@ export interface EqSettings {
   bands: EqBand[];
 }
 
+/** POST /api/mix — Instant Mix (#105). */
+export interface MixResult {
+  kind: string;
+  seed: string;
+  similar_artists: string[];
+  tracks: Track[];
+}
+
 export interface PlaybackSettings {
   volume_curve: "logarithmic" | "linear";
   max_volume: number;
@@ -949,6 +957,9 @@ export const api = {
   playTrack: (trackId: string) => req<PlayerState>("/api/player/play", post({ track_id: trackId })),
   playQueue: (tracks: Track[], index = 0) =>
     req<PlayerState>("/api/player/play", post({ queue: tracks, index })),
+  /** Instant Mix (#105) : file de titres similaires depuis un morceau/album/artiste. */
+  mix: (kind: "track" | "album" | "artist", id: string, limit?: number) =>
+    req<MixResult>("/api/mix", post({ kind, id, limit: limit ?? null })),
   pause: () => req<PlayerState>("/api/player/pause", post({})),
   resume: () => req<PlayerState>("/api/player/resume", post({})),
   stop: () => req<PlayerState>("/api/player/stop", post({})),

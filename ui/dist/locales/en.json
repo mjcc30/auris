@@ -313,5 +313,11 @@
   "Galerie": "Gallery",
   "Artistes similaires": "Similar artists",
   "Discographie MusicBrainz": "MusicBrainz discography",
-  "dans la bibliothèque": "in library"
+  "dans la bibliothèque": "in library",
+  "Mix": "Mix",
+  "Instant Mix depuis ce morceau": "Instant Mix from this track",
+  "Instant Mix depuis cet album": "Instant Mix from this album",
+  "Instant Mix depuis cet artiste": "Instant Mix from this artist",
+  "Mix lancé depuis « {name} » — {count} titres": "Mix started from \"{name}\" — {count} tracks",
+  "Aucun titre similaire dans la bibliothèque": "No similar tracks in the library"
 }
