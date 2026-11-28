@@ -48,10 +48,28 @@ const PINS_KEY: &str = "all";
 /// Loudness intégrée (LUFS) mesurée par piste, mise en cache (#37).
 const TREE_LUFS: &str = "lufs";
 
+/// Mémoïsation des listes agrégées : évite de relire/trier/décoder tout l'index
+/// sled à chaque requête UI (16 k pistes = plusieurs dizaines de ms, ressenti comme
+/// un chargement long à chaque navigation). Invalide sur toute mutation.
+#[derive(Default)]
+struct Memos {
+    tracks: Option<(std::time::Instant, Arc<Vec<Track>>)>,
+    albums: Option<(std::time::Instant, Arc<Vec<Album>>)>,
+    artists: Option<(std::time::Instant, Arc<Vec<Artist>>)>,
+    genres: Option<(std::time::Instant, Arc<Vec<GenreFacet>>)>,
+    decades: Option<(std::time::Instant, Arc<Vec<DecadeFacet>>)>,
+}
+
+const TTL_TRACKS: std::time::Duration = std::time::Duration::from_secs(10);
+const TTL_ALBUMS: std::time::Duration = std::time::Duration::from_secs(30);
+const TTL_ARTISTS: std::time::Duration = std::time::Duration::from_secs(30);
+const TTL_FACETS: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub struct Library {
     db: sled::Db,
     sources: Arc<SourcesManager>,
     scan_status: Arc<Mutex<ScanStatus>>,
+    memo: Arc<Mutex<Memos>>,
 }
 
 fn enc<T: serde::Serialize>(v: &T) -> Result<Vec<u8>> {
@@ -92,7 +110,13 @@ impl Library {
             db,
             sources,
             scan_status: Arc::new(Mutex::new(ScanStatus::default())),
+            memo: Arc::new(Mutex::new(Memos::default())),
         })
+    }
+
+    /// Invalide tous les mémo (mutation de l'index : upsert, scan, purge…).
+    pub fn invalidate(&self) {
+        *self.memo.lock().unwrap() = Memos::default();
     }
 
     pub fn sources(&self) -> Arc<SourcesManager> {
@@ -127,6 +151,8 @@ impl Library {
         let sources = self.sources.clone();
         let status = self.scan_status.clone();
         let sid = source_id.to_string();
+        let memo = self.memo.clone();
+        *memo.lock().unwrap() = Memos::default();
         std::thread::spawn(move || {
             let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -137,10 +163,12 @@ impl Library {
                     status.lock().unwrap().last_error = Some(e.to_string());
                     status.lock().unwrap().running = false;
                     status.lock().unwrap().finished_at = Some(chrono::Utc::now().timestamp());
+                    *memo.lock().unwrap() = Memos::default();
                     return;
                 }
             };
             rt.block_on(scan_source_blocking(db, sources, status, sid));
+            *memo.lock().unwrap() = Memos::default();
         });
         Ok(())
     }
@@ -170,6 +198,8 @@ impl Library {
         let db = self.db.clone();
         let mgr = self.sources.clone();
         let status = self.scan_status.clone();
+        let memo = self.memo.clone();
+        *memo.lock().unwrap() = Memos::default();
         std::thread::spawn(move || {
             let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -181,6 +211,7 @@ impl Library {
                     st.last_error = Some(e.to_string());
                     st.running = false;
                     st.finished_at = Some(chrono::Utc::now().timestamp());
+                    *memo.lock().unwrap() = Memos::default();
                     return;
                 }
             };
@@ -201,6 +232,7 @@ impl Library {
             let mut st = status.lock().unwrap();
             st.running = false;
             st.finished_at = Some(chrono::Utc::now().timestamp());
+            *memo.lock().unwrap() = Memos::default();
         });
         Ok(())
     }
@@ -219,6 +251,14 @@ impl Library {
     }
 
     pub fn tracks(&self) -> Vec<Track> {
+        {
+            let m = self.memo.lock().unwrap();
+            if let Some((at, v)) = &m.tracks {
+                if at.elapsed() < TTL_TRACKS {
+                    return v.as_ref().clone();
+                }
+            }
+        }
         let tree = self.tree(TREE_TRACKS);
         let mut out = Vec::new();
         for (_, v) in tree.iter().flatten() {
@@ -236,7 +276,39 @@ impl Library {
                         .cmp(&b.track_number.unwrap_or(0)),
                 )
         });
-        out
+        let arc = Arc::new(out);
+        self.memo.lock().unwrap().tracks = Some((std::time::Instant::now(), arc.clone()));
+        arc.as_ref().clone()
+    }
+
+    /// Page de pistes (filtres genre/décennie + sous-chaîne q sur titre/artiste/album),
+    /// avec le total avant pagination — pour un onglet « Titres » rapide même avec
+    /// des dizaines de milliers de pistes (#89).
+    pub fn tracks_page(
+        &self,
+        genre: Option<&str>,
+        decade: Option<u32>,
+        q: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> (usize, Vec<Track>) {
+        let all = self.tracks_filtered(genre, decade);
+        let ql = q.map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+        let filtered: Vec<Track> = match &ql {
+            Some(ql) => all
+                .into_iter()
+                .filter(|t| {
+                    t.title.to_lowercase().contains(ql)
+                        || t.artist.to_lowercase().contains(ql)
+                        || t.album_artist.to_lowercase().contains(ql)
+                        || t.album.to_lowercase().contains(ql)
+                })
+                .collect(),
+            None => all,
+        };
+        let total = filtered.len();
+        let items = filtered.into_iter().skip(offset).take(limit).collect();
+        (total, items)
     }
 
     pub fn get_by_uri(&self, uri: &str) -> Option<Track> {
@@ -258,6 +330,7 @@ impl Library {
         self.tree(TREE_BY_URI)
             .insert(t.uri.as_bytes(), enc(&t.id)?)
             .map_err(se)?;
+        self.invalidate();
         Ok(())
     }
 
@@ -401,6 +474,14 @@ impl Library {
     }
 
     pub fn albums(&self) -> Vec<Album> {
+        {
+            let m = self.memo.lock().unwrap();
+            if let Some((at, v)) = &m.albums {
+                if at.elapsed() < TTL_ALBUMS {
+                    return v.as_ref().clone();
+                }
+            }
+        }
         let tree = self.tree(TREE_ALBUMS);
         let mut out: Vec<Album> = tree
             .iter()
@@ -413,7 +494,9 @@ impl Library {
                 .cmp(&b.artist.to_lowercase())
                 .then(a.title.cmp(&b.title))
         });
-        out
+        let arc = Arc::new(out);
+        self.memo.lock().unwrap().albums = Some((std::time::Instant::now(), arc.clone()));
+        arc.as_ref().clone()
     }
 
     pub fn album(&self, album_id: &str) -> Option<(Album, Vec<Track>)> {
@@ -428,6 +511,14 @@ impl Library {
     }
 
     pub fn artists(&self) -> Vec<Artist> {
+        {
+            let m = self.memo.lock().unwrap();
+            if let Some((at, v)) = &m.artists {
+                if at.elapsed() < TTL_ARTISTS {
+                    return v.as_ref().clone();
+                }
+            }
+        }
         let tree = self.tree(TREE_ARTISTS);
         let mut out: Vec<Artist> = tree
             .iter()
@@ -435,7 +526,9 @@ impl Library {
             .filter_map(|(_, v)| dec::<Artist>(&v).ok())
             .collect();
         out.sort_by_key(|a| a.name.to_lowercase());
-        out
+        let arc = Arc::new(out);
+        self.memo.lock().unwrap().artists = Some((std::time::Instant::now(), arc.clone()));
+        arc.as_ref().clone()
     }
 
     /// Stats globales calculées depuis les pistes (clés dédupliquées) — #74.
@@ -497,6 +590,21 @@ impl Library {
 
     /// Facettes « genre » agrégées depuis les tags des pistes (triées par nombre de pistes).
     pub fn genres(&self) -> Vec<GenreFacet> {
+        {
+            let m = self.memo.lock().unwrap();
+            if let Some((at, v)) = &m.genres {
+                if at.elapsed() < TTL_FACETS {
+                    return v.as_ref().clone();
+                }
+            }
+        }
+        let out = self.genres_uncached();
+        let arc = Arc::new(out);
+        self.memo.lock().unwrap().genres = Some((std::time::Instant::now(), arc.clone()));
+        arc.as_ref().clone()
+    }
+
+    fn genres_uncached(&self) -> Vec<GenreFacet> {
         let mut by_key: HashMap<String, GenreFacet> = HashMap::new();
         let mut album_keys: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
         for t in self.tracks() {
@@ -535,6 +643,21 @@ impl Library {
 
     /// Facettes « décennie » agrégées depuis l'année des pistes (triées de la plus récente à la plus ancienne).
     pub fn decades(&self) -> Vec<DecadeFacet> {
+        {
+            let m = self.memo.lock().unwrap();
+            if let Some((at, v)) = &m.decades {
+                if at.elapsed() < TTL_FACETS {
+                    return v.as_ref().clone();
+                }
+            }
+        }
+        let out = self.decades_uncached();
+        let arc = Arc::new(out);
+        self.memo.lock().unwrap().decades = Some((std::time::Instant::now(), arc.clone()));
+        arc.as_ref().clone()
+    }
+
+    fn decades_uncached(&self) -> Vec<DecadeFacet> {
         let mut by_decade: HashMap<u32, DecadeFacet> = HashMap::new();
         let mut album_keys: HashMap<u32, std::collections::HashSet<String>> = HashMap::new();
         for t in self.tracks() {

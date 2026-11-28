@@ -56,6 +56,11 @@ export function Icon({ name, size = 24, filled = false, className = "" }: { name
     puzzle: (<><path d="M10 3.5a2 2 0 0 1 4 0V5h4a1.5 1.5 0 0 1 1.5 1.5V10h-1.5a2 2 0 0 0 0 4h1.5v4.5A1.5 1.5 0 0 1 18 20h-4v-1.5a2 2 0 0 0-4 0V20H6a1.5 1.5 0 0 1-1.5-1.5V14H6a2 2 0 0 0 0-4H4.5V6.5A1.5 1.5 0 0 1 6 5h4V3.5z" /></>),
     sparkles: (<><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" /><path d="M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" /></>),
     user: (<><circle cx="12" cy="8" r="4" /><path d="M4 20c1.5-3.5 4.5-5 8-5s6.5 1.5 8 5" /></>),
+    palette: (<><path d="M12 3a9 9 0 1 0 0 18c1.2 0 2-.9 2-2 0-.6-.2-1-.6-1.4-.3-.4-.5-.8-.5-1.3 0-1 .8-1.8 1.8-1.8H17a4.5 4.5 0 0 0 4.5-4.5C21.5 6 17.2 3 12 3z" /><circle cx="7.5" cy="11" r="1.1" fill="currentColor" stroke="none" /><circle cx="10.5" cy="7.5" r="1.1" fill="currentColor" stroke="none" /><circle cx="15" cy="7.8" r="1.1" fill="currentColor" stroke="none" /></>),
+    wifi: (<><path d="M2.5 9.5a14 14 0 0 1 19 0" /><path d="M5.5 13a9.5 9.5 0 0 1 13 0" /><path d="M8.6 16.4a5 5 0 0 1 6.8 0" /><circle cx="12" cy="19.5" r="1.2" fill="currentColor" stroke="none" /></>),
+    chip: (<><rect x="6" y="6" width="12" height="12" rx="2" /><rect x="10" y="10" width="4" height="4" /><path d="M9 2.5v3M15 2.5v3M9 18.5v3M15 18.5v3M2.5 9h3M2.5 15h3M18.5 9h3M18.5 15h3" /></>),
+    wave: (<><path d="M3 12h2M7 8v8M11 4v16M15 7v10M19 10v4M21 12h0" /></>),
+    spotify: (<><circle cx="12" cy="12" r="9" /><path d="M7.5 9.8c3-.9 6.3-.6 9 .9M8 12.7c2.5-.7 5-.4 7.2.8M8.6 15.4c1.9-.5 3.8-.3 5.5.6" /></>),
   };
   return (
     <svg

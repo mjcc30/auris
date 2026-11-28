@@ -774,6 +774,34 @@ export interface BackupPushReport {
   bytes: number;
 }
 
+// ---------- Cache client des GET idempotents ----------
+// La navigation entre vues démonte/remonte les composants : sans cache, chaque retour
+// sur Bibliothèque/Radios re-télécharge tout (16 k pistes…). TTL court + dédup in-flight.
+const getCache = new Map<string, { at: number; data: unknown }>();
+const inflight = new Map<string, Promise<unknown>>();
+
+function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
+  const c = getCache.get(key);
+  if (c && Date.now() - c.at < ttlMs) return Promise.resolve(c.data as T);
+  const inf = inflight.get(key);
+  if (inf) return inf as Promise<T>;
+  const p = fn()
+    .then((d) => {
+      getCache.set(key, { at: Date.now(), data: d });
+      return d;
+    })
+    .finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+
+/** Invalide les entrées de cache dont la clé commence par l'un des préfixes donnés. */
+export function bustCache(...prefixes: string[]): void {
+  for (const k of [...getCache.keys()]) {
+    if (prefixes.some((p) => k.startsWith(p))) getCache.delete(k);
+  }
+}
+
 async function errMsg(r: Response): Promise<string> {
   let msg = `HTTP ${r.status}`;
   try {
@@ -825,46 +853,61 @@ export const api = {
     if (genre) p.set("genre", genre);
     if (decade != null) p.set("decade", String(decade));
     const qs = p.toString();
-    return req<Track[]>(`/api/library/tracks${qs ? `?${qs}` : ""}`);
+    const key = `tracks${qs ? `?${qs}` : ""}`;
+    return cached<Track[]>(key, 15000, () => req<Track[]>(`/api/library/tracks${qs ? `?${qs}` : ""}`));
+  },
+  /** Page paginée de pistes (#89) : `{total, items}` — jamais mise en cache. */
+  tracksPage: (o: { limit?: number; offset?: number; q?: string; genre?: string; decade?: number }) => {
+    const p = new URLSearchParams();
+    p.set("limit", String(o.limit ?? 200));
+    p.set("offset", String(o.offset ?? 0));
+    if (o.q) p.set("q", o.q);
+    if (o.genre) p.set("genre", o.genre);
+    if (o.decade != null) p.set("decade", String(o.decade));
+    return req<{ total: number; items: Track[] }>(`/api/library/tracks/page?${p}`);
   },
   track: (id: string) => req<Track>(`/api/library/tracks/${encodeURIComponent(id)}`),
-  facets: () => req<Facets>("/api/library/facets"),
-  libraryStats: () => req<LibraryStats>("/api/library/stats"),
-  history: (limit = 50) => req<HistoryTrack[]>(`/api/library/history?limit=${limit}`),
-  pins: () => req<Pins>("/api/pins"),
-  pinsResolved: () => req<PinsResolved>("/api/pins/resolved"),
+  facets: () => cached<Facets>("facets", 30000, () => req<Facets>("/api/library/facets")),
+  libraryStats: () => cached<LibraryStats>("stats", 15000, () => req<LibraryStats>("/api/library/stats")),
+  history: (limit = 50) => cached<HistoryTrack[]>(`history?${limit}`, 15000, () => req<HistoryTrack[]>(`/api/library/history?limit=${limit}`)),
+  pins: () => cached<Pins>("pins", 15000, () => req<Pins>("/api/pins")),
+  pinsResolved: () => cached<PinsResolved>("pinsResolved", 15000, () => req<PinsResolved>("/api/pins/resolved")),
   togglePin: (kind: PinKind, id: string) =>
-    req<{ kind: PinKind; id: string; pinned: boolean }>("/api/pins/toggle", post({ kind, id })),
-  favorites: () => req<Favorites>("/api/favorites"),
-  favoritesResolved: () => req<FavoritesResolved>("/api/favorites/resolved"),
+    req<{ kind: PinKind; id: string; pinned: boolean }>("/api/pins/toggle", post({ kind, id }))
+      .then((r) => { bustCache("pins"); return r; }),
+  favorites: () => cached<Favorites>("favs", 15000, () => req<Favorites>("/api/favorites")),
+  favoritesResolved: () => cached<FavoritesResolved>("favsResolved", 15000, () => req<FavoritesResolved>("/api/favorites/resolved")),
   toggleFavorite: (kind: FavKind, id: string) =>
-    req<{ kind: FavKind; id: string; favorited: boolean }>("/api/favorites/toggle", post({ kind, id })),
-  albums: () => req<Album[]>("/api/library/albums"),
-  artists: () => req<Artist[]>("/api/library/artists"),
+    req<{ kind: FavKind; id: string; favorited: boolean }>("/api/favorites/toggle", post({ kind, id }))
+      .then((r) => { bustCache("favs"); return r; }),
+  albums: () => cached<Album[]>("albums", 20000, () => req<Album[]>("/api/library/albums")),
+  artists: () => cached<Artist[]>("artists", 20000, () => req<Artist[]>("/api/library/artists")),
   artist: (id: string) => req<ArtistDetail>(`/api/library/artists/${encodeURIComponent(id)}`),
   search: (q: string, source?: string) =>
     req<SearchResults>(
       `/api/library/search?q=${encodeURIComponent(q)}${source ? `&source=${encodeURIComponent(source)}` : ""}`
     ),
-  scan: (sourceId: string) => req<unknown>("/api/library/scan", post({ source_id: sourceId })),
+  scan: (sourceId: string) =>
+    req<unknown>("/api/library/scan", post({ source_id: sourceId }))
+      .then((r) => { bustCache("tracks", "albums", "artists", "facets", "stats", "history"); return r; }),
   scanStatus: () => req<unknown>("/api/library/scan/status"),
-  sources: () => req<Source[]>("/api/sources"),
-  addSource: (s: Source) => req<Source>("/api/sources", post(s)),
-  deleteSource: (id: string) => req<unknown>(`/api/sources/${encodeURIComponent(id)}`, del()),
+  sources: () => cached<Source[]>("sources", 15000, () => req<Source[]>("/api/sources")),
+  addSource: (s: Source) => req<Source>("/api/sources", post(s)).then((r) => { bustCache("sources"); return r; }),
+  deleteSource: (id: string) => req<unknown>(`/api/sources/${encodeURIComponent(id)}`, del()).then((r) => { bustCache("sources"); return r; }),
   toggleSource: (id: string, enabled: boolean) =>
     req<unknown>(`/api/sources/${encodeURIComponent(id)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled }),
-    }),
+    }).then((r) => { bustCache("sources"); return r; }),
   updateSource: (id: string, s: Source) =>
     req<Source>(`/api/sources/${encodeURIComponent(id)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...s, id }),
-    }),
+    }).then((r) => { bustCache("sources"); return r; }),
   browse: (uri: string) => req<BrowseEntry[]>(`/api/browse?uri=${encodeURIComponent(uri)}`),
-  radios: () => req<RadioList>("/api/radios"),
+  radios: () => cached<RadioList>("radios", 15000, () => req<RadioList>("/api/radios")),
   multiroomState: () => req<MultiroomState>("/api/multiroom/state"),
   mrCreateGroup: (name: string) => req<MrGroup>("/api/multiroom/groups", post({ name })),
   mrDeleteGroup: (id: string) => req<{ removed: boolean }>(`/api/multiroom/groups/${encodeURIComponent(id)}`, del()),
@@ -877,8 +920,10 @@ export const api = {
   mrSeek: (group: string, secs: number) => req<GroupActionReport>("/api/multiroom/seek", post({ group, secs })),
   mrVolume: (group: string, volume: number, member?: string) =>
     req<GroupActionReport>("/api/multiroom/volume", post({ group, volume, member })),
-  addRadio: (name: string, url: string) => req<RadioList>("/api/radios", post({ name, url })),
-  deleteRadio: (id: string) => req<RadioList>(`/api/radios/${encodeURIComponent(id)}`, del()),
+  addRadio: (name: string, url: string) =>
+    req<RadioList>("/api/radios", post({ name, url })).then((r) => { bustCache("radios"); return r; }),
+  deleteRadio: (id: string) =>
+    req<RadioList>(`/api/radios/${encodeURIComponent(id)}`, del()).then((r) => { bustCache("radios"); return r; }),
   playRadio: (id: string) => req<PlayerState>(`/api/radios/${encodeURIComponent(id)}/play`, post({})),
   playRadioUrl: (name: string, url: string) => req<PlayerState>("/api/radios/play-url", post({ name, url })),
   radiosDirGenres: () => req<DirTag[]>("/api/radios/dir/genres"),
@@ -905,11 +950,12 @@ export const api = {
   exportUrl: (uri: string, name?: string) =>
     `/api/export?uri=${encodeURIComponent(uri)}${name ? `&name=${encodeURIComponent(name)}` : ""}`,
   albumExportUrl: (albumId: string) => `/api/library/albums/${encodeURIComponent(albumId)}/export`,
-  playlists: () => req<Playlist[]>("/api/playlists"),
+  playlists: () => cached<Playlist[]>("playlists", 15000, () => req<Playlist[]>("/api/playlists")),
   addPlaylist: (name: string, trackIds?: string[], uri?: string) =>
-    req<Playlist>("/api/playlists", post({ name, track_ids: trackIds, uri })),
+    req<Playlist>("/api/playlists", post({ name, track_ids: trackIds, uri })).then((r) => { bustCache("playlists"); return r; }),
   playlist: (id: string) => req<PlaylistDetail>(`/api/playlists/${encodeURIComponent(id)}`),
-  deletePlaylist: (id: string) => req<unknown>(`/api/playlists/${encodeURIComponent(id)}`, del()),
+  deletePlaylist: (id: string) =>
+    req<unknown>(`/api/playlists/${encodeURIComponent(id)}`, del()).then((r) => { bustCache("playlists"); return r; }),
   playPlaylist: (id: string) => req<PlayerState>(`/api/playlists/${encodeURIComponent(id)}/play`, post({})),
   playlistAdd: (id: string, uri: string) =>
     req<{ playlist: Playlist; added: number }>(`/api/playlists/${encodeURIComponent(id)}/add`, post({ uri })),

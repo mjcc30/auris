@@ -412,6 +412,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/queue/{index}", delete(delete_queue_item))
         // bibliotheque
         .route("/api/library/tracks", get(get_tracks))
+        .route("/api/library/tracks/page", get(get_tracks_page))
         .route("/api/library/tracks/{id}", get(get_track))
         .route("/api/library/facets", get(get_facets))
         .route("/api/library/stats", get(get_library_stats))
@@ -964,6 +965,32 @@ async fn get_tracks(
         t.lyrics = None;
     }
     Json(tracks)
+}
+
+/// `GET /api/library/tracks/page?limit&offset&q&genre&decade` — page de pistes avec total
+/// (`{total, items}`), pour un onglet Titres fluide même avec des dizaines de milliers de
+/// pistes (#89). Les paroles embarquées sont ôtées de la liste.
+async fn get_tracks_page(
+    State(s): State<AppState>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let limit = q
+        .get("limit")
+        .and_then(|l| l.parse::<usize>().ok())
+        .unwrap_or(200)
+        .clamp(1, 1000);
+    let offset = q
+        .get("offset")
+        .and_then(|o| o.parse::<usize>().ok())
+        .unwrap_or(0);
+    let genre = q.get("genre").map(|s| s.as_str());
+    let decade = q.get("decade").and_then(|d| d.parse::<u32>().ok());
+    let query = q.get("q").map(|s| s.as_str());
+    let (total, mut items) = s.library.tracks_page(genre, decade, query, limit, offset);
+    for t in &mut items {
+        t.lyrics = None;
+    }
+    Json(serde_json::json!({ "total": total, "items": items }))
 }
 
 /// `GET /api/library/tracks/{id}` — piste complète, crédits étendus et paroles embarquées inclus (#73).

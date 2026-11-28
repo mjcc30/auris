@@ -29,6 +29,7 @@ nav:
       - Sources & import/export: SOURCES.md
       - User stories: USER_STORIES.md
       - Roadmap: ROADMAP.md
+      - Non-features volontaires: NON-FEATURES.md
   - Développeurs:
       - API REST + WebSocket: API.md
       - Packaging & distribution: PACKAGING.md

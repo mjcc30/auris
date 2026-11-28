@@ -369,6 +369,8 @@ export default function App() {
             tab={npTab}
             setTab={setNpTab}
             onClose={() => setNpOpen(false)}
+            isLive={state.is_live}
+            streamTitle={state.stream_title}
           />
         )}
       </div>
@@ -522,14 +524,14 @@ type LibProps = {
 
 function Home({ state, sources, favs, onToggleFav, pins, onTogglePin, playTrack, playAll, openSource, openArtist, openAlbum }: { state: PlayerState | null; sources: Source[]; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; openSource: (id: string) => void; openArtist: (a: { id: string; name: string }) => void; openAlbum: (a: { id: string; title: string; artist: string }) => void } & LibProps) {
   const [albums, setAlbums] = useState<Album[]>([]);
-  const [tracks, setTracks] = useState<Track[]>([]);
+  const [tracks, setTracks] = useState<Track[] | null>(null);
   const [artists, setArtists] = useState<Artist[]>([]);
   const [facets, setFacets] = useState<Facets | null>(null);
   const [history, setHistory] = useState<HistoryTrack[]>([]);
   const [facet, setFacet] = useState<Facet | null>(null);
   useEffect(() => {
     api.albums().then(setAlbums).catch(() => {});
-    api.tracks().then((t) => setTracks(t.slice(0, 20))).catch(() => {});
+    api.tracksPage({ limit: 20 }).then((r) => setTracks(r.items)).catch(() => {});
     api.artists().then(setArtists).catch(() => {});
     api.facets().then(setFacets).catch(() => {});
     api.history(14).then(setHistory).catch(() => {});
@@ -661,7 +663,7 @@ function Home({ state, sources, favs, onToggleFav, pins, onTogglePin, playTrack,
         {sources.length === 0 && <div className="empty">{t("Aucune source — ajoutez-en une dans « Sources & réglages ».")}</div>}
       </Rail>
       <h2>{t("Titres récents")}</h2>
-      <TrackTable tracks={tracks} current={state?.current?.id} favs={favs} onToggleFav={onToggleFav} playTrack={playTrack} playAll={playAll} />
+      <TrackTable tracks={tracks ?? []} loading={tracks === null} current={state?.current?.id} favs={favs} onToggleFav={onToggleFav} playTrack={playTrack} playAll={playAll} />
     </div>
   );
 }
@@ -700,7 +702,7 @@ function FacetView({ facet, playTrack, playAll, favs, onToggleFav, pins, onToggl
           <div className="grid">
             {facetAlbums.map((a) => (
               <div key={a.id} className="card" onClick={() => onOpenAlbum({ id: a.id, title: a.title, artist: a.artist })}>
-                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" loading="lazy" /> : <Icon name="note" size={44} />}
                   <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
                   <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
                 </div>
@@ -719,9 +721,12 @@ function FacetView({ facet, playTrack, playAll, favs, onToggleFav, pins, onToggl
 
 function Library({ playTrack, playAll, playUri, openSource, say, refresh, searchNonce, searchQ, pendingArtist, onPendingArtistDone, pendingAlbum, onPendingAlbumDone, favs, onToggleFav, pins, onTogglePin }: { playTrack: (t: Track) => void; playAll: (t: Track[]) => void; playUri: (u: string) => void; openSource: (id: string) => void; say: (m: string) => void; refresh: () => Promise<void>; searchNonce: number; searchQ: string; pendingArtist: { id: string; name: string } | null; onPendingArtistDone: () => void; pendingAlbum: { id: string; title: string; artist: string } | null; onPendingAlbumDone: () => void } & LibProps) {
   const [tab, setTab] = useState<"tracks" | "albums" | "artists">("tracks");
-  const [tracks, setTracks] = useState<Track[]>([]);
-  const [albums, setAlbums] = useState<Album[]>([]);
-  const [artists, setArtists] = useState<Artist[]>([]);
+  // Onglet Titres paginé (#89) : on ne charge jamais les 16 k pistes d'un coup.
+  const [tracks, setTracks] = useState<Track[] | null>(null);
+  const [tracksTotal, setTracksTotal] = useState(0);
+  const [tracksLoading, setTracksLoading] = useState(false);
+  const [albums, setAlbums] = useState<Album[] | null>(null);
+  const [artists, setArtists] = useState<Artist[] | null>(null);
   const [q, setQ] = useState("");
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<SearchResults | null>(null);
@@ -732,6 +737,17 @@ function Library({ playTrack, playAll, playUri, openSource, say, refresh, search
   const [scanning, setScanning] = useState(false);
   const [albumDetail, setAlbumDetail] = useState<{ id: string; title: string; artist: string } | null>(null);
   const [artistDetail, setArtistDetail] = useState<{ id: string; name: string } | null>(null);
+  const TRACKS_PAGE = 200;
+  const loadTracksPage = (offset: number) => {
+    setTracksLoading(true);
+    api.tracksPage({ limit: TRACKS_PAGE, offset })
+      .then((r) => {
+        setTracks((prev) => (offset === 0 ? r.items : [...(prev ?? []), ...r.items]));
+        setTracksTotal(r.total);
+      })
+      .catch(() => {})
+      .finally(() => setTracksLoading(false));
+  };
   // Ouverture demandée depuis l'accueil (carte artiste/album) : on ouvre la vue correspondante.
   useEffect(() => {
     if (pendingArtist) { setArtistDetail(pendingArtist); setAlbumDetail(null); onPendingArtistDone(); }
@@ -740,16 +756,17 @@ function Library({ playTrack, playAll, playUri, openSource, say, refresh, search
     if (pendingAlbum) { setAlbumDetail(pendingAlbum); setArtistDetail(null); onPendingAlbumDone(); }
   }, [pendingAlbum, onPendingAlbumDone]);
   useEffect(() => {
-    api.tracks().then(setTracks).catch(() => {});
+    loadTracksPage(0);
     api.albums().then(setAlbums).catch(() => {});
     api.artists().then(setArtists).catch(() => {});
     api.sources().then(setSources).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const runSearch = (query: string, src: string) => {
     if (!query.trim()) {
       setSearching(false);
       setResults(null);
-      api.tracks().then(setTracks).catch(() => {});
+      loadTracksPage(0);
       return;
     }
     setSearching(true);
@@ -775,7 +792,7 @@ function Library({ playTrack, playAll, playUri, openSource, say, refresh, search
     setSearching(false);
     setResults(null);
     setQ("");
-    api.tracks().then(setTracks).catch(() => {});
+    loadTracksPage(0);
   };
   const scan = async () => {
     setScanning(true);
@@ -848,7 +865,7 @@ function Library({ playTrack, playAll, playUri, openSource, say, refresh, search
               <div className="grid">
                 {results.albums.items.map((a) => (
                   <div key={a.id} className="card" onClick={() => setAlbumDetail({ id: a.id, title: a.title, artist: a.artist })}>
-                    <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+                    <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" loading="lazy" /> : <Icon name="note" size={44} />}
                       <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
                       <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
                     </div>
@@ -915,12 +932,26 @@ function Library({ playTrack, playAll, playUri, openSource, say, refresh, search
           <button key={t} className={`seg-btn ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{label}</button>
         ))}
       </div>
-      {tab === "tracks" && <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={onToggleFav} />}
-      {tab === "albums" && (
+      {tab === "tracks" && (
+        <>
+          <TrackTable tracks={tracks ?? []} loading={tracks === null} playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={onToggleFav} />
+          {tracks !== null && tracks.length < tracksTotal && (
+            <div className="see-more">
+              <button className="btn ghost" disabled={tracksLoading} onClick={() => loadTracksPage(tracks.length)}>
+                {tracksLoading ? t("Chargement…") : t("Voir plus ({n} restantes)", { n: tracksTotal - tracks.length })}
+              </button>
+            </div>
+          )}
+          {tracks !== null && tracks.length >= tracksTotal && tracksTotal > TRACKS_PAGE && (
+            <div className="empty" style={{ padding: "12px 0" }}>{t("{n} titres au total", { n: tracksTotal })}</div>
+          )}
+        </>
+      )}
+      {tab === "albums" && (albums === null ? <div className="empty">{t("Chargement…")}</div> : (
         <div className="grid">
           {albums.map((a) => (
             <div key={a.id} className="card" onClick={() => setAlbumDetail({ id: a.id, title: a.title, artist: a.artist })}>
-              <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+              <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" loading="lazy" /> : <Icon name="note" size={44} />}
                 <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
                 <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
               </div>
@@ -929,12 +960,12 @@ function Library({ playTrack, playAll, playUri, openSource, say, refresh, search
             </div>
           ))}
         </div>
-      )}
-      {tab === "artists" && (
+      ))}
+      {tab === "artists" && (artists === null ? <div className="empty">{t("Chargement…")}</div> : (
         <table className="tracks"><tbody>
           {artists.map((a) => <tr key={a.id} className="link" onClick={() => setArtistDetail({ id: a.id, name: a.name })}><td>{a.name}</td><td className="meta"><FavHeart on={favs.artists.includes(a.id)} onToggle={() => onToggleFav("artist", a.id)} /> {cl(a.album_count, "album", "albums")}</td></tr>)}
         </tbody></table>
-      )}
+      ))}
         </>
       )}
     </div>
@@ -981,7 +1012,7 @@ function ArtistView({ id, name, playAll, playTrack, favs, onToggleFav, pins, onT
           <div className="grid">
             {albums.map((a) => (
               <div key={a.id} className="card" onClick={() => onOpenAlbum({ id: a.id, title: a.title, artist: a.artist })}>
-                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" loading="lazy" /> : <Icon name="note" size={44} />}
                   <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
                   <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
                 </div>
@@ -1073,7 +1104,7 @@ function FavoritesView({ playTrack, playAll, favs, onToggleFav, pins, onTogglePi
               <div className="grid">
                 {data.albums.map((a) => (
                   <div key={a.id} className="card" onClick={() => openAlbum({ id: a.id, title: a.title, artist: a.artist })}>
-                    <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" /> : <Icon name="note" size={44} />}
+                    <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" loading="lazy" /> : <Icon name="note" size={44} />}
                       <PinButton on onToggle={() => onTogglePin("album", a.id)} />
                       <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
                       <FavHeart on onToggle={() => onToggleFav("album", a.id)} />
@@ -1121,7 +1152,8 @@ function fmtFormat(f: NonNullable<Track["format"]>): string {
   return [f.kind, sr, bits, ch].filter(Boolean).join(" · ");
 }
 
-function TrackTable({ tracks, current, playTrack, playAll, albumCover, favs, onToggleFav }: { tracks: Track[]; current?: string | null; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; albumCover?: string | null; favs?: Favorites; onToggleFav?: (kind: FavKind, id: string) => void }) {
+function TrackTable({ tracks, current, playTrack, playAll, albumCover, favs, onToggleFav, loading }: { tracks: Track[]; current?: string | null; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; albumCover?: string | null; favs?: Favorites; onToggleFav?: (kind: FavKind, id: string) => void; loading?: boolean }) {
+  if (loading) return <div className="empty">{t("Chargement…")}</div>;
   if (tracks.length === 0) return <div className="empty">Aucun titre.</div>;
   return (
     <table className="tracks">
@@ -2074,11 +2106,12 @@ function Queue({ state, act, say, playAll }: { state: PlayerState | null; act: (
         <table className="tracks">
           <thead><tr><th>#</th><th>Titre</th><th>Artiste</th><th>Album</th><th>Durée</th><th></th></tr></thead>
           <tbody>
-            {queue.map((t, i) => (
-              <tr key={`${t.id}-${i}`} className={idx === i ? "playing" : ""} onClick={() => playAll(queue.slice(i))}>
+            {queue.map((row, i) => (
+              <tr key={`${row.id}-${i}`} className={idx === i ? "playing" : ""} onClick={() => playAll(queue.slice(i))}
+                title={idx === i && state?.is_live ? t("Flux live : la radio remplace la file d'attente (1 entrée) — « Ajouter à la file » existe dans le menu ⋮ de la radio") : undefined}>
                 <td className="num">{idx === i ? <Icon name="play" size={12} filled /> : i + 1}</td>
-                <td>{t.title}</td><td>{t.artist}</td><td>{t.album}</td>
-                <td className="num-time">{t.duration_secs != null ? fmtTime(t.duration_secs) : "—"}</td>
+                <td>{row.title}{idx === i && state?.is_live && <span className="pill live" style={{ marginLeft: 8 }}>{t("EN DIRECT")}</span>}</td><td>{row.artist}</td><td>{row.album}</td>
+                <td className="num-time">{row.duration_secs != null ? fmtTime(row.duration_secs) : "—"}</td>
                 <td><button className="icon-btn" title="Retirer" onClick={(e) => { e.stopPropagation(); act(() => api.removeQueueItem(i)); }}><Icon name="close" size={16} /></button></td>
               </tr>
             ))}
@@ -2404,6 +2437,21 @@ function SetRow({ label, desc, children }: { label: string; desc?: string; child
   );
 }
 
+/// Ligne de section façon Nova (#92) : icône + titre + chevron, le corps se déplie au clic.
+/// En recherche (q non vide), `open` est forcé à true côté appelant.
+function SetGroup({ icon, title, open, onToggle, children }: { icon: string; title: string; open: boolean; onToggle: () => void; children: React.ReactNode }) {
+  return (
+    <div className={`set-group ${open ? "open" : ""}`}>
+      <button type="button" className="set-group-head" onClick={onToggle}>
+        <span className="set-group-ico"><Icon name={icon} size={20} /></span>
+        <span className="set-group-title">{title}</span>
+        <Icon name="chevron" size={18} className="set-group-chev" />
+      </button>
+      {open && <div className="set-group-body">{children}</div>}
+    </div>
+  );
+}
+
 /// Interfaces réseau : état + activer/désactiver (#44).
 function NetInterfaces({ say }: { say: (m: string) => void }) {
   const [ifs, setIfs] = useState<NetInterface[] | null>(null);
@@ -2456,6 +2504,8 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
   packs: Packs | null;
 }) {
   const [q, setQ] = useState("");
+  // Section dépliée de la liste façon Nova (null = toutes repliées).
+  const [openSec, setOpenSec] = useState<string | null>(t("Lecture"));
   const [storage, setStorage] = useState<StorageInfo | null>(null);
   const [logs, setLogs] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
@@ -2597,8 +2647,9 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
   const p = settings.playback, ap = settings.appearance, sy = settings.system, nw = settings.network, so = settings.sources;
   const lf = settings.lastfm, mb = settings.musicbrainz;
 
-  const sections: { title: string; rows: React.ReactNode[] }[] = [
+  const sections: { icon: string; title: string; rows: React.ReactNode[] }[] = [
     {
+      icon: "play",
       title: t("Lecture"),
       rows: [
         show("Courbe de volume", "Logarithmique (naturelle) ou linéaire") && (
@@ -2688,6 +2739,7 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
       ].filter(Boolean) as React.ReactNode[],
     },
     {
+      icon: "sliders",
       title: t("Égaliseur"),
       rows: [
         show("Égaliseur paramétrique", "10 bandes, ±20 dB, appliqué en temps réel (DAC et « Jouer ici »)") && (
@@ -2715,6 +2767,7 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
       ].filter(Boolean) as React.ReactNode[],
     },
     {
+      icon: "palette",
       title: t("Apparence"),
       rows: [
         show(t("Thème"), t("Thème de l'interface (packs embarqués ou déposés dans <data-dir>/themes)")) && (
@@ -2767,6 +2820,7 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
       ].filter(Boolean) as React.ReactNode[],
     },
     {
+      icon: "puzzle",
       title: t("Packs communautaires"),
       rows: ([
         <SetRow key="pack-edit" label={t("Nouveau pack")} desc={t("Thème CSS ou pack de langue JSON — utilisable ensuite dans la section Apparence ci-dessus")}>
@@ -2800,6 +2854,7 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
       ] as React.ReactNode[]),
     },
     {
+      icon: "gear",
       title: t("Système"),
       rows: [
         show("Nom de l'appareil", "Nom affiché sur le réseau et dans l'interface") && (
@@ -2842,6 +2897,7 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
       ].filter(Boolean) as React.ReactNode[],
     },
     {
+      icon: "download",
       title: t("Sauvegarde"),
       rows: [
         show("Télécharger la sauvegarde", "ZIP : réglages, favoris, épingles, playlists, historique et partages") && (
@@ -2885,6 +2941,7 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
       ].filter(Boolean) as React.ReactNode[],
     },
     {
+      icon: "star",
       title: t("Last.fm / MusicBrainz"),
       rows: [
         show("Last.fm", "Scrobble automatique et « en cours de lecture » vers Last.fm") && (
@@ -2938,6 +2995,7 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
       ].filter(Boolean) as React.ReactNode[],
     },
     {
+      icon: "wifi",
       title: t("Réseau"),
       rows: [
         show("Nom d'hôte", "Nom d'hôte souhaité pour la machine (Linux uniquement)") && (
@@ -2959,6 +3017,7 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
       ].filter(Boolean) as React.ReactNode[],
     },
     {
+      icon: "folder",
       title: t("Sources"),
       rows: [
         show("Découverte de métadonnées musicales", "Tags et pochettes extraits à l'indexation") && (
@@ -2969,6 +3028,7 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
       ].filter(Boolean) as React.ReactNode[],
     },
     {
+      icon: "share",
       title: t("Partage"),
       rows: [
         show("Liens de partage", "URL publiques /share/<token> pour écouter une piste, un album ou une playlist depuis un autre appareil") && (
@@ -2994,18 +3054,22 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
 
   return (
     <div className="settings">
-      <div className="settings-search">
-        <Icon name="search" size={18} />
-        <input type="text" placeholder={t("Rechercher dans les réglages…")} value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="settings-head">
+        <div className="settings-search">
+          <Icon name="search" size={18} />
+          <input type="text" placeholder={t("Rechercher dans les réglages…")} value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
       </div>
       {visible.length === 0 && <div className="empty">{t("Aucun réglage ne correspond à « {q} ».", { q })}</div>}
       {visible.map((sec) => (
-        <section key={sec.title} className="set-card">
-          <h2>{sec.title}</h2>
+        <SetGroup key={sec.title} icon={sec.icon} title={sec.title}
+          open={qn ? true : openSec === sec.title}
+          onToggle={() => setOpenSec(openSec === sec.title ? null : sec.title)}>
           {sec.rows}
-        </section>
+        </SetGroup>
       ))}
       {show("DoP", "Régler le DAC pour la lecture DSD (fichiers .dsf) en DoP") && dop?.windows && (
+        <SetGroup icon="chip" title="DoP — DAC USB (Windows)" open={qn !== "" || openSec === "dop"} onToggle={() => setOpenSec(openSec === "dop" ? null : "dop")}>
         <section className="set-card">
           <h2>DoP — lecture DSD sur DAC USB (Windows)</h2>
           {(() => {
@@ -3060,8 +3124,10 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
             );
           })()}
         </section>
+        </SetGroup>
       )}
       {show("Liens de partage") && (
+        <SetGroup icon="link" title={t("Liens de partage actifs")} open={qn !== "" || openSec === "shares"} onToggle={() => setOpenSec(openSec === "shares" ? null : "shares")}>
         <section className="set-card">
           <h2>Liens de partage actifs</h2>
           {shares.length === 0 && <div className="empty">Aucun lien — partagez une piste (barre de lecture), un album ou une playlist.</div>}
@@ -3076,6 +3142,7 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
             </div>
           ))}
         </section>
+        </SetGroup>
       )}
       {logs !== null && (
         <div className="modal-bg" onClick={() => setLogs(null)}>
@@ -3089,13 +3156,19 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
         </div>
       )}
       {show("Rip CD", "Ripper un CD audio avec whipper (AccurateRip)") && (
-        <RipCdCard say={say} />
+        <SetGroup icon="disc" title={`${t("Rip CD")} — whipper`} open={qn !== "" || openSec === "rip"} onToggle={() => setOpenSec(openSec === "rip" ? null : "rip")}>
+          <RipCdCard say={say} />
+        </SetGroup>
       )}
       {show("Spotify Connect", "Écouter Spotify sur Auris depuis l'app Spotify (librespot)") && (
-        <SpotifyCard settings={settings} updateSettings={updateSettings} say={say} />
+        <SetGroup icon="spotify" title={`${t("Spotify Connect")} — librespot`} open={qn !== "" || openSec === "spotify"} onToggle={() => setOpenSec(openSec === "spotify" ? null : "spotify")}>
+          <SpotifyCard settings={settings} updateSettings={updateSettings} say={say} />
+        </SetGroup>
       )}
       {show("CamillaDSP", "Déléguer le traitement audio (convolution, correction de pièce) à une instance CamillaDSP") && (
-        <CamillaCard settings={settings} updateSettings={updateSettings} say={say} />
+        <SetGroup icon="wave" title="CamillaDSP — convolution / correction de pièce" open={qn !== "" || openSec === "camilla"} onToggle={() => setOpenSec(openSec === "camilla" ? null : "camilla")}>
+          <CamillaCard settings={settings} updateSettings={updateSettings} say={say} />
+        </SetGroup>
       )}
     </div>
   );
@@ -3660,19 +3733,21 @@ function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, o
 
 /// Panneau latéral « lecture en cours » (style Volumio) : onglets Pochette / Infos / Paroles.
 /// Paroles synchronisées (LRC) avec ligne active suivie pendant la lecture.
-function NowPlayingPanel({ track, pos, tab, setTab, onClose }: {
+function NowPlayingPanel({ track, pos, tab, setTab, onClose, isLive = false, streamTitle = null }: {
   track: Track; pos: number; tab: NpTab; setTab: (t: NpTab) => void; onClose: () => void;
+  /** Flux live (webradio/podcast) : pas de paroles ni de fiche piste (#90). */
+  isLive?: boolean; streamTitle?: string | null;
 }) {
   const [lyrics, setLyrics] = useState<LyricsResponse | null>(null);
   const [infos, setInfos] = useState<InfosResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const activeRef = useRef<HTMLDivElement | null>(null);
-
-  // Recharge les paroles + infos à chaque changement de piste.
+  // Recharge les paroles + infos à chaque changement de piste (pas pour un flux live).
   useEffect(() => {
     setLyrics(null);
     setInfos(null);
     setErr(null);
+    if (isLive) return;
     let dead = false;
     api.lyrics(track.id)
       .then((l) => { if (!dead) setLyrics(l); })
@@ -3681,7 +3756,12 @@ function NowPlayingPanel({ track, pos, tab, setTab, onClose }: {
       .then((i) => { if (!dead) setInfos(i); })
       .catch(() => { /* les infos sont best-effort */ });
     return () => { dead = true; };
-  }, [track.id]);
+  }, [track.id, isLive]);
+
+  // Un flux live n'a pas d'onglet Paroles : on retombe sur l'onglet radio.
+  useEffect(() => {
+    if (isLive && tab === "lyrics") setTab("cover");
+  }, [isLive, tab, setTab]);
 
   const synced = lyrics?.synced ?? [];
   // Dernière ligne dont le timestamp est <= la position courante.
@@ -3694,7 +3774,9 @@ function NowPlayingPanel({ track, pos, tab, setTab, onClose }: {
     activeRef.current?.scrollIntoView({ block: "center" });
   }, [activeIdx]);
 
-  const tabs: [NpTab, string][] = [["cover", "Pochette"], ["infos", "Infos"], ["lyrics", "Paroles"]];
+  const tabs: [NpTab, string][] = isLive
+    ? [["cover", t("Radio")], ["infos", t("Infos")]]
+    : [["cover", "Pochette"], ["infos", "Infos"], ["lyrics", "Paroles"]];
   return (
     <aside className="np-panel">
       <div className="np-tabs">
@@ -3706,24 +3788,42 @@ function NowPlayingPanel({ track, pos, tab, setTab, onClose }: {
       <div className="np-body">
         {tab === "cover" && (
           <div className="np-cover-wrap">
-            <div className="np-cover">
-              {track.has_cover ? <img src={api.coverUrl(track.id)} alt="" /> : <Icon name="note" size={64} />}
+            <div className={`np-cover ${isLive ? "radio" : ""}`}>
+              {isLive
+                ? <Icon name="radio" size={72} />
+                : track.has_cover ? <img src={api.coverUrl(track.id)} alt="" /> : <Icon name="note" size={64} />}
             </div>
             <div className="np-title">{track.title}</div>
-            <div className="np-artist">{track.artist}</div>
-            <div className="np-album">{track.album}</div>
+            <div className="np-artist">{isLive ? t("Radio web") : track.artist}</div>
+            <div className="np-album">{isLive ? track.uri : track.album}</div>
             <div className="np-badges">
+              {isLive && <span className="pill live">{t("EN DIRECT")}</span>}
+              {isLive && streamTitle && <span className="badge">{streamTitle}</span>}
               {track.format && <span className="badge">{fmtFormat(track.format)}</span>}
-              {track.year != null && <span className="badge">{track.year}</span>}
-              {track.genre && <span className="badge">{track.genre}</span>}
+              {!isLive && track.year != null && <span className="badge">{track.year}</span>}
+              {!isLive && track.genre && <span className="badge">{track.genre}</span>}
             </div>
           </div>
         )}
         {tab === "infos" && (
           <div className="np-infos">
-            {!infos && !err && <div className="np-muted">Chargement…</div>}
-            {err && <div className="np-muted">{err}</div>}
-            {infos && (<>
+            {isLive && (
+              <>
+                <div className="np-h">{t("Radio web")}</div>
+                <p className="np-text">{track.title}</p>
+                <div className="np-h">{t("Flux")}</div>
+                <p className="np-text" style={{ wordBreak: "break-all" }}>{track.uri}</p>
+                <div className="np-h">{t("En cours de lecture")}</div>
+                <p className="np-text">{streamTitle ?? t("—")}</p>
+                <div className="np-badges" style={{ justifyContent: "flex-start", marginTop: 10 }}>
+                  <span className="pill live">{t("EN DIRECT")}</span>
+                  {track.format && <span className="badge">{fmtFormat(track.format)}</span>}
+                </div>
+              </>
+            )}
+            {!isLive && !infos && !err && <div className="np-muted">Chargement…</div>}
+            {!isLive && err && <div className="np-muted">{err}</div>}
+            {infos && !isLive && (<>
               {infos.bio && (<>
                 <div className="np-h">{infos.album_artist}</div>
                 <p className="np-text">{infos.bio}</p>
@@ -3791,7 +3891,7 @@ function NowPlayingPanel({ track, pos, tab, setTab, onClose }: {
             </>)}
           </div>
         )}
-        {tab === "lyrics" && (
+        {tab === "lyrics" && !isLive && (
           <div className="np-lyrics">
             {!lyrics && !err && <div className="np-muted">Chargement…</div>}
             {err && <div className="np-muted">{err}</div>}
