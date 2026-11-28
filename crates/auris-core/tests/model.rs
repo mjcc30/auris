@@ -121,6 +121,7 @@ fn playlist_json_roundtrip() {
         name: "Soirée DSD".into(),
         track_ids: vec!["t1".into(), "t2".into()],
         created_at: 1_800_000_000,
+        rules: None,
     };
     let json = serde_json::to_string(&p).unwrap();
     let back: Playlist = serde_json::from_str(&json).unwrap();

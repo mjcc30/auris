@@ -343,6 +343,36 @@ export interface Playlist {
   name: string;
   track_ids: string[];
   created_at: number;
+  /** Smart playlist (#98) : règles évaluées à la volée par le serveur. */
+  rules?: SmartRules | null;
+  /** Nombre de pistes résolues (smart) ou stockées — renvoyé par GET /api/playlists. */
+  track_count?: number;
+}
+
+/** Champ filtrable d'une smart playlist (#98). */
+export type SmartField =
+  | "title" | "artist" | "album" | "album_artist" | "genre" | "year"
+  | "duration_secs" | "track_number" | "format" | "bit_depth" | "sample_rate"
+  | "source" | "has_cover";
+
+export type SmartOp = "eq" | "ne" | "contains" | "gt" | "lt" | "gte" | "lte";
+
+export interface SmartRule {
+  field: SmartField;
+  op: SmartOp;
+  value: string | number | boolean;
+}
+
+export interface SmartSort {
+  field: SmartField;
+  desc: boolean;
+}
+
+export interface SmartRules {
+  match_all: boolean;
+  rules: SmartRule[];
+  sort?: SmartSort | null;
+  limit?: number | null;
 }
 
 export interface PlaylistDetail {
@@ -952,8 +982,10 @@ export const api = {
     `/api/export?uri=${encodeURIComponent(uri)}${name ? `&name=${encodeURIComponent(name)}` : ""}`,
   albumExportUrl: (albumId: string) => `/api/library/albums/${encodeURIComponent(albumId)}/export`,
   playlists: () => cached<Playlist[]>("playlists", 15000, () => req<Playlist[]>("/api/playlists")),
-  addPlaylist: (name: string, trackIds?: string[], uri?: string) =>
-    req<Playlist>("/api/playlists", post({ name, track_ids: trackIds, uri })).then((r) => { bustCache("playlists"); return r; }),
+  addPlaylist: (name: string, trackIds?: string[], uri?: string, rules?: SmartRules) =>
+    req<Playlist>("/api/playlists", post({ name, track_ids: trackIds, uri, rules: rules ?? null })).then((r) => { bustCache("playlists"); return r; }),
+  updatePlaylist: (id: string, patch: { name?: string; rules?: SmartRules | null }) =>
+    req<Playlist>(`/api/playlists/${encodeURIComponent(id)}`, patchReq(patch)).then((r) => { bustCache("playlists"); return r; }),
   playlist: (id: string) => req<PlaylistDetail>(`/api/playlists/${encodeURIComponent(id)}`),
   deletePlaylist: (id: string) =>
     req<unknown>(`/api/playlists/${encodeURIComponent(id)}`, del()).then((r) => { bustCache("playlists"); return r; }),
@@ -1063,6 +1095,14 @@ function post(body: unknown): RequestInit {
 
 function postText(body: string, contentType: string): RequestInit {
   return { method: "POST", headers: { "Content-Type": contentType }, body };
+}
+
+function patchReq(body: unknown): RequestInit {
+  return {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
 }
 
 function del(): RequestInit {

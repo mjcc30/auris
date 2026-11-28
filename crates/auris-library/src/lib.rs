@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use auris_core::{
     Album, Artist, AurisError, DecadeFacet, FavKind, Favorites, GenreFacet, HistoryEntry,
     LibraryStats, PinKind, Pins, Playlist, Result, SearchGroup, SearchResults, ShareKind,
-    ShareLink, Source, Track,
+    ShareLink, SmartField, SmartOp, SmartRule, SmartRules, SmartSort, Source, Track,
 };
 use auris_player::probe_meta_with_path;
 use auris_sources::{make_uri, SourcesManager};
@@ -775,6 +775,7 @@ impl Library {
             name: name.to_string(),
             track_ids,
             created_at: chrono::Utc::now().timestamp(),
+            rules: None,
         };
         self.tree(TREE_PLAYLISTS)
             .insert(p.id.as_bytes(), enc(&p)?)
@@ -801,14 +802,18 @@ impl Library {
         Ok(Some(p))
     }
 
-    /// Playlist + ses pistes resolues (les IDs inconnus sont ignores).
+    /// Playlist + ses pistes résolues. Pour une smart playlist (#98), les pistes
+    /// sont évaluées dynamiquement depuis les règles ; sinon IDs statiques.
     pub fn playlist(&self, id: &str) -> Option<(Playlist, Vec<Track>)> {
         let p: Playlist = dec(&self.tree(TREE_PLAYLISTS).get(id.as_bytes()).ok()??).ok()?;
-        let tracks = p
-            .track_ids
-            .iter()
-            .filter_map(|tid| self.track(tid))
-            .collect();
+        let tracks = match &p.rules {
+            Some(r) => self.eval_smart(r),
+            None => p
+                .track_ids
+                .iter()
+                .filter_map(|tid| self.track(tid))
+                .collect(),
+        };
         Some((p, tracks))
     }
 
@@ -818,6 +823,51 @@ impl Library {
             .remove(id.as_bytes())
             .map_err(se)?
             .is_some())
+    }
+
+    /// Crée une smart playlist (#98) : liste dynamique évaluée à chaque lecture.
+    pub fn create_smart_playlist(&self, name: &str, rules: SmartRules) -> Result<Playlist> {
+        let mut p = self.create_playlist(name, Vec::new())?;
+        p.rules = Some(rules);
+        self.tree(TREE_PLAYLISTS)
+            .insert(p.id.as_bytes(), enc(&p)?)
+            .map_err(se)?;
+        Ok(p)
+    }
+
+    /// Met à jour le nom et/ou les règles d'une playlist. `rules`: `Some(Some(r))`
+    /// = smart playlist, `Some(None)` = repasse en statique, `None` = inchangé.
+    pub fn update_playlist(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        rules: Option<Option<SmartRules>>,
+    ) -> Result<Option<Playlist>> {
+        let raw = self.tree(TREE_PLAYLISTS).get(id.as_bytes()).ok().flatten();
+        let mut p: Playlist = match raw.and_then(|v| dec(&v).ok()) {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        if let Some(n) = name {
+            let n = n.trim();
+            if n.is_empty() {
+                return Err(AurisError::other("nom de playlist vide"));
+            }
+            p.name = n.to_string();
+        }
+        if let Some(r) = rules {
+            p.rules = r;
+        }
+        self.tree(TREE_PLAYLISTS)
+            .insert(p.id.as_bytes(), enc(&p)?)
+            .map_err(se)?;
+        Ok(Some(p))
+    }
+
+    /// Évalue des règles de smart playlist (#98) contre la bibliothèque :
+    /// filtre (ET/OU), trie, limite.
+    pub fn eval_smart(&self, rules: &SmartRules) -> Vec<Track> {
+        eval_smart_tracks(self.tracks(), rules)
     }
 
     // ---------- favoris ----------
@@ -1097,6 +1147,153 @@ fn genre_tags(t: &Track) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+// ---------- Smart playlists (#98) ----------
+
+/// Champ d'une piste vu comme chaîne (comparaisons insensibles à la casse).
+fn smart_field_str(t: &Track, f: SmartField) -> Option<String> {
+    match f {
+        SmartField::Title => Some(t.title.clone()),
+        SmartField::Artist => Some(t.artist.clone()),
+        SmartField::Album => Some(t.album.clone()),
+        SmartField::AlbumArtist => Some(t.album_artist.clone()),
+        SmartField::Genre => t.genre.clone(),
+        SmartField::Format => t.format.map(|fmt| match fmt {
+            auris_core::AudioFormat::Pcm { .. } => "pcm".to_string(),
+            auris_core::AudioFormat::Dsd { .. } => "dsd".to_string(),
+        }),
+        SmartField::Source => Some(t.source_id.clone()),
+        _ => None,
+    }
+}
+
+/// Champ d'une piste vu comme nombre (comparaisons numériques).
+fn smart_field_num(t: &Track, f: SmartField) -> Option<f64> {
+    match f {
+        SmartField::Year => t.year.map(f64::from),
+        SmartField::DurationSecs => t.duration_secs,
+        SmartField::TrackNumber => t.track_number.map(f64::from),
+        SmartField::BitDepth => match t.format {
+            Some(auris_core::AudioFormat::Pcm { bits, .. }) => Some(f64::from(bits)),
+            _ => None,
+        },
+        SmartField::SampleRate => match t.format {
+            Some(auris_core::AudioFormat::Pcm { sample_rate, .. })
+            | Some(auris_core::AudioFormat::Dsd { sample_rate, .. }) => {
+                Some(f64::from(sample_rate))
+            }
+            None => None,
+        },
+        _ => None,
+    }
+}
+
+/// Une règle matche-t-elle la piste ?
+fn smart_rule_match(r: &SmartRule, t: &Track) -> bool {
+    if r.field == SmartField::HasCover {
+        let v = r.value.as_bool().unwrap_or(false);
+        return match r.op {
+            SmartOp::Eq => t.has_cover == v,
+            SmartOp::Ne => t.has_cover != v,
+            _ => false,
+        };
+    }
+    if let Some(n) = smart_field_num(t, r.field) {
+        let v = r
+            .value
+            .as_f64()
+            .or_else(|| r.value.as_str().and_then(|s| s.parse::<f64>().ok()));
+        return match (v, r.op) {
+            (Some(v), SmartOp::Eq) => n == v,
+            (Some(v), SmartOp::Ne) => n != v,
+            (Some(v), SmartOp::Gt) => n > v,
+            (Some(v), SmartOp::Lt) => n < v,
+            (Some(v), SmartOp::Gte) => n >= v,
+            (Some(v), SmartOp::Lte) => n <= v,
+            // champ numérique présent mais valeur non numérique : eq échoue, ne réussit
+            (None, SmartOp::Ne) => true,
+            _ => false,
+        };
+    }
+    let sl = smart_field_str(t, r.field)
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+    let v = r
+        .value
+        .as_str()
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+    match r.op {
+        SmartOp::Eq => sl == v,
+        SmartOp::Ne => sl != v,
+        SmartOp::Contains => !v.is_empty() && sl.contains(&v),
+        SmartOp::Gt => sl > v,
+        SmartOp::Lt => sl < v,
+        SmartOp::Gte => sl >= v,
+        SmartOp::Lte => sl <= v,
+    }
+}
+
+/// Évalue des règles (#98) sur un ensemble de pistes : filtre (ET/OU), trie, limite.
+pub fn eval_smart_tracks(tracks: Vec<Track>, rules: &SmartRules) -> Vec<Track> {
+    let mut out: Vec<Track> = tracks
+        .into_iter()
+        .filter(|t| smart_match(rules, t))
+        .collect();
+    if let Some(s) = &rules.sort {
+        smart_sort(&mut out, s);
+    }
+    if let Some(l) = rules.limit {
+        out.truncate(l);
+    }
+    out
+}
+
+fn smart_match(rules: &SmartRules, t: &Track) -> bool {
+    if rules.rules.is_empty() {
+        return true;
+    }
+    if rules.match_all {
+        rules.rules.iter().all(|r| smart_rule_match(r, t))
+    } else {
+        rules.rules.iter().any(|r| smart_rule_match(r, t))
+    }
+}
+
+/// Clé de tri hétérogène : bool < nombre < chaîne.
+#[derive(Debug, PartialEq, PartialOrd)]
+enum SmartKey {
+    B(bool),
+    N(f64),
+    S(String),
+}
+
+fn smart_key(t: &Track, f: SmartField) -> SmartKey {
+    if f == SmartField::HasCover {
+        return SmartKey::B(t.has_cover);
+    }
+    match smart_field_num(t, f) {
+        Some(n) => SmartKey::N(n),
+        None => SmartKey::S(
+            smart_field_str(t, f)
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default(),
+        ),
+    }
+}
+
+fn smart_sort(out: &mut [Track], s: &SmartSort) {
+    out.sort_by(|a, b| {
+        let ord = smart_key(a, s.field)
+            .partial_cmp(&smart_key(b, s.field))
+            .unwrap_or(std::cmp::Ordering::Equal);
+        if s.desc {
+            ord.reverse()
+        } else {
+            ord
+        }
+    });
 }
 
 /// Scan bloquant d'une source: parcours recursif + probe de chaque fichier audio.
@@ -1473,5 +1670,99 @@ mod tests {
         t2.label = Some("Autre label".into());
         merge_album_credits(&mut a, &t2);
         assert_eq!(a.label.as_deref(), Some("Deutsche Grammophon"));
+    }
+
+    fn mk_track(
+        title: &str,
+        artist: &str,
+        genre: Option<&str>,
+        year: Option<u32>,
+        secs: f64,
+    ) -> Track {
+        let mut t = Track::new(format!("src://s/{title}.flac"), "s".into());
+        t.title = title.into();
+        t.artist = artist.into();
+        t.genre = genre.map(str::to_string);
+        t.year = year;
+        t.duration_secs = Some(secs);
+        t
+    }
+
+    fn rule(field: SmartField, op: SmartOp, value: serde_json::Value) -> SmartRule {
+        SmartRule { field, op, value }
+    }
+
+    #[test]
+    fn smart_playlist_filtre_et_tri() {
+        let tracks = vec![
+            mk_track("A", "X", Some("Jazz"), Some(1975), 200.0),
+            mk_track("B", "Y", Some("Rock"), Some(1990), 300.0),
+            mk_track("C", "X", Some("Jazz"), Some(1985), 100.0),
+        ];
+        // genre=Jazz ET année>1980, tri année desc, limite 10
+        let rules = SmartRules {
+            match_all: true,
+            rules: vec![
+                rule(SmartField::Genre, SmartOp::Eq, "jazz".into()),
+                rule(SmartField::Year, SmartOp::Gt, 1980.into()),
+            ],
+            sort: Some(SmartSort {
+                field: SmartField::Year,
+                desc: true,
+            }),
+            limit: Some(10),
+        };
+        let out = eval_smart_tracks(tracks.clone(), &rules);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].title, "C");
+        // OU : Jazz ou Rock -> 3, tri durée asc
+        let rules = SmartRules {
+            match_all: false,
+            rules: vec![
+                rule(SmartField::Genre, SmartOp::Eq, "jazz".into()),
+                rule(SmartField::Genre, SmartOp::Eq, "rock".into()),
+            ],
+            sort: Some(SmartSort {
+                field: SmartField::DurationSecs,
+                desc: false,
+            }),
+            limit: None,
+        };
+        let out = eval_smart_tracks(tracks.clone(), &rules);
+        assert_eq!(
+            out.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(),
+            ["C", "A", "B"]
+        );
+        // limite
+        let mut rules = rules.clone();
+        rules.limit = Some(2);
+        let out = eval_smart_tracks(tracks, &rules);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn smart_playlist_contains_et_champ_absent() {
+        let tracks = vec![
+            mk_track("The Best Of", "X", None, None, 10.0),
+            mk_track("Other", "Y", None, None, 20.0),
+        ];
+        // title contient "best" (casse-insensitive)
+        let rules = SmartRules {
+            match_all: true,
+            rules: vec![rule(SmartField::Title, SmartOp::Contains, "BEST".into())],
+            sort: None,
+            limit: None,
+        };
+        let out = eval_smart_tracks(tracks.clone(), &rules);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].title, "The Best Of");
+        // genre absent : eq "" matche les pistes sans genre, ne "" ne matche pas
+        let rules = SmartRules {
+            match_all: true,
+            rules: vec![rule(SmartField::Genre, SmartOp::Ne, "jazz".into())],
+            sort: None,
+            limit: None,
+        };
+        assert_eq!(eval_smart_tracks(tracks.clone(), &rules).len(), 2);
     }
 }

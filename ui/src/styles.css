@@ -391,6 +391,14 @@ h1 .pin-btn { vertical-align: middle; margin-left: 6px; background: transparent;
 .modal label { margin-bottom: 4px; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 12px; margin-top: 22px; }
 
+/* smart playlists (#98) */
+.dim { color: var(--text-dim); font-size: 13px; margin: 4px 0 12px; }
+.smart-rules-head { display: flex; align-items: center; gap: 10px; margin: 14px 0 8px; font-size: 13px; }
+.smart-rules-head select { width: auto; }
+.smart-rule-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.smart-rule-row select, .smart-rule-row input { flex: 1; min-width: 0; }
+.smart-rule-row .icon-btn { flex: none; }
+
 /* badge cliquable (signal path, #77) */
 .badge-btn { cursor: pointer; display: inline-flex; align-items: center; gap: 4px; background: none; border: 1px solid var(--border-strong); color: var(--text); font: inherit; border-radius: 999px; padding: 2px 10px; }
 .badge-btn:hover { border-color: var(--accent); color: var(--accent); }

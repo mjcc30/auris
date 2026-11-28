@@ -23,8 +23,8 @@ use tower_http::cors::CorsLayer;
 use auris_core::{
     lyrics, read_zip, search_semantic, Alarm, AlarmState, AurisError, BrowseEntry, FavKind,
     Favorites, HistoryEntry, LibraryStats, OutputMode, PinKind, Pins, PlayStatus, Playlist,
-    RadioEntry, RepeatMode, SearchGroup, SearchResults, Settings, ShareKind, ShareLink, Source,
-    Track, WsEvent, ZipWriter,
+    RadioEntry, RepeatMode, SearchGroup, SearchResults, Settings, ShareKind, ShareLink, SmartRules,
+    Source, Track, WsEvent, ZipWriter,
 };
 use auris_library::Library;
 use auris_player::{
@@ -307,6 +307,16 @@ struct PlaylistBody {
     /// Si renseigne: la playlist est cree a partir de cet URI (fichier ou
     /// dossier, parcouru recursivement) — utilisé depuis Parcourir.
     uri: Option<String>,
+    /// Si renseigne: smart playlist (#98) — la liste est évaluee dynamiquement
+    /// contre la bibliothèque à chaque lecture.
+    rules: Option<SmartRules>,
+}
+
+#[derive(Deserialize)]
+struct PlaylistPatchBody {
+    name: Option<String>,
+    /// `Some(Some(r))` = règles, `Some(None)` = repasse en statique, absent = inchangé.
+    rules: Option<Option<SmartRules>>,
 }
 
 #[derive(Deserialize)]
@@ -506,7 +516,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/playlists", get(get_playlists).post(post_playlist))
         .route(
             "/api/playlists/{id}",
-            get(get_playlist).delete(delete_playlist),
+            get(get_playlist)
+                .delete(delete_playlist)
+                .patch(patch_playlist),
         )
         .route("/api/playlists/{id}/play", post(post_playlist_play))
         .route("/api/playlists/{id}/add", post(post_playlist_add))
@@ -2249,14 +2261,32 @@ async fn get_album_export(
 
 // ---------- listes de lecture ----------
 
-async fn get_playlists(State(s): State<AppState>) -> Json<Vec<Playlist>> {
-    Json(s.library.playlists())
+async fn get_playlists(State(s): State<AppState>) -> Json<Vec<serde_json::Value>> {
+    // Enrichi avec `track_count` : pour une smart playlist (#98), le nombre est
+    // celui évalué dynamiquement (sinon `track_ids.len()`).
+    let mut out = Vec::new();
+    for p in s.library.playlists() {
+        let mut v = serde_json::to_value(&p).unwrap_or_default();
+        if let Some(obj) = v.as_object_mut() {
+            let n = match &p.rules {
+                Some(r) => s.library.eval_smart(r).len(),
+                None => p.track_ids.len(),
+            };
+            obj.insert("track_count".into(), n.into());
+        }
+        out.push(v);
+    }
+    Json(out)
 }
 
 async fn post_playlist(
     State(s): State<AppState>,
     Json(b): Json<PlaylistBody>,
 ) -> ApiResult<Json<Playlist>> {
+    if let Some(rules) = b.rules {
+        let p = s.library.create_smart_playlist(&b.name, rules)?;
+        return Ok(Json(p));
+    }
     let ids = if let Some(uri) = b.uri {
         // création depuis Parcourir: fichier ou dossier (récursif)
         resolve_uri_tracks(&s, &uri)
@@ -2329,6 +2359,20 @@ async fn delete_playlist(
         return Err(AurisError::other(format!("playlist introuvable: {id}")).into());
     }
     Ok(Json(serde_json::json!({ "removed": id })))
+}
+
+/// `PATCH /api/playlists/{id}` — renomme et/ou remplace les règles d'une smart
+/// playlist (#98). `rules: null` repasse la liste en statique.
+async fn patch_playlist(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<PlaylistPatchBody>,
+) -> ApiResult<Json<Playlist>> {
+    let p = s
+        .library
+        .update_playlist(&id, b.name.as_deref(), b.rules)?
+        .ok_or_else(|| AurisError::other(format!("playlist introuvable: {id}")))?;
+    Ok(Json(p))
 }
 
 // ---------- liens de partage (v0.6) ----------

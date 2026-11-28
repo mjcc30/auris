@@ -387,6 +387,76 @@ pub struct Playlist {
     pub name: String,
     pub track_ids: Vec<String>,
     pub created_at: i64,
+    /// Règles de smart playlist (#98) : si présentes, `track_ids` est ignoré à la
+    /// lecture et la liste est évaluée dynamiquement contre la bibliothèque.
+    /// `default` pour les anciennes playlists sled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules: Option<SmartRules>,
+}
+
+/// Champ d'une règle de smart playlist (#98).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SmartField {
+    Title,
+    Artist,
+    Album,
+    AlbumArtist,
+    Genre,
+    Year,
+    DurationSecs,
+    TrackNumber,
+    /// Kind du format (`pcm`, `dsd`) en chaîne.
+    Format,
+    BitDepth,
+    SampleRate,
+    Source,
+    HasCover,
+}
+
+/// Opérateur d'une règle de smart playlist (#98).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SmartOp {
+    Eq,
+    Ne,
+    Contains,
+    Gt,
+    Lt,
+    Gte,
+    Lte,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SmartRule {
+    pub field: SmartField,
+    pub op: SmartOp,
+    /// Valeur de comparaison : chaîne (eq/ne/contains, insensible à la casse),
+    /// nombre (gt/lt/gte/lte/eq/ne), ou booléen (has_cover).
+    pub value: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SmartSort {
+    pub field: SmartField,
+    pub desc: bool,
+}
+
+/// Règles d'une smart playlist style JRiver (#98) : ex. genre=Jazz ET année>1980.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SmartRules {
+    /// true = toutes les règles doivent matcher (ET), false = au moins une (OU).
+    #[serde(default = "smart_default_match_all")]
+    pub match_all: bool,
+    pub rules: Vec<SmartRule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<SmartSort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+fn smart_default_match_all() -> bool {
+    true
 }
 
 /// Groupe de résultats de recherche : `total` (avant plafonnement) + `items` (plafonnés).

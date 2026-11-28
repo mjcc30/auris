@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CamillaSettings, type CamillaStatusResponse, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type InputDevice, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type PodcastEpisode, type PodcastFeed, type PodcastShow, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirSection, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CamillaSettings, type CamillaStatusResponse, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type InputDevice, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type PodcastEpisode, type PodcastFeed, type PodcastShow, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirSection, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type SmartField, type SmartOp, type SmartRule, type SmartRules, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -2168,9 +2168,37 @@ function Queue({ state, act, say, playAll }: { state: PlayerState | null; act: (
 
 // ---------- Listes de lecture ----------
 
+const SMART_FIELDS: [SmartField, string][] = [
+  ["title", "Titre"], ["artist", "Artiste"], ["album", "Album"], ["album_artist", "Artiste de l'album"],
+  ["genre", "Genre"], ["year", "Année"], ["duration_secs", "Durée (secondes)"], ["track_number", "N° de piste"],
+  ["format", "Format"], ["bit_depth", "Profondeur (bits)"], ["sample_rate", "Fréquence (Hz)"],
+  ["source", "Source"], ["has_cover", "A une pochette"],
+];
+const SMART_OPS: [SmartOp, string][] = [
+  ["eq", "est"], ["ne", "n'est pas"], ["contains", "contient"],
+  ["gt", "est >"], ["lt", "est <"], ["gte", "est ≥"], ["lte", "est ≤"],
+];
+const SMART_NUMERIC: SmartField[] = ["year", "duration_secs", "track_number", "bit_depth", "sample_rate"];
+
+function smartFieldLabel(f: SmartField): string {
+  return SMART_FIELDS.find(([k]) => k === f)?.[1] ?? f;
+}
+function smartOpLabel(o: SmartOp): string {
+  return SMART_OPS.find(([k]) => k === o)?.[1] ?? o;
+}
+/** Résumé lisible des règles d'une smart playlist (#98). */
+function smartRulesSummary(r: SmartRules): string {
+  const parts = r.rules.map((rule) => `${smartFieldLabel(rule.field)} ${smartOpLabel(rule.op)} ${String(rule.value)}`);
+  let s = parts.join(r.match_all ? " ET " : " OU ");
+  if (r.sort) s += ` · tri ${smartFieldLabel(r.sort.field)}${r.sort.desc ? " ↓" : " ↑"}`;
+  if (r.limit != null) s += ` · limite ${r.limit}`;
+  return s;
+}
+
 function Playlists({ act, say, playAll, playTrack, pins, onTogglePin }: { act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; playAll: (t: Track[]) => void; playTrack: (t: Track) => void; pins: Pins; onTogglePin: (kind: PinKind, id: string) => void }) {
-  const [pls, setPls] = useState<{ id: string; name: string; track_ids: string[]; created_at: number }[]>([]);
+  const [pls, setPls] = useState<Playlist[]>([]);
   const [detail, setDetail] = useState<PlaylistDetail | null>(null);
+  const [modal, setModal] = useState<null | { mode: "new" } | { mode: "smart" } | { mode: "edit"; playlist: Playlist }>(null);
   const load = useCallback(() => { api.playlists().then(setPls).catch(() => {}); }, []);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -2184,6 +2212,9 @@ function Playlists({ act, say, playAll, playTrack, pins, onTogglePin }: { act: (
           <button className="btn ghost sm" onClick={() => { setDetail(null); load(); }}><Icon name="back" size={16} /> Retour</button>
           <div className="spacer" />
           <button className="btn sm" onClick={() => act(() => api.playPlaylist(detail.playlist.id))}><Icon name="play" size={14} filled /> Lire</button>
+          {detail.playlist.rules && (
+            <button className="btn ghost sm" onClick={() => setModal({ mode: "edit", playlist: detail.playlist })}><Icon name="edit" size={16} /> Modifier les règles</button>
+          )}
           <button className="btn ghost sm" onClick={() => act(async () => { await api.deletePlaylist(detail.playlist.id); setDetail(null); load(); }, "Liste supprimée")}><Icon name="trash" size={16} /> Supprimer</button>
           <button className="btn ghost sm" onClick={async () => {
             try {
@@ -2194,24 +2225,140 @@ function Playlists({ act, say, playAll, playTrack, pins, onTogglePin }: { act: (
             } catch (e) { say(e instanceof Error ? e.message : String(e)); }
           }}><Icon name="share" size={16} /> Partager</button>
         </div>
-        <h1>{detail.playlist.name}</h1>
+        <h1>{detail.playlist.name} {detail.playlist.rules && <span className="badge"><Icon name="sparkles" size={11} /> SMART</span>}</h1>
+        {detail.playlist.rules && <p className="dim">{smartRulesSummary(detail.playlist.rules)}</p>}
         <TrackTable tracks={detail.tracks} playTrack={playTrack} playAll={playAll} />
+        {modal && <PlaylistModal mode={modal.mode} playlist={modal.mode === "edit" ? modal.playlist : null} onClose={() => setModal(null)} onSaved={() => { load(); api.playlist(detail.playlist.id).then(setDetail).catch(() => {}); }} say={say} />}
       </div>
     );
   }
   return (
     <div>
+      <div className="toolbar">
+        <div className="spacer" />
+        <button className="btn ghost sm" onClick={() => setModal({ mode: "new" })}><Icon name="plus" size={16} /> Nouvelle liste</button>
+        <button className="btn sm" onClick={() => setModal({ mode: "smart" })}><Icon name="sparkles" size={16} /> Smart playlist…</button>
+      </div>
       {pls.length === 0 && <div className="empty">Aucune liste — enregistrez la file d'attente pour en créer une.</div>}
       <div className="grid">
         {[...pls].sort((a, b) => (pins.playlists.includes(b.id) ? 1 : 0) - (pins.playlists.includes(a.id) ? 1 : 0)).map((p) => (
           <div key={p.id} className="card" onClick={() => api.playlist(p.id).then(setDetail).catch((e) => say(String(e)))}>
-            <div className="cover"><Icon name="playlist" size={44} />
+            <div className="cover"><Icon name={p.rules ? "sparkles" : "playlist"} size={44} />
               <PinButton on={pins.playlists.includes(p.id)} onToggle={() => onTogglePin("playlist", p.id)} />
             </div>
-            <div className="t">{p.name}</div>
-            <div className="s">{p.track_ids.length} titre(s)</div>
+            <div className="t">{p.name} {p.rules && <span className="badge"><Icon name="sparkles" size={10} /> SMART</span>}</div>
+            <div className="s">{p.track_count ?? p.track_ids.length} titre(s)</div>
           </div>
         ))}
+      </div>
+      {modal && <PlaylistModal mode={modal.mode} playlist={modal.mode === "edit" ? modal.playlist : null} onClose={() => setModal(null)} onSaved={load} say={say} />}
+    </div>
+  );
+}
+
+/** Modale de création/édition de liste : statique ("new") ou smart (#98, "smart"/"edit"). */
+function PlaylistModal({ mode, playlist, onClose, onSaved, say }: { mode: "new" | "smart" | "edit"; playlist: Playlist | null; onClose: () => void; onSaved: () => void; say: (m: string) => void }) {
+  const isSmart = mode !== "new";
+  const initialRules = playlist?.rules ?? null;
+  const [name, setName] = useState(playlist?.name ?? "");
+  const [matchAll, setMatchAll] = useState(initialRules?.match_all ?? true);
+  const [rules, setRules] = useState<SmartRule[]>(initialRules?.rules ?? [{ field: "genre", op: "eq", value: "" }]);
+  const [sortField, setSortField] = useState<SmartField | "">(initialRules?.sort?.field ?? "");
+  const [sortDesc, setSortDesc] = useState(initialRules?.sort?.desc ?? false);
+  const [limit, setLimit] = useState(initialRules?.limit != null ? String(initialRules.limit) : "");
+  const [busy, setBusy] = useState(false);
+
+  const initValue = (f: SmartField): string | number | boolean => (SMART_NUMERIC.includes(f) ? 0 : f === "has_cover" ? true : "");
+  const setRule = (i: number, patch: Partial<SmartRule>) =>
+    setRules((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+
+  const submit = async () => {
+    if (!name.trim()) { say(t("Nom requis")); return; }
+    setBusy(true);
+    try {
+      if (!isSmart) {
+        if (playlist) await api.updatePlaylist(playlist.id, { name: name.trim(), rules: null });
+        else await api.addPlaylist(name.trim());
+        say(playlist ? t("Liste renommée") : t("Liste créée"));
+      } else {
+        const clean = rules
+          .map((r) => ({ ...r, value: SMART_NUMERIC.includes(r.field) && typeof r.value === "string" && r.value.trim() !== "" ? Number(r.value) : r.value }))
+          .filter((r) => !(typeof r.value === "string" && r.value.trim() === ""));
+        if (clean.length === 0) { say(t("Ajoutez au moins une règle")); setBusy(false); return; }
+        const sr: SmartRules = {
+          match_all: matchAll,
+          rules: clean,
+          sort: sortField ? { field: sortField, desc: sortDesc } : null,
+          limit: limit.trim() ? Math.max(1, parseInt(limit, 10) || 1) : null,
+        };
+        if (playlist) await api.updatePlaylist(playlist.id, { name: name.trim(), rules: sr });
+        else await api.addPlaylist(name.trim(), undefined, undefined, sr);
+        say(playlist ? t("Smart playlist modifiée") : t("Smart playlist créée"));
+      }
+      onSaved();
+      onClose();
+    } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h2>{mode === "edit" ? t("Modifier la smart playlist") : isSmart ? t("Nouvelle smart playlist") : t("Nouvelle liste")}</h2>
+          <button className="icon-btn" onClick={onClose}><Icon name="close" size={20} /></button>
+        </div>
+        <label>{t("Nom")}
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Ma smart playlist")} autoFocus />
+        </label>
+        {isSmart && (
+          <>
+            <div className="smart-rules-head">
+              <span className="dim">{t("Correspondre à")}</span>
+              <select value={matchAll ? "all" : "any"} onChange={(e) => setMatchAll(e.target.value === "all")}>
+                <option value="all">{t("toutes les règles (ET)")}</option>
+                <option value="any">{t("au moins une règle (OU)")}</option>
+              </select>
+            </div>
+            {rules.map((r, i) => (
+              <div className="smart-rule-row" key={i}>
+                <select value={r.field} onChange={(e) => setRule(i, { field: e.target.value as SmartField, value: initValue(e.target.value as SmartField) })}>
+                  {SMART_FIELDS.map(([k, label]) => <option key={k} value={k}>{t(label)}</option>)}
+                </select>
+                <select value={r.op} onChange={(e) => setRule(i, { op: e.target.value as SmartOp })}>
+                  {SMART_OPS.map(([k, label]) => <option key={k} value={k}>{t(label)}</option>)}
+                </select>
+                {r.field === "has_cover" ? (
+                  <select value={String(r.value)} onChange={(e) => setRule(i, { value: e.target.value === "true" })}>
+                    <option value="true">{t("oui")}</option>
+                    <option value="false">{t("non")}</option>
+                  </select>
+                ) : (
+                  <input type="text" value={String(r.value)} inputMode={SMART_NUMERIC.includes(r.field) ? "numeric" : undefined}
+                    placeholder={SMART_NUMERIC.includes(r.field) ? "0" : t("valeur…")}
+                    onChange={(e) => setRule(i, { value: e.target.value })} />
+                )}
+                <button className="icon-btn danger" title={t("Retirer la règle")} onClick={() => setRules((rs) => rs.filter((_, j) => j !== i))}><Icon name="minus" size={16} /></button>
+              </div>
+            ))}
+            <button className="btn ghost sm" onClick={() => setRules((rs) => [...rs, { field: "genre", op: "eq", value: "" }])}><Icon name="plus" size={14} /> {t("Ajouter une règle")}</button>
+            <div className="smart-rule-row">
+              <select value={sortField} onChange={(e) => setSortField(e.target.value as SmartField | "")}>
+                <option value="">{t("Trier par… (défaut : bibliothèque)")}</option>
+                {SMART_FIELDS.map(([k, label]) => <option key={k} value={k}>{t(label)}</option>)}
+              </select>
+              <select value={sortDesc ? "desc" : "asc"} onChange={(e) => setSortDesc(e.target.value === "desc")} disabled={!sortField}>
+                <option value="asc">{t("croissant")}</option>
+                <option value="desc">{t("décroissant")}</option>
+              </select>
+              <input type="text" value={limit} inputMode="numeric" placeholder={t("Limite (vide = tout)")} onChange={(e) => setLimit(e.target.value)} />
+            </div>
+          </>
+        )}
+        <div className="modal-foot">
+          <button className="btn ghost" onClick={onClose}>{t("Annuler")}</button>
+          <button className="btn" disabled={busy || !name.trim()} onClick={submit}>{busy ? "…" : isSmart ? t("Enregistrer") : t("Créer")}</button>
+        </div>
       </div>
     </div>
   );
