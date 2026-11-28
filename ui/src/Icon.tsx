@@ -36,6 +36,7 @@ export function Icon({ name, size = 24, filled = false, className = "" }: { name
     minus: <path d="M5 12h14" />,
     grid: (<><rect x="4" y="4" width="7" height="7" rx="1.5" /><rect x="13" y="4" width="7" height="7" rx="1.5" /><rect x="4" y="13" width="7" height="7" rx="1.5" /><rect x="13" y="13" width="7" height="7" rx="1.5" /></>),
     list: <path d="M4 6h16M4 12h16M4 18h16" />,
+    menu: <path d="M4 7h16M4 12h16M4 17h16" />,
     back: (<><path d="M19 12H5" /><path d="m11 18-6-6 6-6" /></>),
     chevron: <path d="m6 9 6 6 6-6" />,
     eject: (<><path d="M12 15V4" /><path d="m7 9 5-5 5 5" /><path d="M4 19h16" /></>),

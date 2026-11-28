@@ -1116,6 +1116,8 @@ export const api = {
   spotifyStart: () => req<SpotStatus>("/api/spotify/start", post({})),
   spotifyStop: () => req<SpotStatus>("/api/spotify/stop", post({})),
   coverUrl: (trackId: string) => `/api/library/cover/${encodeURIComponent(trackId)}`,
+  albumImageUrl: (albumId: string) => `/api/library/album_image/${encodeURIComponent(albumId)}`,
+  artistImageUrl: (artistId: string) => `/api/library/artist_image/${encodeURIComponent(artistId)}`,
   lyrics: (trackId: string) => req<LyricsResponse>(`/api/lyrics/${encodeURIComponent(trackId)}`),
   infos: (trackId: string) => req<InfosResponse>(`/api/infos/${encodeURIComponent(trackId)}`),
 };

@@ -167,6 +167,7 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [searchNonce, setSearchNonce] = useState(0);
   const [searchQ, setSearchQ] = useState("");
+  const [navOpen, setNavOpen] = useState(false);
   // Panneau « lecture en cours » (Pochette / Infos / Paroles) à droite de la vue.
   const [npOpen, setNpOpen] = useState(false);
   const [npTab, setNpTab] = useState<NpTab>("cover");
@@ -409,9 +410,16 @@ export default function App() {
   return (
     <div className="app">
       <div className="main">
-        <Sidebar view={view} setView={setView} sources={sources} browseSrc={browseSrc} openSource={openSource} system={system} stats={stats} upnpDevs={upnpDevs} upnpScanning={upnpScanning} onScanUpnp={() => scanUpnp(true)} onOpenUpnp={openUpnp} />
+        <Sidebar view={view} open={navOpen} onClose={() => setNavOpen(false)}
+          setView={(v) => { setView(v); setNavOpen(false); }}
+          sources={sources} browseSrc={browseSrc}
+          openSource={(id) => { openSource(id); setNavOpen(false); }}
+          system={system} stats={stats} upnpDevs={upnpDevs} upnpScanning={upnpScanning}
+          onScanUpnp={() => scanUpnp(true)} onOpenUpnp={(loc) => { openUpnp(loc); setNavOpen(false); }} />
+        {navOpen && <div className="nav-backdrop show" onClick={() => setNavOpen(false)} />}
         <main className="content">
           <div className="topbar">
+            <button className="icon-btn nav-toggle" aria-label={t("Menu")} onClick={() => setNavOpen(true)}><Icon name="menu" size={20} /></button>
             <div className="topbar-title">{view === "home" ? t("Accueil") : view === "library" ? t("Bibliothèque") : view === "browse" ? t("Parcourir") : view === "radios" ? t("Radios") : view === "queue" ? t("File d'attente") : view === "playlists" ? t("Listes de lecture") : view === "favorites" ? t("Favoris") : view === "sources" ? t("Sources") : view === "multiroom" ? t("Multiroom") : view === "plugins" ? t("Plugins") : t("Réglages")}</div>
             <div className="topbar-search">
               <Icon name="search" size={18} />
@@ -468,8 +476,8 @@ export default function App() {
   );
 }
 
-function Sidebar({ view, setView, sources, browseSrc, openSource, system, stats, upnpDevs, upnpScanning, onScanUpnp, onOpenUpnp }: {
-  view: View; setView: (v: View) => void; sources: Source[];
+function Sidebar({ view, setView, open, onClose, sources, browseSrc, openSource, system, stats, upnpDevs, upnpScanning, onScanUpnp, onOpenUpnp }: {
+  view: View; setView: (v: View) => void; open: boolean; onClose: () => void; sources: Source[];
   browseSrc: string | null; openSource: (id: string) => void; system: SystemInfo | null;
   stats: LibraryStats | null; upnpDevs: UpnpDevice[]; upnpScanning: boolean;
   onScanUpnp: () => void; onOpenUpnp: (location: string) => void;
@@ -488,8 +496,8 @@ function Sidebar({ view, setView, sources, browseSrc, openSource, system, stats,
     ["settings", t("Réglages"), "gear"],
   ];
   return (
-    <nav className="sidebar">
-      <div className="logo"><img src="/favicon.svg" alt="" /> auris</div>
+    <nav className={`sidebar${open ? " open" : ""}`}>
+      <div className="logo"><img src="/favicon.svg" alt="" /> auris<button className="icon-btn nav-toggle" style={{ marginLeft: "auto" }} aria-label={t("Fermer le menu")} onClick={onClose}><Icon name="close" size={18} /></button></div>
       {nav.map(([v, label, icon]) => (
         <div key={v} className={`nav-item ${view === v ? "active" : ""}`} onClick={() => setView(v)}>
           <Icon name={icon} size={22} /><span>{label}</span>
@@ -583,10 +591,25 @@ function PinButton({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   );
 }
 
-function FacetCard({ coverUrl, icon, title, sub, round, fav, onToggleFav, pinned, onTogglePin, onClick }: { coverUrl: string | null; icon: string; title: string; sub: string; round?: boolean; fav?: boolean; onToggleFav?: () => void; pinned?: boolean; onTogglePin?: () => void; onClick: () => void }) {
+/// Image avec repli : pochette embarquée (locale) → image externe Deezer → icône.
+function SmartImg({ local, fallback, icon, size = 44, alt = "" }: { local: string | null; fallback?: string | null; icon: string; size?: number; alt?: string }) {
+  const [src, setSrc] = useState<string | null>(local ?? fallback ?? null);
+  const [usedFallback, setUsedFallback] = useState(false);
+  useEffect(() => { setSrc(local ?? fallback ?? null); setUsedFallback(false); }, [local, fallback]);
+  if (!src) return <Icon name={icon} size={size} />;
+  return (
+    <img src={src} alt={alt} loading="lazy"
+      onError={() => {
+        if (!usedFallback && fallback && src !== fallback) { setUsedFallback(true); setSrc(fallback); }
+        else setSrc(null);
+      }} />
+  );
+}
+
+function FacetCard({ coverUrl, fallback, icon, title, sub, round, fav, onToggleFav, pinned, onTogglePin, onClick }: { coverUrl: string | null; fallback?: string | null; icon: string; title: string; sub: string; round?: boolean; fav?: boolean; onToggleFav?: () => void; pinned?: boolean; onTogglePin?: () => void; onClick: () => void }) {
   return (
     <div className={`card${round ? " round" : ""}`} onClick={onClick}>
-      <div className="cover">{coverUrl ? <img src={coverUrl} alt="" loading="lazy" /> : <Icon name={icon} size={44} />}
+      <div className="cover"><SmartImg local={coverUrl} fallback={fallback} icon={icon} />
         {onTogglePin && <PinButton on={!!pinned} onToggle={onTogglePin} />}
         {onToggleFav && <FavHeart on={!!fav} onToggle={onToggleFav} />}
       </div>
@@ -645,7 +668,7 @@ function Home({ state, sources, favs, onToggleFav, pins, onTogglePin, playTrack,
       {pinnedAlbums.length > 0 && (
         <Rail title={t("Épinglés")}>
           {pinnedAlbums.slice(0, 14).map((a) => (
-            <FacetCard key={a.id} coverUrl={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} icon="note" title={a.title}
+            <FacetCard key={a.id} coverUrl={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} fallback={api.albumImageUrl(a.id)} icon="note" title={a.title}
               sub={`${a.artist}${a.year ? ` · ${a.year}` : ""}`}
               fav={favs.albums.includes(a.id)} onToggleFav={() => onToggleFav("album", a.id)}
               pinned onTogglePin={() => onTogglePin("album", a.id)}
@@ -678,7 +701,7 @@ function Home({ state, sources, favs, onToggleFav, pins, onTogglePin, playTrack,
       {favAlbums.length > 0 && (
         <Rail title={t("Favoris")}>
           {favAlbums.slice(0, 14).map((a) => (
-            <FacetCard key={a.id} coverUrl={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} icon="note" title={a.title}
+            <FacetCard key={a.id} coverUrl={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} fallback={api.albumImageUrl(a.id)} icon="note" title={a.title}
               sub={`${a.artist}${a.year ? ` · ${a.year}` : ""}`}
               fav onToggleFav={() => onToggleFav("album", a.id)}
               pinned={pins.albums.includes(a.id)} onTogglePin={() => onTogglePin("album", a.id)}
@@ -707,7 +730,7 @@ function Home({ state, sources, favs, onToggleFav, pins, onTogglePin, playTrack,
       {artists.length > 0 && (
         <Rail title={t("Artistes")}>
           {artists.slice(0, 14).map((a) => (
-            <FacetCard key={a.id} coverUrl={null} icon="group" title={a.name} round
+            <FacetCard key={a.id} coverUrl={null} fallback={api.artistImageUrl(a.id)} icon="user" title={a.name} round
               sub={cl(a.album_count, "album", "albums")}
               fav={favs.artists.includes(a.id)}
               onToggleFav={() => onToggleFav("artist", a.id)}
@@ -717,7 +740,7 @@ function Home({ state, sources, favs, onToggleFav, pins, onTogglePin, playTrack,
       )}
       <Rail title={t("Albums récents")}>
         {albums.slice(0, 14).map((a) => (
-          <FacetCard key={a.id} coverUrl={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} icon="note" title={a.title}
+          <FacetCard key={a.id} coverUrl={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} fallback={api.albumImageUrl(a.id)} icon="note" title={a.title}
             sub={`${a.artist}${a.year ? ` · ${a.year}` : ""}`}
             fav={favs.albums.includes(a.id)}
             onToggleFav={() => onToggleFav("album", a.id)}
@@ -772,7 +795,7 @@ function FacetView({ facet, playTrack, playAll, favs, onToggleFav, pins, onToggl
         <button className="btn sm" disabled={!tracks?.length} onClick={() => tracks && playAll(tracks)}><Icon name="play" size={14} filled /> {t("Tout lire")}</button>
       </div>
       <div className="artist-head">
-        <div className="cover big">{coverTrack ? <img src={api.coverUrl(coverTrack.id)} alt="" /> : <Icon name="note" size={44} />}</div>
+        <div className="cover big"><SmartImg local={coverTrack ? api.coverUrl(coverTrack.id) : null} fallback={facetAlbums[0] ? api.albumImageUrl(facetAlbums[0].id) : null} icon="note" /></div>
         <div>
           <div className="s" style={{ textTransform: "uppercase", letterSpacing: 1 }}>{facet.kind === "genre" ? t("Genre") : t("Décennie")}</div>
           <h1 style={{ margin: "4px 0" }}>{title}</h1>
@@ -785,7 +808,7 @@ function FacetView({ facet, playTrack, playAll, favs, onToggleFav, pins, onToggl
           <div className="grid">
             {facetAlbums.map((a) => (
               <div key={a.id} className="card" onClick={() => onOpenAlbum({ id: a.id, title: a.title, artist: a.artist })}>
-                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" loading="lazy" /> : <Icon name="note" size={44} />}
+                <div className="cover"><SmartImg local={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} fallback={api.albumImageUrl(a.id)} icon="note" />
                   <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
                   <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
                 </div>
@@ -950,7 +973,7 @@ function Library({ playTrack, playAll, playUri, openSource, say, refresh, search
               <div className="grid">
                 {results.albums.items.map((a) => (
                   <div key={a.id} className="card" onClick={() => setAlbumDetail({ id: a.id, title: a.title, artist: a.artist })}>
-                    <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" loading="lazy" /> : <Icon name="note" size={44} />}
+                    <div className="cover"><SmartImg local={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} fallback={api.albumImageUrl(a.id)} icon="note" />
                       <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
                       <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
                     </div>
@@ -1040,7 +1063,7 @@ function Library({ playTrack, playAll, playUri, openSource, say, refresh, search
         <div className="grid">
           {albums.map((a) => (
             <div key={a.id} className="card" onClick={() => setAlbumDetail({ id: a.id, title: a.title, artist: a.artist })}>
-              <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" loading="lazy" /> : <Icon name="note" size={44} />}
+              <div className="cover"><SmartImg local={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} fallback={api.albumImageUrl(a.id)} icon="note" />
                 <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
                 <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
               </div>
@@ -1054,7 +1077,7 @@ function Library({ playTrack, playAll, playUri, openSource, say, refresh, search
         <div className="artist-grid">
           {artists.map((a) => (
             <div key={a.id} className="artist-card" onClick={() => setArtistDetail({ id: a.id, name: a.name })}>
-              <div className="artist-cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" loading="lazy" /> : <Icon name="user" size={52} />}</div>
+              <div className="artist-cover"><SmartImg local={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} fallback={api.artistImageUrl(a.id)} icon="user" size={52} /></div>
               <div className="artist-name" title={a.name}>{a.name}</div>
               <div className="artist-sub"><FavHeart on={favs.artists.includes(a.id)} onToggle={() => onToggleFav("artist", a.id)} /> {cl(a.album_count, "album", "albums")}</div>
             </div>
@@ -1084,7 +1107,7 @@ function ArtistView({ id, name, playAll, playTrack, favs, onToggleFav, pins, onT
         <button className="btn sm" disabled={!tracks.length} onClick={() => playAll(tracks)}><Icon name="play" size={14} filled /> {t("Tout lire")}</button>
       </div>
       <div className="artist-head">
-        <div className="cover big">{detail?.cover_url ? <img src={detail.cover_url} alt="" /> : <Icon name="user" size={44} />}
+        <div className="cover big"><SmartImg local={detail?.cover_url ?? null} fallback={api.artistImageUrl(id)} icon="user" size={44} />
           <FavHeart on={favs.artists.includes(id)} onToggle={() => onToggleFav("artist", id)} />
         </div>
         <div>
@@ -1107,7 +1130,7 @@ function ArtistView({ id, name, playAll, playTrack, favs, onToggleFav, pins, onT
           <div className="grid">
             {albums.map((a) => (
               <div key={a.id} className="card" onClick={() => onOpenAlbum({ id: a.id, title: a.title, artist: a.artist })}>
-                <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" loading="lazy" /> : <Icon name="note" size={44} />}
+                <div className="cover"><SmartImg local={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} fallback={api.albumImageUrl(a.id)} icon="note" />
                   <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
                   <FavHeart on={favs.albums.includes(a.id)} onToggle={() => onToggleFav("album", a.id)} />
                 </div>
@@ -1157,7 +1180,7 @@ function AlbumView({ id, title, artist, playAll, playTrack, say, favs, onToggleF
           {[album.year, album.label, album.publisher, album.copyright].filter((v) => v != null && v !== "").join(" · ")}
         </div>
       )}
-      <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={onToggleFav} albumCover={cover} />
+      <TrackTable tracks={tracks} playTrack={playTrack} playAll={playAll} favs={favs} onToggleFav={onToggleFav} albumCover={cover ?? api.albumImageUrl(id)} />
       {tracks.some((t) => t.composer || t.producer || t.isrc) && (
         <>
           <h2>{t("Crédits")}</h2>
@@ -1199,7 +1222,7 @@ function FavoritesView({ playTrack, playAll, favs, onToggleFav, pins, onTogglePi
               <div className="grid">
                 {data.albums.map((a) => (
                   <div key={a.id} className="card" onClick={() => openAlbum({ id: a.id, title: a.title, artist: a.artist })}>
-                    <div className="cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" loading="lazy" /> : <Icon name="note" size={44} />}
+                    <div className="cover"><SmartImg local={a.cover_track_id ? api.coverUrl(a.cover_track_id) : null} fallback={api.albumImageUrl(a.id)} icon="note" />
                       <PinButton on onToggle={() => onTogglePin("album", a.id)} />
                       <PinButton on={pins.albums.includes(a.id)} onToggle={() => onTogglePin("album", a.id)} />
                       <FavHeart on onToggle={() => onToggleFav("album", a.id)} />
@@ -1252,13 +1275,13 @@ function TrackTable({ tracks, current, playTrack, playAll, albumCover, favs, onT
   if (tracks.length === 0) return <div className="empty">Aucun titre.</div>;
   return (
     <table className="tracks">
-      <thead><tr><th>#</th><th>Titre</th><th>Artiste</th><th>Album</th><th>Format</th><th>Durée</th><th></th></tr></thead>
+      <thead><tr><th>#</th><th>Titre</th><th className="hide-sm">Artiste</th><th className="hide-sm">Album</th><th className="hide-sm">Format</th><th>Durée</th><th></th></tr></thead>
       <tbody>
         {tracks.map((tr, i) => (
           <tr key={tr.id} className={current === tr.id ? "playing" : ""} onDoubleClick={() => playTrack(tr)} onClick={() => playAll(tracks.slice(i))}>
             <td className="num">{albumCover && i === 0 ? <img src={albumCover} alt="" style={{ width: 28, height: 28, borderRadius: 4, verticalAlign: "middle" }} /> : i + 1}</td>
-            <td>{tr.title}</td><td>{tr.artist}</td><td>{tr.album}</td>
-            <td><span className="badge">{tr.format ? fmtFormat(tr.format) : ""}</span></td>
+            <td>{tr.title}</td><td className="hide-sm">{tr.artist}</td><td className="hide-sm">{tr.album}</td>
+            <td className="hide-sm"><span className="badge">{tr.format ? fmtFormat(tr.format) : ""}</span></td>
             <td className="num-time">{tr.duration_secs != null ? fmtTime(tr.duration_secs) : "—"}</td>
             <td className="num">
               {tr.artist && (
@@ -4017,8 +4040,8 @@ function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, o
         {cur && <button className="badge badge-btn" title="Signal path — chaîne de traitement appliquée au flux en cours (#77)" onClick={onOpenSignalPath}>
           <Icon name="sliders" size={12} /> Signal path
         </button>}
-        {state?.current_format && <span className="badge">{fmtFormat(state.current_format)}</span>}
-        {state?.output_backend && <span className="badge" title="Backend de sortie audio actuellement utilisé">{state.output_backend}</span>}
+        {state?.current_format && <span className="badge hide-sm">{fmtFormat(state.current_format)}</span>}
+        {state?.output_backend && <span className="badge hide-sm" title="Backend de sortie audio actuellement utilisé">{state.output_backend}</span>}
         <select value={state?.audio_device ?? ""} onChange={(e) => act(() => api.selectDevice(e.target.value || null))} aria-label="Périphérique audio"
           title={devices.length === 0 ? "Aucun périphérique de sortie détecté — si vous lancez le binaire Linux/WSL, les DAC USB Windows n'y sont pas visibles : lancez auris.exe sous Windows" : "Périphérique audio"}>
           <option value="">DAC par défaut</option>
@@ -4027,7 +4050,7 @@ function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, o
         </select>
         <button className="icon-btn" title="Rechercher à nouveau les périphériques audio (DAC branché à chaud)" onClick={() => refreshDevices()}><Icon name="refresh" size={16} /></button>
         {state?.volume_mode === "disabled"
-          ? <span className="badge" title="Volume géré par le DAC/ampli (bit-perfect)">bit-perfect · vol. sur l'ampli</span>
+          ? <span className="badge hide-sm" title="Volume géré par le DAC/ampli (bit-perfect)">bit-perfect · vol. sur l'ampli</span>
           : (<>
             <input type="range" min={0} max={state?.max_volume ?? 100} value={state?.muted ? 0 : state?.volume ?? 100} aria-label="Volume"
               onChange={(e) => act(() => api.volume(Number(e.target.value)))} />

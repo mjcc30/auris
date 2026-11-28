@@ -34,6 +34,7 @@ use auris_player::{
 use auris_sources::{discover_removable, SourcesManager};
 use auris_updater::Updater;
 
+mod artwork;
 mod auth;
 mod camilla;
 mod dlna_renderer;
@@ -446,6 +447,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/library/artists/{id}", get(get_artist))
         .route("/api/library/search", get(get_search))
         .route("/api/library/cover/{track_id}", get(get_cover))
+        .route(
+            "/api/library/artist_image/{artist_id}",
+            get(artwork::get_artist_image),
+        )
+        .route(
+            "/api/library/album_image/{album_id}",
+            get(artwork::get_album_image),
+        )
         .route("/api/lyrics/{track_id}", get(get_lyrics))
         .route("/api/infos/{track_id}", get(get_infos))
         .route("/api/library/scan", post(post_scan))

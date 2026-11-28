@@ -834,3 +834,64 @@ tr.link:hover { background: var(--hover, rgba(255,255,255,0.06)); }
 .display-controls button.big { width: 92px; height: 92px; background: var(--accent); color: #000; border: none; }
 .display-controls button.big:hover { background: var(--accent); filter: brightness(1.1); }
 .display-vol { font-size: 24px; min-width: 60px; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* ---------- Polish façon Volumio ---------- */
+.card { border-radius: 10px; }
+.cover { border-radius: 8px; }
+.controls .play { background: var(--accent); color: #000000; }
+.controls .play:hover { background: var(--accent-dark); color: #000000; }
+.grid { gap: 18px; }
+
+/* ---------- Responsive mobile-first ---------- */
+.nav-toggle { display: none; }
+.nav-backdrop { display: none; }
+
+@media (max-width: 1024px) {
+  .sidebar {
+    position: fixed; left: 0; top: 0; bottom: 0; z-index: 60;
+    width: min(300px, 84vw);
+    transform: translateX(-105%);
+    transition: transform 220ms var(--ease);
+    box-shadow: var(--shadow-modal);
+  }
+  .sidebar.open { transform: none; }
+  .nav-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 55;
+    background: rgba(0, 0, 0, 0.6);
+  }
+  .nav-toggle { display: inline-flex; }
+  .content { padding: 0 16px 32px; }
+  .topbar { gap: 10px; padding: 12px 0 10px; }
+  .topbar-title { font-size: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .topbar-search { width: auto; flex: 1; min-width: 0; }
+  h1 { font-size: 22px; }
+}
+
+@media (max-width: 640px) {
+  :root { --player-h: 76px; --sidebar-w: 260px; }
+  .content { padding: 0 12px 28px; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .artist-grid { grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 16px 10px; }
+  .rail .card { flex-basis: 140px; width: 140px; }
+  h1 { font-size: 20px; margin: 12px 0 8px; }
+  h2 { font-size: 16px; margin: 20px 0 10px; }
+  .toolbar { flex-wrap: wrap; gap: 8px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .out-grid { grid-template-columns: 1fr 1fr; }
+  .modal-bg { padding: 10px; }
+  .modal { padding: 18px; max-height: calc(100vh - 40px); }
+  /* tableaux : colonnes secondaires masquées */
+  .hide-sm { display: none; }
+  .tracks { font-size: 13px; }
+  .tracks td, .tracks th { padding: 8px 6px; }
+  /* barre de lecture compacte */
+  .player { gap: 8px; padding: 0 10px; }
+  .now { width: auto; flex: 1; }
+  .now .cover { width: 44px; height: 44px; }
+  .now .artist { display: none; }
+  .right { width: auto; flex: 0 0 auto; gap: 4px; }
+  .right select, .right input[type="range"], .right .vol { display: none; }
+  .controls { gap: 6px; }
+  .controls .play { width: 36px; height: 36px; }
+  .seek span { min-width: 30px; font-size: 10px; }
+}
