@@ -648,6 +648,8 @@ export interface Packs {
 export interface SystemSettings {
   device_name: string;
   timezone: string | null;
+  /** Token d'accès (#97) — masqué ("********") quand il est défini. */
+  access_token: string | null;
 }
 
 export interface NetworkSettings {
@@ -844,6 +846,10 @@ async function errMsg(r: Response): Promise<string> {
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, init);
+  if (r.status === 401 && !path.startsWith("/api/auth/")) {
+    // token d'accès requis (#97) : l'app affiche l'écran de connexion
+    window.dispatchEvent(new CustomEvent("auris:unauthorized"));
+  }
   if (!r.ok) {
     let msg = `HTTP ${r.status}`;
     try {
@@ -857,7 +863,16 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return (txt ? JSON.parse(txt) : null) as T;
 }
 
+export interface AuthStatus {
+  required: boolean;
+  authenticated: boolean;
+}
+
 export const api = {
+  /** Token d'accès configuré ? (#97) — public, sert d'écran de connexion. */
+  authStatus: () => req<AuthStatus>("/api/auth/status"),
+  authLogin: (token: string) => req<{ ok: boolean; required: boolean }>("/api/auth/login", post({ token })),
+  authLogout: () => req<{ ok: boolean }>("/api/auth/logout", post({})),
   state: () => req<PlayerState>("/api/state"),
   play: (uri: string) => req<PlayerState>("/api/player/play", post({ uri })),
   playTrack: (trackId: string) => req<PlayerState>("/api/player/play", post({ track_id: trackId })),

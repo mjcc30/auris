@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type BrowseEntry, type CamillaSettings, type CamillaStatusResponse, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type InputDevice, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type PodcastEpisode, type PodcastFeed, type PodcastShow, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirSection, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type SmartField, type SmartOp, type SmartRule, type SmartRules, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type AuthStatus, type BrowseEntry, type CamillaSettings, type CamillaStatusResponse, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type InputDevice, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type PodcastEpisode, type PodcastFeed, type PodcastShow, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirSection, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type SmartField, type SmartOp, type SmartRule, type SmartRules, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -109,6 +109,44 @@ function applyAppearance(a: AppearanceSettings) {
   }
 }
 
+/** Écran de connexion quand un token d'accès est configuré (#97). */
+function LoginScreen({ onOk }: { onOk: () => void }) {
+  const [token, setToken] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    if (!token.trim() || busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await api.authLogin(token.trim());
+      onOk();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="modal-bg">
+      <div className="modal" style={{ width: 380 }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h2><Icon name="wave" size={22} /> auris</h2>
+        </div>
+        <p className="dim">{t("Cette instance est protégée par un token d'accès.")}</p>
+        <label>{t("Token d'accès")}
+          <input type="password" value={token} autoFocus autoComplete="current-password"
+            onChange={(e) => setToken(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submit()} />
+        </label>
+        {err && <p className="dim" style={{ color: "#ff6b6b" }}>{err}</p>}
+        <div className="modal-foot">
+          <button className="btn" disabled={busy || !token.trim()} onClick={submit}>{busy ? "…" : t("Se connecter")}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [view, setView] = useState<View>("home");
   const [state, setState] = useState<PlayerState | null>(null);
@@ -137,6 +175,14 @@ export default function App() {
   const [pendingAlbum, setPendingAlbum] = useState<{ id: string; title: string; artist: string } | null>(null);
   const toastTimer = useRef<number | null>(null);
   const browserAudio = useRef(new BrowserAudio());
+  // Token d'accès optionnel (#97) : écran de connexion si l'API répond 401.
+  const [auth, setAuth] = useState<AuthStatus | null>(null);
+  useEffect(() => {
+    api.authStatus().then(setAuth).catch(() => setAuth({ required: false, authenticated: true }));
+    const onUnauth = () => setAuth({ required: true, authenticated: false });
+    window.addEventListener("auris:unauthorized", onUnauth);
+    return () => window.removeEventListener("auris:unauthorized", onUnauth);
+  }, []);
 
   const say = useCallback((msg: string) => {
     setToast(msg);
@@ -353,6 +399,11 @@ export default function App() {
 
   if (view === "display") {
     return <DisplayView state={state} act={act} onExit={() => setView("home")} />;
+  }
+
+  // Token d'accès configuré et pas de session (#97) : écran de connexion.
+  if (auth?.required && !auth.authenticated) {
+    return <LoginScreen onOk={() => { setAuth({ required: true, authenticated: true }); location.reload(); }} />;
   }
 
   return (
@@ -3060,6 +3111,20 @@ function SettingsView({ settings, updateSettings, say, refresh, packs, searchQ }
           <SetRow key="tz" label="Fuseau horaire" desc="Format IANA, ex. Europe/Paris (cosmétique)">
             <input type="text" value={sy.timezone ?? ""} placeholder="Europe/Paris" style={{ width: 220 }}
               onChange={(e) => setSystem("timezone", e.target.value.trim() || null)} />
+          </SetRow>
+        ),
+        show("Token d'accès", "Protéger l'UI et l'API par un token (exposition LAN/internet)") && (
+          <SetRow key="token" label="Token d'accès" desc="Si renseigné, un login est demandé à l'ouverture (session 30 jours). Laisser « ******** » = inchangé ; « Retirer » = suppression.">
+            <input type="password" value={sy.access_token ?? ""} placeholder={t("aucun token")} style={{ width: 220 }} autoComplete="new-password"
+              onChange={(e) => setSystem("access_token", e.target.value.trim() === "" ? (sy.access_token ? "********" : null) : e.target.value)} />
+            {sy.access_token && (
+              <button className="btn ghost sm" onClick={() => setSystem("access_token", "")}>{t("Retirer")}</button>
+            )}
+          </SetRow>
+        ),
+        show("Se déconnecter", "Ferme la session courante (token d'accès)") && sy.access_token && (
+          <SetRow key="logout" label="Session" desc="Ferme la session de connexion courante">
+            <button className="btn ghost sm" onClick={async () => { try { await api.authLogout(); } catch { /* ignore */ } location.reload(); }}>{t("Se déconnecter")}</button>
           </SetRow>
         ),
         show("Stockage", "Espace utilisé par les données Auris") && (

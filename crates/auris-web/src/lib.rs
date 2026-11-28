@@ -3,6 +3,7 @@
 //! L'UI est un build Vite (ui/dist) embarque dans le binaire: le binaire reste
 //! autonome et clé en main, aucune installation фронт separee n'est requise.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
@@ -33,6 +34,7 @@ use auris_player::{
 use auris_sources::{discover_removable, SourcesManager};
 use auris_updater::Updater;
 
+mod auth;
 mod camilla;
 mod dlna_renderer;
 mod lastfm;
@@ -119,6 +121,8 @@ pub struct AppState {
     pub ripcd: Arc<ripcd::RipCdHub>,
     /// Spotify Connect via librespot (#24).
     pub spotify: Arc<spotify::SpotHub>,
+    /// Sessions de login (id -> expiration) pour le token d'accès optionnel (#97).
+    pub sessions: Arc<RwLock<HashMap<String, i64>>>,
 }
 
 /// Action d'alimentation (redémarrer / éteindre la machine hôte).
@@ -158,6 +162,7 @@ impl AppState {
             socketio: socketio::SocketIoHub::new(),
             ripcd: ripcd::RipCdHub::new(),
             spotify: spotify::SpotHub::new(),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
             data_dir,
             power_control: false,
             power_ops: None,
@@ -552,15 +557,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/alarms", get(get_alarms))
         .route("/api/shares", get(get_shares).post(post_share))
         .route("/api/shares/{token}", delete(delete_share))
-        .route("/api/public/shares/{token}", get(public_share))
-        .route("/share/{token}", get(share_page))
-        .route("/share/{token}/stream", get(share_stream))
-        .route("/share/{token}/stream/{track_id}", get(share_stream_track))
-        // enceinte DLNA (MediaRenderer UPnP) — #35
-        .route("/dlna/desc.xml", get(dlna_renderer::get_desc))
-        .route("/dlna/scpd/{name}", get(dlna_renderer::get_scpd))
-        .route("/dlna/avtransport", post(dlna_renderer::post_avtransport))
-        .route("/dlna/rendering", post(dlna_renderer::post_rendering))
         // multiroom / regroupement — #23
         // interfaces réseau (#44)
         .route(
@@ -597,15 +593,38 @@ pub fn router(state: AppState) -> Router {
         .route("/ws/audio", get(ws_audio_handler))
         .route("/api/player/output", post(post_output));
 
-    Router::new()
+    // Routes publiques même quand un token d'accès est configuré (#97) :
+    // authentification, liens de partage (token dans l'URL) et enceinte DLNA
+    // (UPnP n'a pas de mécanisme d'auth standard).
+    let public = auth::router()
+        .route("/api/public/shares/{token}", get(public_share))
+        .route("/share/{token}", get(share_page))
+        .route("/share/{token}/stream", get(share_stream))
+        .route("/share/{token}/stream/{track_id}", get(share_stream_track))
+        .route("/dlna/desc.xml", get(dlna_renderer::get_desc))
+        .route("/dlna/scpd/{name}", get(dlna_renderer::get_scpd))
+        .route("/dlna/avtransport", post(dlna_renderer::post_avtransport))
+        .route("/dlna/rendering", post(dlna_renderer::post_rendering));
+
+    // Tout le reste de l'API est protégé par le token d'accès s'il est configuré (#97).
+    let protected = Router::new()
         .merge(api)
         // compatibilité REST v1 façon Volumio (clients tiers) — #76
         .merge(volumio_v1::router())
-        .merge(subsonic::router())
         // chaîne du signal façon Roon « Signal Path » — #77
         .merge(signal_path::router())
         // pont CamillaDSP (statut + profil) — #82
         .merge(camilla::router())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
+
+    Router::new()
+        .merge(public)
+        .merge(protected)
+        // Subsonic a sa propre auth (u/t/salt, style Navidrome)
+        .merge(subsonic::router())
         .route("/", get(index_html))
         .route("/{*path}", get(static_asset))
         .layer(CorsLayer::permissive())
@@ -2913,7 +2932,8 @@ async fn post_update(State(s): State<AppState>) -> Json<serde_json::Value> {
 // ---------- Réglages (menu Réglages façon Nova) ----------
 
 async fn get_settings(State(s): State<AppState>) -> Json<Settings> {
-    Json(s.settings.read().unwrap().clone())
+    // le token d'accès n'est jamais exposé en clair (#97)
+    Json(auth::mask_token_out(s.settings.read().unwrap().clone()))
 }
 
 /// État des alarmes (minuterie de sommeil / réveil) pour l'UI.
@@ -2948,8 +2968,11 @@ async fn get_alarms(State(s): State<AppState>) -> Json<AlarmsInfo> {
 
 async fn put_settings(
     State(s): State<AppState>,
-    Json(mut new): Json<Settings>,
+    Json(new): Json<Settings>,
 ) -> ApiResult<Json<Settings>> {
+    // token d'accès (#97) : "********" = inchangé, "" = suppression
+    let old_token = s.settings.read().unwrap().system.access_token.clone();
+    let mut new = auth::normalize_token_in(new, old_token);
     if let Err(e) = new.validate() {
         return Err(ApiError(AurisError::other(format!(
             "réglages invalides: {e}"

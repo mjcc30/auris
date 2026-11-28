@@ -244,6 +244,7 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         socketio: auris_web::socketio::SocketIoHub::new(),
         ripcd,
         spotify: auris_web::spotify::SpotHub::new(),
+        sessions: Arc::new(RwLock::new(std::collections::HashMap::new())),
     };
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)

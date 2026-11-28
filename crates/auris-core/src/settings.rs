@@ -183,6 +183,9 @@ pub struct SystemSettings {
     pub device_name: String,
     /// Fuseau horaire IANA (ex. `Europe/Paris`) — cosmétique pour l'UI.
     pub timezone: Option<String>,
+    /// Token d'accès optionnel (#97) : s'il est renseigné, l'API/UI exigent
+    /// une authentification (cookie de session ou `Bearer <token>`).
+    pub access_token: Option<String>,
 }
 
 impl Default for SystemSettings {
@@ -190,6 +193,7 @@ impl Default for SystemSettings {
         SystemSettings {
             device_name: "auris".into(),
             timezone: None,
+            access_token: None,
         }
     }
 }
@@ -444,6 +448,12 @@ impl Settings {
         let name = self.system.device_name.trim();
         if name.is_empty() || name.len() > 64 {
             return Err("device_name doit faire entre 1 et 64 caractères".into());
+        }
+        if let Some(tok) = &self.system.access_token {
+            let t = tok.trim();
+            if !t.is_empty() && !(6..=128).contains(&t.len()) {
+                return Err("access_token doit faire entre 6 et 128 caractères".into());
+            }
         }
         if let Some(m) = self.playback.sleep_timer {
             if m == 0 || m > 480 {
