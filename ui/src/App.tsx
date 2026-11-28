@@ -251,6 +251,28 @@ export default function App() {
     catch (e) { say(e instanceof Error ? e.message : String(e)); }
   }, [refresh, say]);
 
+  // Media Session API — PWA installée / contrôles média du téléphone (#95) :
+  // métadonnées du morceau + actions play/pause/précédent/suivant.
+  useEffect(() => {
+    if (!("mediaSession" in navigator)) return;
+    const cur = state?.current ?? null;
+    navigator.mediaSession.playbackState =
+      !state || state.status === "stopped" ? "none" : state.status === "playing" ? "playing" : "paused";
+    navigator.mediaSession.metadata = cur
+      ? new MediaMetadata({
+          title: state?.is_live && state.stream_title ? state.stream_title : cur.title,
+          artist: state?.is_live ? t("Radio web") : cur.artist,
+          album: state?.is_live ? cur.uri : cur.album,
+          artwork: cur.has_cover ? [{ src: api.coverUrl(cur.id), sizes: "512x512", type: "image/png" }] : [],
+        })
+      : null;
+    navigator.mediaSession.setActionHandler("play", () => { void act(() => api.resume()); });
+    navigator.mediaSession.setActionHandler("pause", () => { void act(() => api.pause()); });
+    navigator.mediaSession.setActionHandler("previoustrack", () => { void act(() => api.prev()); });
+    navigator.mediaSession.setActionHandler("nexttrack", () => { void act(() => api.next()); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state?.current?.id, state?.current?.title, state?.status, state?.is_live, state?.stream_title]);
+
   // Radio contextuelle d'un artiste (#78) — émise par les lignes de pistes.
   useEffect(() => {
     const h = (e: Event) => {
