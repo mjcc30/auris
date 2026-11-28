@@ -34,6 +34,7 @@ use auris_player::{
 use auris_sources::{discover_removable, SourcesManager};
 use auris_updater::Updater;
 
+mod artistinfo;
 mod artwork;
 mod auth;
 mod camilla;
@@ -226,7 +227,7 @@ impl From<AurisError> for ApiError {
         ApiError(e)
     }
 }
-type ApiResult<T> = Result<T, ApiError>;
+pub(crate) type ApiResult<T> = Result<T, ApiError>;
 
 /// Exécute une opération d'IO bloquante (listing disque/réseau des sources,
 /// sonde de pochette embarquée...) sur le pool de threads bloquants de tokio
@@ -456,10 +457,20 @@ pub fn router(state: AppState) -> Router {
             get(artwork::get_artist_image),
         )
         .route(
+            "/api/artist_image/name/{name}",
+            get(artwork::get_artist_image_by_name),
+        )
+        .route(
             "/api/library/album_image/{album_id}",
             get(artwork::get_album_image),
         )
         .route("/api/lyrics/{track_id}", get(get_lyrics))
+        // alias nommé explicitement dans le ticket #102
+        .route("/api/track_lyrics/{track_id}", get(get_lyrics))
+        .route(
+            "/api/library/artist_info/{artist_id}",
+            get(artistinfo::get_artist_info),
+        )
         .route("/api/infos/{track_id}", get(get_infos))
         .route("/api/library/scan", post(post_scan))
         .route("/api/library/scan/status", get(get_scan_status))

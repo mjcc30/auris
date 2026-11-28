@@ -307,6 +307,49 @@ impl MbClient {
         self.get(&url).await
     }
 
+    /// Recherche d'artiste par nom (page artiste #102) : `artists` + score.
+    pub async fn artist_search(&self, name: &str) -> Result<Value, String> {
+        let q = format!("artist:\"{}\"", name.replace('"', ""));
+        let url = format!(
+            "{}/artist/?fmt=json&limit=5&query={}",
+            self.base,
+            urlencode(&q)
+        );
+        self.get(&url).await
+    }
+
+    /// Fiche artiste par MBID : tags, note, relations, genres, aliases (#102).
+    pub async fn artist(&self, mbid: &str) -> Result<Value, String> {
+        let url = format!(
+            "{}/artist/{}?fmt=json&inc=artist-rels+tags+ratings+genres+aliases",
+            self.base,
+            urlencode(mbid)
+        );
+        self.get(&url).await
+    }
+
+    /// Release-groups d'un artiste (discographie #102), albums uniquement.
+    pub async fn release_groups(&self, mbid: &str) -> Result<Value, String> {
+        let url = format!(
+            "{}/release-group/?artist={}&fmt=json&limit=50&type=album",
+            self.base,
+            urlencode(mbid)
+        );
+        self.get(&url).await
+    }
+
+    /// Artistes partageant un tag (similaires #102) — le filtrage du nom
+    /// demandé se fait côté appelant.
+    pub async fn artists_by_tag(&self, tag: &str) -> Result<Value, String> {
+        let q = format!("tag:\"{}\" AND type:group", tag.replace('"', ""));
+        let url = format!(
+            "{}/artist/?fmt=json&limit=12&query={}",
+            self.base,
+            urlencode(&q)
+        );
+        self.get(&url).await
+    }
+
     /// Fiche « propre » pour l'UI, extraite de la réponse WS2 brute.
     pub fn summarize(v: &Value) -> Value {
         if v.is_null() {

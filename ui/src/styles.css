@@ -900,3 +900,11 @@ tr.link:hover { background: var(--hover, rgba(255,255,255,0.06)); }
 .rec-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ff3b30; margin-right: 6px; animation: rec-blink 1.2s infinite; }
 .rec-active { color: #ff6b64; border-color: rgba(255, 59, 48, .5); }
 @keyframes rec-blink { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+/* page artiste enrichie (#102) */
+.bio-row { display: flex; gap: 14px; align-items: flex-start; }
+.bio-img { width: 96px; height: 96px; object-fit: cover; border-radius: 10px; flex: 0 0 auto; }
+.gallery { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; }
+.gallery img { height: 128px; width: auto; border-radius: 10px; flex: 0 0 auto; }
+.chip-btn { cursor: pointer; font: inherit; }
+.chip-btn:hover { border-color: var(--accent, #6ea8fe); color: var(--accent, #6ea8fe); }

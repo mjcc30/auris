@@ -182,6 +182,20 @@ pub async fn get_artist_image(State(s): State<AppState>, Path(id): Path<String>)
     }
 }
 
+/// `GET /api/artist_image/name/{name}` — redirection vers la photo d'un artiste
+/// par nom (Deezer), utile pour les artistes « similaires » qui ne sont pas
+/// dans la bibliothèque (#102).
+pub async fn get_artist_image_by_name(Path(name): Path<String>) -> Response {
+    match artist_image_url(&name).await {
+        Some(url) => Redirect::to(&url).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "pas d'image externe" })),
+        )
+            .into_response(),
+    }
+}
+
 /// `GET /api/library/album_image/{album_id}` — redirection vers la pochette de
 /// l'album (Deezer), 404 si rien trouvé.
 pub async fn get_album_image(State(s): State<AppState>, Path(id): Path<String>) -> Response {

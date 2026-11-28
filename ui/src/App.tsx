@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type AuthStatus, type BrowseEntry, type CamillaSettings, type CamillaStatusResponse, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type InputDevice, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type PodcastEpisode, type PodcastFeed, type PodcastShow, type RadioEntry, type RadioList, type RecordStatus, type RipStatus, type DirCountry, type DirSection, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type SmartField, type SmartOp, type SmartRule, type SmartRules, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type ArtistInfo, type AudioDevice, type AuthStatus, type BrowseEntry, type CamillaSettings, type CamillaStatusResponse, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type InputDevice, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type PodcastEpisode, type PodcastFeed, type PodcastShow, type RadioEntry, type RadioList, type RecordStatus, type RipStatus, type DirCountry, type DirSection, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type SmartField, type SmartOp, type SmartRule, type SmartRules, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -1093,13 +1093,27 @@ function Library({ playTrack, playAll, playUri, openSource, say, refresh, search
 
 function ArtistView({ id, name, playAll, playTrack, favs, onToggleFav, pins, onTogglePin, onBack, onOpenAlbum }: { id: string; name: string; playAll: (t: Track[]) => void; playTrack: (t: Track) => void; onBack: () => void; onOpenAlbum: (a: { id: string; title: string; artist: string }) => void } & LibProps) {
   const [detail, setDetail] = useState<ArtistDetail | null>(null);
-  useEffect(() => { api.artist(id).then(setDetail).catch(() => {}); }, [id]);
+  const [info, setInfo] = useState<ArtistInfo | null>(null);
+  useEffect(() => {
+    api.artist(id).then(setDetail).catch(() => {});
+    api.artistInfo(id).then(setInfo).catch(() => {});
+  }, [id]);
   const tracks = detail?.tracks ?? [];
   const albums = detail?.albums ?? [];
   const genres = detail?.genres ?? [];
   const years = detail?.year_min != null && detail?.year_max != null
     ? (detail.year_min === detail.year_max ? `${detail.year_min}` : `${detail.year_min}–${detail.year_max}`)
     : null;
+  // métadonnées riches MusicBrainz/Wikipedia (#102)
+  const mb = info?.mb ?? null;
+  const life = mb && (mb.begin || mb.end) ? [mb.begin, mb.end].filter(Boolean).join("–") : null;
+  const similar = info?.similar ?? [];
+  const images = info?.images ?? [];
+  const normS = (s: string | null | undefined) => (s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  const disc = (info?.discography ?? []).map((d) => ({
+    ...d,
+    local: albums.find((a) => normS(a.title) === normS(d.title)) ?? null,
+  }));
   return (
     <div>
       <div className="toolbar">
@@ -1118,12 +1132,46 @@ function ArtistView({ id, name, playAll, playTrack, favs, onToggleFav, pins, onT
             {years ? ` · ${years}` : ""}
             {detail && detail.duration_secs > 0 ? ` · ${fmtTime(detail.duration_secs)}` : ""}
           </div>
+          {mb && (
+            <div className="s">
+              {[mb.area || mb.country, life, mb.type].filter(Boolean).join(" · ")}
+              {mb.rating != null && ` · ★ ${mb.rating.toFixed(1)}/5${mb.rating_count ? ` (${mb.rating_count})` : ""}`}
+              {mb.url && <> · <a href={mb.url} target="_blank" rel="noreferrer">{t("MusicBrainz")}</a></>}
+            </div>
+          )}
           {genres.length > 0 && (
             <div className="chips">{genres.map((g) => <span key={g} className="chip">{g}</span>)}</div>
           )}
+          {mb && mb.tags.length > 0 && (
+            <div className="chips">{mb.tags.slice(0, 8).map((tg) => <span key={tg.name} className="chip">{tg.name}</span>)}</div>
+          )}
         </div>
       </div>
-      {detail?.bio && <p className="bio">{detail.bio}</p>}
+      {(info?.bio ?? detail?.bio) && (
+        <div className="bio-row">
+          {info?.bio_image && <img className="bio-img" src={info.bio_image} alt="" loading="lazy" />}
+          <p className="bio">{info?.bio ?? detail?.bio}</p>
+        </div>
+      )}
+      {images.length > 0 && (
+        <>
+          <h2>{t("Galerie")}</h2>
+          <div className="gallery">{images.map((src, i) => <img key={i} src={src} alt="" loading="lazy" />)}</div>
+        </>
+      )}
+      {similar.length > 0 && (
+        <>
+          <h2>{t("Artistes similaires")}</h2>
+          <div className="chips">
+            {similar.map((a) => (
+              <button key={a.mbid ?? a.name ?? ""} className="chip chip-btn" title={t("Lancer une radio basée sur {artist}", { artist: a.name ?? "" })}
+                onClick={() => a.name && window.dispatchEvent(new CustomEvent("auris:artist-radio", { detail: a.name }))}>
+                {a.name}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       {albums.length > 0 && (
         <>
           <h2>{t("Albums")}</h2>
@@ -1136,6 +1184,23 @@ function ArtistView({ id, name, playAll, playTrack, favs, onToggleFav, pins, onT
                 </div>
                 <div className="t">{a.title}</div>
                 <div className="s">{a.artist}{a.year ? ` · ${a.year}` : ""} · {cl(a.track_count, "titre", "titres")}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {disc.length > 0 && (
+        <>
+          <h2>{t("Discographie MusicBrainz")}</h2>
+          <div className="grid">
+            {disc.map((d) => (
+              <div key={d.mbid} className="card" style={{ cursor: d.local ? "pointer" : "default" }}
+                onClick={() => d.local && onOpenAlbum({ id: d.local.id, title: d.local.title, artist: d.local.artist })}>
+                <div className="cover">
+                  <SmartImg local={d.local?.cover_track_id ? api.coverUrl(d.local.cover_track_id) : null} fallback={d.cover} icon="note" />
+                </div>
+                <div className="t">{d.title}{d.local && ` · ${t("dans la bibliothèque")}`}</div>
+                <div className="s">{[d.date ? d.date.slice(0, 4) : null, d.primary_type].filter(Boolean).join(" · ")}</div>
               </div>
             ))}
           </div>

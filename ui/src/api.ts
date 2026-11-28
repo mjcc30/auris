@@ -62,6 +62,55 @@ export interface ArtistDetail {
   cover_url: string | null;
 }
 
+/** Fiche MusicBrainz d'un artiste (page artiste enrichie #102). */
+export interface ArtistMbInfo {
+  mbid: string | null;
+  name: string | null;
+  sort_name: string | null;
+  type: string | null;
+  country: string | null;
+  area: string | null;
+  begin: string | null;
+  end: string | null;
+  disambiguation: string | null;
+  tags: { name: string; count: number }[];
+  genres: string[];
+  rating: number | null;
+  rating_count: number | null;
+  urls: { type: string; url: string }[];
+  wikipedia: string | null;
+  url: string | null;
+}
+
+export interface ArtistDiscEntry {
+  mbid: string;
+  title: string | null;
+  date: string | null;
+  primary_type: string | null;
+  secondary_types: string[];
+  cover: string | null;
+}
+
+export interface SimilarArtist {
+  name: string | null;
+  mbid: string | null;
+  score: number | null;
+}
+
+/** GET /api/library/artist_info/{id} — métadonnées riches d'un artiste (#102). */
+export interface ArtistInfo {
+  artist_id: string;
+  name: string;
+  mbid: string | null;
+  mb: ArtistMbInfo | null;
+  similar: SimilarArtist[];
+  discography: ArtistDiscEntry[];
+  bio: string | null;
+  bio_image: string | null;
+  images: string[];
+  source: string;
+}
+
 export interface GenreFacet {
   name: string;
   track_count: number;
@@ -1135,7 +1184,10 @@ export const api = {
   coverUrl: (trackId: string) => `/api/library/cover/${encodeURIComponent(trackId)}`,
   albumImageUrl: (albumId: string) => `/api/library/album_image/${encodeURIComponent(albumId)}`,
   artistImageUrl: (artistId: string) => `/api/library/artist_image/${encodeURIComponent(artistId)}`,
+  artistImageByNameUrl: (name: string) => `/api/artist_image/name/${encodeURIComponent(name)}`,
+  artistInfo: (artistId: string) => req<ArtistInfo>(`/api/library/artist_info/${encodeURIComponent(artistId)}`),
   lyrics: (trackId: string) => req<LyricsResponse>(`/api/lyrics/${encodeURIComponent(trackId)}`),
+  trackLyrics: (trackId: string) => req<LyricsResponse>(`/api/track_lyrics/${encodeURIComponent(trackId)}`),
   infos: (trackId: string) => req<InfosResponse>(`/api/infos/${encodeURIComponent(trackId)}`),
 };
 

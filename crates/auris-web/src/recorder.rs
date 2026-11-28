@@ -623,7 +623,13 @@ mod tests {
         server.join().unwrap();
         // 3 segments : le partiel initial sans titre (REC …), puis un fichier
         // par StreamTitle (« A - B », « C - D »)
-        assert_eq!(st.files.len(), 3, "fichiers: {:?} err: {:?}", st.files, st.error);
+        assert_eq!(
+            st.files.len(),
+            3,
+            "fichiers: {:?} err: {:?}",
+            st.files,
+            st.error
+        );
         assert!(
             st.files.iter().any(|f| f.starts_with("REC ")),
             "{:?}",
