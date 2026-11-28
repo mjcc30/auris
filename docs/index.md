@@ -8,6 +8,13 @@ en bit-perfect, jusqu'au **DSD256**.
 
 ![palette](assets/logo.svg)
 
+![Interface web Auris — accueil](assets/screenshot-home.png)
+
+Sur mobile, la même interface, responsive : ![mobile](assets/screenshot-mobile.png)
+
+> Envie de quitter Volumio, moOde, Navidrome ou Roon ? Voir le
+> [comparatif « alternatives à Volumio »](alternatives.md).
+
 ## Pourquoi Auris ?
 
 - **Un seul binaire**, clé en main : Raspberry Pi, Linux, macOS, Windows.

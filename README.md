@@ -8,6 +8,12 @@ Lecteur audiophile cross-plateforme en **un seul binaire Rust** — l'esprit Vol
 - **Mise à jour automatique** depuis les releases GitHub
 - Clé en main : **Raspberry Pi**, Linux, macOS, Windows — un seul fichier à lancer
 
+![Interface web Auris — accueil](docs/assets/screenshot-home.png)
+
+Sur mobile, la même interface, responsive :
+
+![Interface web Auris — mobile](docs/assets/screenshot-mobile.png)
+
 [![CI](https://github.com/mjcc30/auris/actions/workflows/ci.yml/badge.svg)](https://github.com/mjcc30/auris/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Release](https://img.shields.io/github/v/release/mjcc30/auris)](https://github.com/mjcc30/auris/releases)
@@ -37,6 +43,22 @@ cargo run -- serve --port 3000
 ```
 
 Windows : téléchargez `auris-x86_64-pc-windows-msvc.zip` dans les [releases](https://github.com/mjcc30/auris/releases), dézippez, lancez `auris.exe serve`.
+
+## Auris vs Volumio, moOde, Navidrome, Roon
+
+| Critère | **Auris** | Volumio | moOde | Navidrome | Roon |
+|---|---|---|---|---|---|
+| Licence / prix | **AGPL v3, gratuit** | MIT, freemium | GPL v3, gratuit | GPL v3, gratuit | ~15 €/mois |
+| Forme | **Un seul binaire Rust** (~15 Mo) | Image OS ~1 Go | Image OS ~1 Go | Binaire/Docker | Serveur + abonnement |
+| NAS (SMB, UPnP, HTTP) | ✅ | ✅ | ✅ | ✅ | ⚠️ |
+| DAC bit-perfect | ✅ PCM DXD, **DSD256 (DoP)** | ✅ | ✅ | ⚠️ | ✅ |
+| Interface web mobile | ✅ style Spotify | ✅ | ✅ | ✅ | ✅ |
+| Apps mobiles natives | ✅ via **API OpenSubsonic** | ⚠️ payant | ⚠️ | ✅ | ✅ |
+| Mise à jour auto | ✅ | ⚠️ | ⚠️ | ✅ | ✅ |
+| Enregistrement radios web | ✅ (découpe auto) | ❌ | ❌ | ❌ | ❌ |
+
+Comparatif détaillé et FAQ (« alternative à Volumio », « serveur musique auto-hébergé ») :
+[**docs/alternatives.md**](docs/alternatives.md) (publié aussi sur le site GitHub Pages).
 
 ## Plateformes
 
@@ -68,6 +90,7 @@ Un seul binaire = zéro dépendance externe à installer (hors bibliothèque sys
 ## Documentation
 
 - [Spécifications techniques](docs/SPECIFICATIONS.md)
+- [Alternatives à Volumio, moOde, Navidrome, Roon — comparatif FR](docs/alternatives.md)
 - [Fonctionnalités (MoSCoW)](docs/FEATURES.md) et [user stories](docs/USER_STORIES.md)
 - [Charte graphique](docs/CHARTE_GRAPHIQUE.md)
 - [API REST v1 + WebSocket](docs/API.md)

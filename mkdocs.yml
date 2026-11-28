@@ -26,6 +26,7 @@ nav:
       - Spécifications: SPECIFICATIONS.md
       - Parité Volumio 4: SPEC_VOLUMIO.md
       - Fonctionnalités: FEATURES.md
+      - Alternatives à Volumio, moOde, Navidrome, Roon: alternatives.md
       - Sources & import/export: SOURCES.md
       - User stories: USER_STORIES.md
       - Roadmap: ROADMAP.md
