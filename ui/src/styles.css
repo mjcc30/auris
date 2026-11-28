@@ -909,3 +909,4 @@ tr.link:hover { background: var(--hover, rgba(255,255,255,0.06)); }
 .chip-btn { cursor: pointer; font: inherit; }
 .chip-btn:hover { border-color: var(--accent, #6ea8fe); color: var(--accent, #6ea8fe); }
 .btn.active { border-color: var(--accent); color: var(--accent); }
+.offline-banner { position: fixed; left: 50%; transform: translateX(-50%); bottom: 84px; z-index: 60; background: var(--surface-high); color: var(--text); border: 1px solid var(--accent); border-radius: 999px; padding: 6px 14px; font-size: 12px; }

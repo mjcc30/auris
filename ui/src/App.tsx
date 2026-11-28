@@ -270,6 +270,16 @@ export default function App() {
     else browserAudio.current.stop();
   }, [state?.output_mode]);
 
+  // Indicateur hors-ligne (PWA #107) : le service worker sert le dernier état connu.
+  const [online, setOnline] = useState(() => navigator.onLine);
+  useEffect(() => {
+    const up = () => setOnline(true);
+    const down = () => setOnline(false);
+    window.addEventListener("online", up);
+    window.addEventListener("offline", down);
+    return () => { window.removeEventListener("online", up); window.removeEventListener("offline", down); };
+  }, []);
+
   // Minuterie de sommeil / réveil : sondage doux (5 s) pour le badge du lecteur.
   useEffect(() => {
     let dead = false;
@@ -541,6 +551,7 @@ export default function App() {
       <PlayerBar state={state} devices={devices} act={act} say={say} alarms={alarms} refreshDevices={refreshDevices} npOpen={npOpen} onToggleNp={() => setNpOpen((v) => !v)} onToggleDisplay={() => setView("display")} onOpenSignalPath={() => setSpOpen(true)} />
       {spOpen && <SignalPathModal onClose={() => setSpOpen(false)} onOpenSettings={() => { setSpOpen(false); setView("settings"); }} />}
       {toast && <div className="toast">{toast}</div>}
+      {!online && <div className="offline-banner">{t("Hors-ligne — affichage du dernier état connu (PWA)")}</div>}
       {trackMenu && (
         <TrackMenu menu={trackMenu} sub={trackMenuSub} pls={trackMenuPls}
           onClose={() => setTrackMenu(null)} onSub={setTrackMenuSub} act={act} say={say} />

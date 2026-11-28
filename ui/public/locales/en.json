@@ -332,5 +332,6 @@
   "Mix auto": "Auto mix",
   "Mix auto : quand la file se termine, un Instant Mix de la piste en cours la complète automatiquement": "Auto mix: when the queue runs out, an Instant Mix of the current track fills it automatically",
   "Mix auto activé : la file se complète toute seule": "Auto mix on: the queue fills itself",
-  "Mix auto désactivé": "Auto mix off"
+  "Mix auto désactivé": "Auto mix off",
+  "Hors-ligne — affichage du dernier état connu (PWA)": "Offline — showing last known state (PWA)"
 }
