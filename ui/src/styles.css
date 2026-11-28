@@ -908,3 +908,4 @@ tr.link:hover { background: var(--hover, rgba(255,255,255,0.06)); }
 .gallery img { height: 128px; width: auto; border-radius: 10px; flex: 0 0 auto; }
 .chip-btn { cursor: pointer; font: inherit; }
 .chip-btn:hover { border-color: var(--accent, #6ea8fe); color: var(--accent, #6ea8fe); }
+.btn.active { border-color: var(--accent); color: var(--accent); }

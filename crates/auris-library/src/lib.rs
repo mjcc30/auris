@@ -842,6 +842,9 @@ impl Library {
         id: &str,
         name: Option<&str>,
         rules: Option<Option<SmartRules>>,
+        // Réordonnancement (#106) : remplace `track_ids` (mêmes pistes, nouvel
+        // ordre). Ignoré pour une smart playlist (l'ordre vient des règles).
+        track_ids: Option<Vec<String>>,
     ) -> Result<Option<Playlist>> {
         let raw = self.tree(TREE_PLAYLISTS).get(id.as_bytes()).ok().flatten();
         let mut p: Playlist = match raw.and_then(|v| dec(&v).ok()) {
@@ -857,6 +860,11 @@ impl Library {
         }
         if let Some(r) = rules {
             p.rules = r;
+        }
+        if let Some(ids) = track_ids {
+            if p.rules.is_none() {
+                p.track_ids = ids;
+            }
         }
         self.tree(TREE_PLAYLISTS)
             .insert(p.id.as_bytes(), enc(&p)?)

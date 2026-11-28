@@ -353,6 +353,56 @@ export default function App() {
     return () => window.removeEventListener("auris:mix", h);
   }, [act, say]);
 
+  // Menu contextuel d'un morceau (#106) — émis par les lignes de TrackTable.
+  const [trackMenu, setTrackMenu] = useState<{ track: Track; x: number; y: number } | null>(null);
+  const [trackMenuSub, setTrackMenuSub] = useState<null | "playlists">(null);
+  const [trackMenuPls, setTrackMenuPls] = useState<Playlist[]>([]);
+  useEffect(() => {
+    const h = (e: Event) => {
+      const m = (e as CustomEvent<{ track: Track; x: number; y: number }>).detail;
+      if (!m?.track) return;
+      setTrackMenuSub(null);
+      setTrackMenu(m);
+    };
+    window.addEventListener("auris:track-menu", h);
+    return () => window.removeEventListener("auris:track-menu", h);
+  }, []);
+  useEffect(() => {
+    if (!trackMenu) return;
+    api.playlists().then(setTrackMenuPls).catch(() => {});
+  }, [trackMenu]);
+
+  // « Mix auto » (#106) : quand il ne reste plus qu'un titre après la piste en
+  // cours, on complète la file avec un Instant Mix de la piste en cours.
+  const [autoMix, setAutoMix] = useState(() => {
+    try { return localStorage.getItem("auris:automix") === "1"; } catch { return false; }
+  });
+  const lastAutoMix = useRef<string | null>(null);
+  const toggleAutoMix = () => setAutoMix((v) => {
+    const nv = !v;
+    try { localStorage.setItem("auris:automix", nv ? "1" : "0"); } catch { /* stockage indisponible */ }
+    if (!nv) lastAutoMix.current = null;
+    say(nv ? t("Mix auto activé : la file se complète toute seule") : t("Mix auto désactivé"));
+    return nv;
+  });
+  useEffect(() => {
+    const cur = state?.current;
+    if (!autoMix || !cur || state?.is_live) return;
+    const q = state?.queue ?? [];
+    const idx = state?.queue_index ?? 0;
+    if (q.length - (idx + 1) > 1) { lastAutoMix.current = null; return; }
+    if (lastAutoMix.current === cur.id) return;
+    lastAutoMix.current = cur.id;
+    void (async () => {
+      try {
+        const r = await api.mix("track", cur.id, 25);
+        const uris = r.tracks.map((x) => x.uri).filter((u) => u && u !== cur.uri);
+        if (uris.length) await api.queueAppend(uris);
+      } catch { /* mix auto silencieux */ }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoMix, state?.current?.id, state?.queue_index, state?.queue.length, state?.is_live]);
+
   const updateSettings = async (patch: (s: Settings) => Settings, okMsg?: string) => {
     if (!settings) return;
     const next = patch(settings);
@@ -465,7 +515,7 @@ export default function App() {
           )}
           {view === "browse" && <Browse sources={sources} src={browseSrc} upnpDevs={upnpDevs} playUri={playUri} act={act} say={say} />}
           {view === "radios" && <Radios state={state} act={act} say={say} pins={pins} onTogglePin={togglePin} />}
-          {view === "queue" && <Queue state={state} act={act} say={say} playAll={playAll} />}
+          {view === "queue" && <Queue state={state} act={act} say={say} playAll={playAll} autoMix={autoMix} onToggleAutoMix={toggleAutoMix} />}
           {view === "playlists" && <Playlists act={act} say={say} playAll={playAll} playTrack={playTrack} pins={pins} onTogglePin={togglePin} />}
           {view === "sources" && <Sources sources={sources} refresh={refresh} say={say} />}
           {view === "multiroom" && <MultiroomView state={state} act={act} say={say} />}
@@ -491,6 +541,10 @@ export default function App() {
       <PlayerBar state={state} devices={devices} act={act} say={say} alarms={alarms} refreshDevices={refreshDevices} npOpen={npOpen} onToggleNp={() => setNpOpen((v) => !v)} onToggleDisplay={() => setView("display")} onOpenSignalPath={() => setSpOpen(true)} />
       {spOpen && <SignalPathModal onClose={() => setSpOpen(false)} onOpenSettings={() => { setSpOpen(false); setView("settings"); }} />}
       {toast && <div className="toast">{toast}</div>}
+      {trackMenu && (
+        <TrackMenu menu={trackMenu} sub={trackMenuSub} pls={trackMenuPls}
+          onClose={() => setTrackMenu(null)} onSub={setTrackMenuSub} act={act} say={say} />
+      )}
     </div>
   );
 }
@@ -1362,7 +1416,7 @@ function fmtFormat(f: NonNullable<Track["format"]>): string {
   return [f.kind, sr, bits, ch].filter(Boolean).join(" · ");
 }
 
-function TrackTable({ tracks, current, playTrack, playAll, albumCover, favs, onToggleFav, loading }: { tracks: Track[]; current?: string | null; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; albumCover?: string | null; favs?: Favorites; onToggleFav?: (kind: FavKind, id: string) => void; loading?: boolean }) {
+function TrackTable({ tracks, current, playTrack, playAll, albumCover, favs, onToggleFav, loading, onMove }: { tracks: Track[]; current?: string | null; playTrack: (t: Track) => void; playAll: (t: Track[]) => void; albumCover?: string | null; favs?: Favorites; onToggleFav?: (kind: FavKind, id: string) => void; loading?: boolean; onMove?: (from: number, to: number) => void }) {
   if (loading) return <div className="empty">{t("Chargement…")}</div>;
   if (tracks.length === 0) return <div className="empty">Aucun titre.</div>;
   return (
@@ -1376,6 +1430,18 @@ function TrackTable({ tracks, current, playTrack, playAll, albumCover, favs, onT
             <td className="hide-sm"><span className="badge">{tr.format ? fmtFormat(tr.format) : ""}</span></td>
             <td className="num-time">{tr.duration_secs != null ? fmtTime(tr.duration_secs) : "—"}</td>
             <td className="num">
+              {onMove && (
+                <>
+                  <button className="icon-btn" title={t("Monter")} disabled={i === 0}
+                    onClick={(e) => { e.stopPropagation(); onMove(i, i - 1); }}>
+                    <span style={{ display: "inline-block", transform: "scaleY(-1)" }}><Icon name="chevron" size={16} /></span>
+                  </button>
+                  <button className="icon-btn" title={t("Descendre")} disabled={i === tracks.length - 1}
+                    onClick={(e) => { e.stopPropagation(); onMove(i, i + 1); }}>
+                    <Icon name="chevron" size={16} />
+                  </button>
+                </>
+              )}
               <button className="icon-btn" title={t("Instant Mix depuis ce morceau")}
                 onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent("auris:mix", { detail: { kind: "track", id: tr.id } })); }}>
                 <Icon name="shuffle" size={16} />
@@ -1387,11 +1453,68 @@ function TrackTable({ tracks, current, playTrack, playAll, albumCover, favs, onT
                 </button>
               )}
               {favs && onToggleFav && <FavHeart on={favs.tracks.includes(tr.id)} onToggle={() => onToggleFav("track", tr.id)} />}
+              <button className="icon-btn" title={t("Options du morceau")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  window.dispatchEvent(new CustomEvent("auris:track-menu", { detail: { track: tr, x: r.left, y: r.bottom } }));
+                }}>
+                <Icon name="dots" size={16} />
+              </button>
             </td>
           </tr>
         ))}
       </tbody>
     </table>
+  );
+}
+
+// ---------- Menu contextuel d'un morceau (#106) ----------
+
+function TrackMenu({ menu, sub, pls, onClose, onSub, act, say }: { menu: { track: Track; x: number; y: number }; sub: null | "playlists"; pls: Playlist[]; onClose: () => void; onSub: (s: null | "playlists") => void; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void }) {
+  const tr = menu.track;
+  return (
+    <>
+      <div className="menu-overlay" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
+      <div className="ctx-menu" style={{ left: menu.x, top: menu.y }}>
+        <div className="ctx-title">{tr.title}</div>
+        {sub === "playlists" ? (
+          <>
+            <div className="ctx-item" onClick={() => onSub(null)}><Icon name="back" size={16} /> {t("Retour")}</div>
+            {pls.map((p) => (
+              <div key={p.id} className="ctx-item" onClick={() => {
+                act(async () => {
+                  const r = await api.playlistAdd(p.id, tr.uri);
+                  say(t("« {title} » ajouté à « {name} » ({count} piste)", { title: tr.title, name: p.name, count: r.added }));
+                });
+                onClose();
+              }}>
+                <Icon name="playlist" size={16} /> {p.name}
+              </div>
+            ))}
+            <div className="ctx-item" onClick={() => {
+              const name = window.prompt(t("Nom de la nouvelle liste :"), tr.title);
+              if (!name || !name.trim()) return;
+              act(async () => {
+                await api.addPlaylist(name.trim(), undefined, tr.uri);
+                say(t("Liste « {name} » créée avec ce morceau", { name: name.trim() }));
+              });
+              onClose();
+            }}>
+              <Icon name="plus" size={16} /> {t("Nouvelle liste avec ce morceau…")}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="ctx-item" onClick={() => { act(() => api.playTrack(tr.id)); onClose(); }}><Icon name="play" size={16} filled /> {t("Lire maintenant")}</div>
+            <div className="ctx-item" onClick={() => { act(() => api.queueAddNext(tr.uri), t("« {title} » lira juste après la piste en cours", { title: tr.title })); onClose(); }}><Icon name="next" size={16} /> {t("Lire ensuite")}</div>
+            <div className="ctx-item" onClick={() => { act(() => api.queueAdd(tr.uri), t("« {title} » ajouté à la file d'attente", { title: tr.title })); onClose(); }}><Icon name="plus" size={16} /> {t("Ajouter à la file d'attente")}</div>
+            <div className="ctx-item" onClick={() => { window.dispatchEvent(new CustomEvent("auris:mix", { detail: { kind: "track", id: tr.id } })); onClose(); }}><Icon name="shuffle" size={16} /> {t("Instant Mix depuis ce morceau")}</div>
+            <div className="ctx-item" onClick={() => onSub("playlists")}><Icon name="playlist" size={16} /> {t("Ajouter à une playlist…")}</div>
+          </>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -2304,7 +2427,7 @@ function Radios({ state, act, say, pins, onTogglePin }: { state: PlayerState | n
 
 // ---------- File d'attente ----------
 
-function Queue({ state, act, say, playAll }: { state: PlayerState | null; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; playAll: (t: Track[]) => void }) {
+function Queue({ state, act, say, playAll, autoMix, onToggleAutoMix }: { state: PlayerState | null; act: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; say: (m: string) => void; playAll: (t: Track[]) => void; autoMix: boolean; onToggleAutoMix: () => void }) {
   const queue = state?.queue ?? [];
   const idx = state?.queue_index ?? null;
   const [saving, setSaving] = useState(false);
@@ -2322,6 +2445,9 @@ function Queue({ state, act, say, playAll }: { state: PlayerState | null; act: (
     <div>
       <div className="toolbar">
         <div className="spacer" />
+        <button className={`btn ghost sm${autoMix ? " active" : ""}`} title={t("Mix auto : quand la file se termine, un Instant Mix de la piste en cours la complète automatiquement")} onClick={onToggleAutoMix}>
+          <Icon name="shuffle" size={16} /> {t("Mix auto")}
+        </button>
         <button className="btn ghost sm" disabled={saving || queue.length === 0} onClick={save}><Icon name="download" size={16} /> Enregistrer</button>
         <button className="btn ghost sm" disabled={queue.length === 0} onClick={() => act(() => api.clearQueue(), "File vidée")}><Icon name="trash" size={16} /> Vider</button>
       </div>
@@ -2407,7 +2533,16 @@ function Playlists({ act, say, playAll, playTrack, pins, onTogglePin }: { act: (
         </div>
         <h1>{detail.playlist.name} {detail.playlist.rules && <span className="badge"><Icon name="sparkles" size={11} /> SMART</span>}</h1>
         {detail.playlist.rules && <p className="dim">{smartRulesSummary(detail.playlist.rules)}</p>}
-        <TrackTable tracks={detail.tracks} playTrack={playTrack} playAll={playAll} />
+        <TrackTable tracks={detail.tracks} playTrack={playTrack} playAll={playAll}
+          onMove={detail.playlist.rules ? undefined : (from, to) => {
+            const arr = [...detail.tracks];
+            const [m] = arr.splice(from, 1);
+            arr.splice(to, 0, m);
+            act(async () => {
+              await api.updatePlaylist(detail.playlist.id, { track_ids: arr.map((x) => x.id) });
+              setDetail(await api.playlist(detail.playlist.id));
+            });
+          }} />
         {modal && <PlaylistModal mode={modal.mode} playlist={modal.mode === "edit" ? modal.playlist : null} onClose={() => setModal(null)} onSaved={() => { load(); api.playlist(detail.playlist.id).then(setDetail).catch(() => {}); }} say={say} />}
       </div>
     );

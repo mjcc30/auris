@@ -329,6 +329,8 @@ struct PlaylistPatchBody {
     name: Option<String>,
     /// `Some(Some(r))` = règles, `Some(None)` = repasse en statique, absent = inchangé.
     rules: Option<Option<SmartRules>>,
+    /// Réordonnancement (#106) : nouvel ordre des pistes (liste statique seulement).
+    track_ids: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -424,6 +426,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/queue", get(get_queue).post(post_queue))
         .route("/api/queue/add", post(post_queue_add))
         .route("/api/queue/add-next", post(post_queue_add_next))
+        .route("/api/queue/append", post(post_queue_append))
         .route(
             "/api/queue/clear",
             post(|State(s): State<AppState>| async move {
@@ -1007,6 +1010,36 @@ async fn post_queue_add_next(
     s.engine.enqueue_next(vec![t]);
     Ok(Json(s.engine.state()))
 }
+
+#[derive(Deserialize)]
+struct QueueAppendBody {
+    uris: Vec<String>,
+}
+
+/// Ajoute plusieurs URIs en fin de file en un appel (#106 « à suivre » auto :
+/// le mix auto alimente la file sans N requêtes). Chaque URI est résolu comme
+/// `POST /api/queue/add` (dossier -> récursif, fichier -> piste, upsert
+/// bibliothèque si hors scan).
+async fn post_queue_append(
+    State(s): State<AppState>,
+    Json(b): Json<QueueAppendBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let mut added = 0usize;
+    for uri in &b.uris {
+        if uri.trim().is_empty() {
+            continue;
+        }
+        for t in resolve_uri_tracks(&s, uri).await? {
+            s.engine.enqueue(t);
+            added += 1;
+        }
+    }
+    Ok(Json(serde_json::json!({
+        "added": added,
+        "state": s.engine.state(),
+    })))
+}
+
 async fn delete_queue_item(
     State(s): State<AppState>,
     Path(i): Path<usize>,
@@ -2420,7 +2453,7 @@ async fn patch_playlist(
 ) -> ApiResult<Json<Playlist>> {
     let p = s
         .library
-        .update_playlist(&id, b.name.as_deref(), b.rules)?
+        .update_playlist(&id, b.name.as_deref(), b.rules, b.track_ids)?
         .ok_or_else(|| AurisError::other(format!("playlist introuvable: {id}")))?;
     Ok(Json(p))
 }

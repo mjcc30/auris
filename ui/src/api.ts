@@ -975,6 +975,7 @@ export const api = {
   clearQueue: () => req<unknown>("/api/queue/clear", post({})),
   queueAdd: (uri: string) => req<PlayerState>("/api/queue/add", post({ uri })),
   queueAddNext: (uri: string) => req<PlayerState>("/api/queue/add-next", post({ uri })),
+  queueAppend: (uris: string[]) => req<{ added: number; state: PlayerState }>("/api/queue/append", post({ uris })),
   removeQueueItem: (index: number) => req<PlayerState>(`/api/queue/${index}`, del()),
   tracks: (genre?: string, decade?: number) => {
     const p = new URLSearchParams();
@@ -1085,7 +1086,7 @@ export const api = {
   playlists: () => cached<Playlist[]>("playlists", 15000, () => req<Playlist[]>("/api/playlists")),
   addPlaylist: (name: string, trackIds?: string[], uri?: string, rules?: SmartRules) =>
     req<Playlist>("/api/playlists", post({ name, track_ids: trackIds, uri, rules: rules ?? null })).then((r) => { bustCache("playlists"); return r; }),
-  updatePlaylist: (id: string, patch: { name?: string; rules?: SmartRules | null }) =>
+  updatePlaylist: (id: string, patch: { name?: string; rules?: SmartRules | null; track_ids?: string[] }) =>
     req<Playlist>(`/api/playlists/${encodeURIComponent(id)}`, patchReq(patch)).then((r) => { bustCache("playlists"); return r; }),
   playlist: (id: string) => req<PlaylistDetail>(`/api/playlists/${encodeURIComponent(id)}`),
   deletePlaylist: (id: string) =>

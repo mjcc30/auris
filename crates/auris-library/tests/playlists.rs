@@ -142,3 +142,70 @@ async fn add_to_playlist_ajoute_sans_doublon() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[tokio::test]
+async fn update_playlist_reordonne_les_pistes() {
+    let root = unique_tmp("plreorder");
+    let music = root.join("music");
+    std::fs::create_dir_all(&music).unwrap();
+    write_test_wav(&music.join("a.wav"), 1);
+    write_test_wav(&music.join("b.wav"), 1);
+    write_test_wav(&music.join("c.wav"), 1);
+
+    let src = Source::new_local("test", music.to_str().unwrap());
+    let mgr = Arc::new(SourcesManager::new(vec![src.clone()]).unwrap());
+    let lib = Library::open(&root.join("db"), mgr).unwrap();
+    lib.scan_source(&src.id).unwrap();
+    for _ in 0..200 {
+        if !lib.scan_status().running {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let mut ids: Vec<String> = lib.tracks().iter().map(|t| t.id.clone()).collect();
+    ids.sort();
+    assert_eq!(ids.len(), 3);
+
+    let p = lib.create_playlist("Ordre", ids.clone()).unwrap();
+
+    // réordonne : c, a, b
+    let rev = vec![ids[2].clone(), ids[0].clone(), ids[1].clone()];
+    let p2 = lib
+        .update_playlist(&p.id, None, None, Some(rev.clone()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(p2.track_ids, rev);
+
+    // persistance + résolution dans le nouvel ordre
+    let (p3, t3) = lib.playlist(&p.id).unwrap();
+    assert_eq!(p3.track_ids, rev);
+    assert_eq!(t3.iter().map(|t| t.id.clone()).collect::<Vec<_>>(), rev);
+
+    // renommage simultané
+    let p4 = lib
+        .update_playlist(&p.id, Some("Nouveau nom"), None, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(p4.name, "Nouveau nom");
+    assert_eq!(p4.track_ids, rev);
+
+    // smart playlist : track_ids ignoré, l'ordre vient des règles
+    let rules = auris_core::SmartRules {
+        rules: vec![auris_core::SmartRule {
+            field: auris_core::SmartField::Title,
+            op: auris_core::SmartOp::Contains,
+            value: "a".into(),
+        }],
+        match_all: true,
+        sort: None,
+        limit: None,
+    };
+    let ps = lib.create_smart_playlist("Smart", rules).unwrap();
+    let ps2 = lib
+        .update_playlist(&ps.id, None, None, Some(vec!["x".into()]))
+        .unwrap()
+        .unwrap();
+    assert!(ps2.track_ids.is_empty());
+
+    let _ = std::fs::remove_dir_all(&root);
+}
