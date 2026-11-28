@@ -304,5 +304,10 @@
   "épinglée": "pinned",
   "—": "—",
   "Menu": "Menu",
-  "Fermer le menu": "Close menu"
+  "Fermer le menu": "Close menu",
+  "Enregistrer la radio en cours (découpe auto par morceau)": "Record the current radio (auto-split per track)",
+  "Arrêter l'enregistrement": "Stop recording",
+  "Enregistrement démarré": "Recording started",
+  "Enregistrement arrêté": "Recording stopped",
+  "fichier(s)": "file(s)"
 }

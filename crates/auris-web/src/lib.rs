@@ -46,6 +46,7 @@ mod packs;
 mod plugins;
 mod podcasts;
 mod radios;
+pub mod recorder;
 pub mod ripcd;
 pub mod signal_path;
 pub mod socketio;
@@ -120,6 +121,8 @@ pub struct AppState {
     pub socketio: Arc<socketio::SocketIoHub>,
     /// Rip CD via whipper (#27).
     pub ripcd: Arc<ripcd::RipCdHub>,
+    /// Enregistrement des webradios « comme à l'ancienne » (#101).
+    pub recorder: Arc<recorder::RecorderHub>,
     /// Spotify Connect via librespot (#24).
     pub spotify: Arc<spotify::SpotHub>,
     /// Sessions de login (id -> expiration) pour le token d'accès optionnel (#97).
@@ -162,6 +165,7 @@ impl AppState {
             plugins: Arc::new(auris_plugins::PluginHost::new(&data_dir)),
             socketio: socketio::SocketIoHub::new(),
             ripcd: ripcd::RipCdHub::new(),
+            recorder: recorder::RecorderHub::new(),
             spotify: spotify::SpotHub::new(),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             data_dir,
@@ -506,6 +510,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/spotify/event", post(spotify::post_event))
         .route("/api/radios/{id}", delete(radios::delete_radio))
         .route("/api/radios/{id}/play", post(radios::post_radio_play))
+        // enregistrement radio « comme à l'ancienne » (#101)
+        .route("/api/radio/record/status", get(recorder::get_status))
+        .route("/api/radio/record/start", post(recorder::post_start))
+        .route("/api/radio/record/stop", post(recorder::post_stop))
         // packs d'interface (thèmes CSS + langues) embarqués ou communautaires
         .route("/api/packs", get(packs::get_packs))
         .route(

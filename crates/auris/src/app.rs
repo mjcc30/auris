@@ -243,6 +243,7 @@ pub async fn run_serve(args: ServeArgs) -> Result<()> {
         plugins: Arc::new(auris_plugins::PluginHost::new(&data_dir)),
         socketio: auris_web::socketio::SocketIoHub::new(),
         ripcd,
+        recorder: auris_web::recorder::RecorderHub::new(),
         spotify: auris_web::spotify::SpotHub::new(),
         sessions: Arc::new(RwLock::new(std::collections::HashMap::new())),
     };

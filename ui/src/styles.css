@@ -895,3 +895,8 @@ tr.link:hover { background: var(--hover, rgba(255,255,255,0.06)); }
   .controls .play { width: 36px; height: 36px; }
   .seek span { min-width: 30px; font-size: 10px; }
 }
+
+/* enregistrement radio facon K7 (#101) */
+.rec-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ff3b30; margin-right: 6px; animation: rec-blink 1.2s infinite; }
+.rec-active { color: #ff6b64; border-color: rgba(255, 59, 48, .5); }
+@keyframes rec-blink { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }

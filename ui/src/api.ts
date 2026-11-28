@@ -286,6 +286,19 @@ export interface ArtistRadioPlayed {
   state: PlayerState;
 }
 
+/** État de l'enregistrement radio « comme à l'ancienne » (#101). */
+export interface RecordStatus {
+  recording: boolean;
+  url: string | null;
+  started_at: number | null;
+  elapsed_secs: number;
+  current_title: string | null;
+  bytes_written: number;
+  files: string[];
+  output_dir: string | null;
+  error: string | null;
+}
+
 export interface DirStation {
   id: string;
   name: string;
@@ -988,6 +1001,10 @@ export const api = {
   radiosSelection: () => req<DirSection[]>("/api/radios/selection"),
   artistRadio: (name: string) => req<ArtistRadio>(`/api/radios/artist?name=${encodeURIComponent(name)}`),
   playArtistRadio: (name: string) => req<ArtistRadioPlayed>("/api/radios/artist-radio", post({ name })),
+  // enregistrement radio (#101)
+  recordStatus: () => req<RecordStatus>("/api/radio/record/status"),
+  recordStart: (url: string) => req<RecordStatus>("/api/radio/record/start", post({ url })),
+  recordStop: () => req<RecordStatus>("/api/radio/record/stop", post({})),
   /** Podcasts (#81) : q vide = abonnements, sinon recherche iTunes. */
   podcasts: (q = "", limit = 30) => req<PodcastShow[]>(`/api/podcasts?q=${encodeURIComponent(q)}&limit=${limit}`),
   podcastFeed: (url: string) => req<PodcastFeed>(`/api/podcasts/feed?url=${encodeURIComponent(url)}`),

@@ -73,28 +73,53 @@ impl IcyParser {
     }
 
     /// Consomme un bloc brut du flux ; ajoute l'audio à `out` et retourne le
-    /// `StreamTitle` s'il a été reçu dans ce bloc.
+    /// dernier `StreamTitle` reçu dans ce bloc.
     pub fn push(&mut self, data: &[u8], out: &mut Vec<u8>) -> Option<String> {
-        let mut title = None;
-        for &b in data {
+        let mut last = None;
+        self.push_segments(
+            data,
+            &mut |a: &[u8]| out.extend_from_slice(a),
+            &mut |t: String| last = Some(t),
+        );
+        last
+    }
+
+    /// Variante par événements de [`IcyParser::push`] : `on_audio` reçoit les
+    /// plages audio dans l'ordre et `on_title` chaque `StreamTitle` dès que
+    /// son bloc est complet — permet d'attribuer chaque octet audio au bon
+    /// morceau (enregistrement radio #101).
+    pub fn push_segments(
+        &mut self,
+        data: &[u8],
+        mut on_audio: impl FnMut(&[u8]),
+        mut on_title: impl FnMut(String),
+    ) {
+        let mut i = 0;
+        while i < data.len() {
             match self.metaint {
-                None => out.push(b),
+                None => {
+                    on_audio(&data[i..]);
+                    break;
+                }
                 Some(mi) => {
                     if self.meta.is_some() {
                         // dans un bloc de métadonnées
+                        let need = self.meta_need.min(data.len() - i);
                         let m = self.meta.as_mut().unwrap();
-                        m.push(b);
-                        self.meta_need -= 1;
+                        m.extend_from_slice(&data[i..i + need]);
+                        self.meta_need -= need;
+                        i += need;
                         if self.meta_need == 0 {
-                            if let Some(t) = parse_stream_title(m) {
-                                title = Some(t);
+                            let block = self.meta.take().unwrap();
+                            if let Some(t) = parse_stream_title(&block) {
+                                on_title(t);
                             }
-                            self.meta = None;
                             self.countdown = mi;
                         }
                     } else if self.countdown == 0 {
                         // octet de longueur (multiple de 16), 0 = pas de meta
-                        let len = (b as usize) * 16;
+                        let len = (data[i] as usize) * 16;
+                        i += 1;
                         if len == 0 {
                             self.countdown = mi;
                         } else {
@@ -102,13 +127,14 @@ impl IcyParser {
                             self.meta_need = len;
                         }
                     } else {
-                        self.countdown -= 1;
-                        out.push(b);
+                        let n = self.countdown.min(data.len() - i);
+                        on_audio(&data[i..i + n]);
+                        self.countdown -= n;
+                        i += n;
                     }
                 }
             }
         }
-        title
     }
 }
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type AuthStatus, type BrowseEntry, type CamillaSettings, type CamillaStatusResponse, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type InputDevice, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type PodcastEpisode, type PodcastFeed, type PodcastShow, type RadioEntry, type RadioList, type RipStatus, type DirCountry, type DirSection, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type SmartField, type SmartOp, type SmartRule, type SmartRules, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
+import { api, dopCarrier, fmtBytes, fmtMix, fmtTime, makeSource, type AlarmsInfo, type Album, type AppearanceSettings, type Artist, type ArtistDetail, type AudioDevice, type AuthStatus, type BrowseEntry, type CamillaSettings, type CamillaStatusResponse, type CopyReport, type DopStatus, type Facets, type FavKind, type Favorites, type FavoritesResolved, type HistoryTrack, type InfosResponse, type InputDevice, type LibraryStats, type LyricsResponse, type MultiroomState, type MrGroup, type NetInterface, type PinKind, type Pins, type MountInfo, type Packs, type Playlist, type PluginInfo, type PlaylistDetail, type PlayerState, type PodcastEpisode, type PodcastFeed, type PodcastShow, type RadioEntry, type RadioList, type RecordStatus, type RipStatus, type DirCountry, type DirSection, type DirStation, type DirTag, type SearchResults, type Settings, type ShareLink, type SignalPath, type SmartField, type SmartOp, type SmartRule, type SmartRules, type Source, type SpotifySettings, type SpotStatus, type StorageInfo, type SystemInfo, type Track, type UpnpDevice } from "./api";
 import { Icon } from "./Icon";
 import { BrowserAudio } from "./browserAudio";
 import { loadLocalePack, setLocale, t } from "./i18n";
@@ -3957,6 +3957,21 @@ function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, o
   // flux live (webradio) : pas de durée ni de seek, badge « EN DIRECT » + titre ICY
   const live = state?.is_live ?? false;
   const sleepLeft = alarms?.sleep_remaining_secs ?? null;
+  // enregistrement radio « comme à l'ancienne » (#101) : polling tant qu'on
+  // est sur un flux live ou qu'un enregistrement tourne
+  const [rec, setRec] = useState<RecordStatus | null>(null);
+  const recording = rec?.recording ?? false;
+  useEffect(() => {
+    if (!live && !recording) return;
+    let on = true;
+    const tick = async () => {
+      try { const st = await api.recordStatus(); if (on) setRec(st); } catch { /* serveur indispo */ }
+    };
+    tick();
+    const iv = window.setInterval(tick, 2000);
+    return () => { on = false; window.clearInterval(iv); };
+  }, [live, recording]);
+  const recUrl = live && cur && /^https?:\/\//.test(cur.uri) ? cur.uri : null;
   return (
     <footer className="player">
       <div className="now">
@@ -3996,6 +4011,29 @@ function PlayerBar({ state, devices, act, say, alarms, refreshDevices, npOpen, o
         {alarms?.wake_time && <span className="badge" title={`Réveil programmé à ${alarms.wake_time} (heure locale)`}>
           <Icon name="alarm" size={12} /> {alarms.wake_time}
         </span>}
+        {recUrl && (recording ? (
+          <button className="badge badge-btn rec-active" title={t("Arrêter l'enregistrement")} onClick={async () => {
+            try {
+              const st = await api.recordStop();
+              setRec(st);
+              say(st.files.length > 0
+                ? `${t("Enregistrement arrêté")} — ${st.files.length} ${t("fichier(s)")} · ${st.output_dir ?? ""}`
+                : t("Enregistrement arrêté"));
+            } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+          }}>
+            <span className="rec-dot" /> {fmtTime(rec?.elapsed_secs ?? 0)}
+          </button>
+        ) : (
+          <button className="icon-btn-out" title={t("Enregistrer la radio en cours (découpe auto par morceau)")} onClick={async () => {
+            try {
+              const st = await api.recordStart(recUrl);
+              setRec(st);
+              say(t("Enregistrement démarré"));
+            } catch (e) { say(e instanceof Error ? e.message : String(e)); }
+          }}>
+            <Icon name="record" size={18} />
+          </button>
+        ))}
         {cur && <button className="icon-btn-out" title="Partager un lien public de la piste en cours" onClick={async () => {
           try {
             const sh = await api.createShare("track", cur.id);
