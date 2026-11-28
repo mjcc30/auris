@@ -3067,6 +3067,17 @@ function SettingsView({ settings, updateSettings, say, refresh, packs, searchQ }
       icon: "puzzle",
       title: t("Packs communautaires"),
       rows: ([
+        <SetRow key="pack-upload" label={t("Déposer un fichier")} desc={t("Fichier .css (thème) ou .json (langue) — son contenu est chargé dans l'éditeur ci-dessous")}>
+          <input type="file" accept=".css,.json" onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = "";
+            if (!f) return;
+            const isCss = f.name.toLowerCase().endsWith(".css");
+            setPackKind(isCss ? "theme" : "locale");
+            setPackId(f.name.replace(/\.(css|json)$/i, ""));
+            f.text().then(setPackBody).catch((err) => say(String(err)));
+          }} />
+        </SetRow>,
         <SetRow key="pack-edit" label={t("Nouveau pack")} desc={t("Thème CSS ou pack de langue JSON — utilisable ensuite dans la section Apparence ci-dessus")}>
           <div className="seg" style={{ marginRight: 8 }}>
             <button className={`seg-btn ${packKind === "theme" ? "active" : ""}`} onClick={() => setPackKind("theme")}>{t("Thème CSS")}</button>
@@ -3085,16 +3096,50 @@ function SettingsView({ settings, updateSettings, say, refresh, packs, searchQ }
             <Icon name="download" size={14} /> {packBusy ? t("Enregistrement…") : t("Enregistrer le pack")}
           </button>
         </div>,
-        ...(packs?.themes.filter((th) => !th.builtin).map((th) => (
-          <SetRow key={`th-${th.id}`} label={`${t("Thème")} : ${th.id}`} desc={t("Pack déposé dans <data-dir>/themes")}>
-            <button className="btn ghost sm" onClick={() => delPack("theme", th.id)}><Icon name="trash" size={14} /> {t("Supprimer")}</button>
-          </SetRow>
-        )) ?? []),
-        ...(packs?.locales.filter((lo) => !lo.builtin).map((lo) => (
-          <SetRow key={`lo-${lo.id}`} label={`${t("Langue")} : ${lo.id}`} desc={t("Pack déposé dans <data-dir>/locales")}>
-            <button className="btn ghost sm" onClick={() => delPack("locale", lo.id)}><Icon name="trash" size={14} /> {t("Supprimer")}</button>
-          </SetRow>
-        )) ?? []),
+        <div key="pack-themes" style={{ margin: "4px 0 10px" }}>
+          <div className="sources-label">{t("Thèmes")}</div>
+          {(packs?.themes ?? []).map((th) => (
+            <div key={th.id} className="src-card">
+              <span className="src-ico"><Icon name="palette" size={22} /></span>
+              <span className="src-main">
+                <span className="src-name">{t(th.name)} <span className="badge">{th.builtin ? t("intégré") : t("communautaire")}</span>{ap.theme === th.id && <span className="badge ok">actif</span>}</span>
+                <span className="src-sum">{th.id}{th.builtin ? "" : ` — <data-dir>/themes/${th.id}.css`}</span>
+              </span>
+              {ap.theme !== th.id && <button className="btn ghost sm" onClick={() => setAppearance("theme", th.id)}>{t("Activer")}</button>}
+              {!th.builtin && (
+                <button className="icon-btn" title={t("Modifier")} onClick={async () => {
+                  setPackKind("theme"); setPackId(th.id);
+                  try { setPackBody(await api.packThemeCss(th.id)); } catch (e) { say(String(e)); }
+                }}><Icon name="edit" size={16} /></button>
+              )}
+              {!th.builtin && (
+                <button className="icon-btn danger" title={t("Supprimer")} onClick={() => delPack("theme", th.id)}><Icon name="trash" size={16} /></button>
+              )}
+            </div>
+          ))}
+        </div>,
+        <div key="pack-locales" style={{ margin: "4px 0 10px" }}>
+          <div className="sources-label">{t("Langues")}</div>
+          {(packs?.locales ?? []).map((lo) => (
+            <div key={lo.id} className="src-card">
+              <span className="src-ico"><Icon name="globe" size={22} /></span>
+              <span className="src-main">
+                <span className="src-name">{t(lo.name)} <span className="badge">{lo.builtin ? t("intégré") : t("communautaire")}</span>{ap.language === lo.id && <span className="badge ok">active</span>}</span>
+                <span className="src-sum">{lo.id}{lo.builtin ? "" : ` — <data-dir>/locales/${lo.id}.json`}</span>
+              </span>
+              {ap.language !== lo.id && <button className="btn ghost sm" onClick={() => setAppearance("language", lo.id)}>{t("Activer")}</button>}
+              {!lo.builtin && (
+                <button className="icon-btn" title={t("Modifier")} onClick={async () => {
+                  setPackKind("locale"); setPackId(lo.id);
+                  try { setPackBody(await api.packLocaleJson(lo.id)); } catch (e) { say(String(e)); }
+                }}><Icon name="edit" size={16} /></button>
+              )}
+              {!lo.builtin && (
+                <button className="icon-btn danger" title={t("Supprimer")} onClick={() => delPack("locale", lo.id)}><Icon name="trash" size={16} /></button>
+              )}
+            </div>
+          ))}
+        </div>,
       ] as React.ReactNode[]),
     },
     {

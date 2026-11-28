@@ -280,6 +280,7 @@ h1 .pin-btn { vertical-align: middle; margin-left: 6px; background: transparent;
 .pill.warn { background: rgba(235, 160, 30, 0.18); color: #eba01e; }
 .pill.live { background: rgba(255, 90, 90, 0.16); color: #ff6b6b; }
 .pill.live::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #ff5252; margin-right: 6px; animation: live-pulse 1.4s ease-in-out infinite; }
+.badge.ok { background: rgba(30, 215, 96, 0.16); color: var(--accent); }
 .badge.live { background: rgba(255, 90, 90, 0.16); color: #ff6b6b; }
 .badge.live::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #ff5252; margin-right: 6px; animation: live-pulse 1.4s ease-in-out infinite; }
 @keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }

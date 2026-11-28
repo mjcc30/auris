@@ -1039,6 +1039,17 @@ export const api = {
   loudnessOf: (trackId: string) =>
     req<{ track_id: string; lufs: number | null; cached_count: number }>(`/api/library/loudness/${encodeURIComponent(trackId)}`),
   packs: () => req<Packs>("/api/packs"),
+  /** Contenu brut d'un pack (édition) — #96. */
+  packThemeCss: (id: string) =>
+    fetch(`/api/packs/theme/${encodeURIComponent(id)}`).then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.text();
+    }),
+  packLocaleJson: (id: string) =>
+    fetch(`/api/packs/locale/${encodeURIComponent(id)}`).then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.text();
+    }),
   saveThemePack: (id: string, css: string) =>
     req<PackEntry>(`/api/packs/theme/${encodeURIComponent(id)}`, postText(css, "text/css; charset=utf-8")),
   deleteThemePack: (id: string) => req<null>(`/api/packs/theme/${encodeURIComponent(id)}`, { ...del(), body: undefined }),
