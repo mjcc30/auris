@@ -47,6 +47,7 @@ export interface Artist {
   id: string;
   name: string;
   album_count: number;
+  cover_track_id?: string | null;
 }
 
 export interface ArtistDetail {

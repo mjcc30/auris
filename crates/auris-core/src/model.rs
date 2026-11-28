@@ -188,6 +188,10 @@ pub struct Artist {
     pub id: String,
     pub name: String,
     pub album_count: usize,
+    /// Piste avec pochette servant d'illustration (vue artistes en ronds, #100) —
+    /// `default` pour les anciens index sled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover_track_id: Option<String>,
 }
 
 /// Facette « genre » pour l'accueil façon Nova (agrégée depuis les tags des pistes).

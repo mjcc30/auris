@@ -296,7 +296,17 @@ export default function App() {
   const openSource = (id: string) => { setBrowseSrc(id); setView("browse"); };
   // Ouvre un serveur UPnP découvert à la racine de son ContentDirectory — #11.
   const openUpnp = (location: string) => { setBrowseSrc(`upnp://${location}/0`); setView("browse"); };
-  const globalSearch = () => { if (searchQ.trim()) { setSearchNonce((n) => n + 1); setView("library"); } };
+  // Recherche unique dans la topbar, contextuelle (#99) : live sur Bibliothèque et
+  // Réglages, sinon (Entrée) bascule sur Bibliothèque avec la requête.
+  const globalSearch = () => {
+    if (!searchQ.trim()) return;
+    setSearchNonce((n) => n + 1);
+    if (view !== "library" && view !== "settings") setView("library");
+  };
+  const onTopSearch = (v: string) => {
+    setSearchQ(v);
+    if (view === "library" || view === "settings") setSearchNonce((n) => n + 1);
+  };
   const refreshDevices = useCallback(async () => {
     try { setDevices(await api.devices()); } catch { /* inchangé si erreur */ }
   }, []);
@@ -332,8 +342,8 @@ export default function App() {
             <div className="topbar-title">{view === "home" ? t("Accueil") : view === "library" ? t("Bibliothèque") : view === "browse" ? t("Parcourir") : view === "radios" ? t("Radios") : view === "queue" ? t("File d'attente") : view === "playlists" ? t("Listes de lecture") : view === "favorites" ? t("Favoris") : view === "sources" ? t("Sources") : view === "multiroom" ? t("Multiroom") : view === "plugins" ? t("Plugins") : t("Réglages")}</div>
             <div className="topbar-search">
               <Icon name="search" size={18} />
-              <input type="text" placeholder={t("Rechercher un titre, un artiste…")} value={searchQ}
-                onChange={(e) => setSearchQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && globalSearch()} />
+              <input type="text" placeholder={view === "settings" ? t("Rechercher dans les réglages…") : view === "library" ? t("Rechercher un titre, un album, un artiste…") : t("Rechercher un titre, un artiste…")} value={searchQ}
+                onChange={(e) => onTopSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && globalSearch()} />
               <button className="icon-btn" title={t("Rechercher")} onClick={globalSearch}><Icon name="search" size={18} /></button>
             </div>
           </div>
@@ -343,7 +353,7 @@ export default function App() {
               openAlbum={(a) => { setPendingAlbum(a); setPendingArtist(null); setView("library"); }} />
           )}
           {view === "library" && (
-            <Library playTrack={playTrack} playAll={playAll} playUri={playUri} openSource={openSource} say={say} refresh={refresh} searchNonce={searchNonce} searchQ={searchQ}
+            <Library playTrack={playTrack} playAll={playAll} playUri={playUri} openSource={openSource} say={say} refresh={refresh} searchNonce={searchNonce} searchQ={searchQ} onClearSearch={() => setSearchQ("")}
               favs={favs} onToggleFav={toggleFav} pins={pins} onTogglePin={togglePin}
               pendingArtist={pendingArtist} onPendingArtistDone={() => setPendingArtist(null)}
               pendingAlbum={pendingAlbum} onPendingAlbumDone={() => setPendingAlbum(null)} />
@@ -360,7 +370,7 @@ export default function App() {
           {view === "sources" && <Sources sources={sources} refresh={refresh} say={say} />}
           {view === "multiroom" && <MultiroomView state={state} act={act} say={say} />}
           {view === "plugins" && <PluginsView act={act} say={say} />}
-          {view === "settings" && <SettingsView settings={settings} updateSettings={updateSettings} say={say} refresh={refresh} packs={packs} />}
+          {view === "settings" && <SettingsView settings={settings} updateSettings={updateSettings} say={say} refresh={refresh} packs={packs} searchQ={searchQ} />}
         </main>
         {npOpen && state?.current && (
           <NowPlayingPanel
@@ -719,7 +729,7 @@ function FacetView({ facet, playTrack, playAll, favs, onToggleFav, pins, onToggl
   );
 }
 
-function Library({ playTrack, playAll, playUri, openSource, say, refresh, searchNonce, searchQ, pendingArtist, onPendingArtistDone, pendingAlbum, onPendingAlbumDone, favs, onToggleFav, pins, onTogglePin }: { playTrack: (t: Track) => void; playAll: (t: Track[]) => void; playUri: (u: string) => void; openSource: (id: string) => void; say: (m: string) => void; refresh: () => Promise<void>; searchNonce: number; searchQ: string; pendingArtist: { id: string; name: string } | null; onPendingArtistDone: () => void; pendingAlbum: { id: string; title: string; artist: string } | null; onPendingAlbumDone: () => void } & LibProps) {
+function Library({ playTrack, playAll, playUri, openSource, say, refresh, searchNonce, searchQ, onClearSearch, pendingArtist, onPendingArtistDone, pendingAlbum, onPendingAlbumDone, favs, onToggleFav, pins, onTogglePin }: { playTrack: (t: Track) => void; playAll: (t: Track[]) => void; playUri: (u: string) => void; openSource: (id: string) => void; say: (m: string) => void; refresh: () => Promise<void>; searchNonce: number; searchQ: string; onClearSearch: () => void; pendingArtist: { id: string; name: string } | null; onPendingArtistDone: () => void; pendingAlbum: { id: string; title: string; artist: string } | null; onPendingAlbumDone: () => void } & LibProps) {
   const [tab, setTab] = useState<"tracks" | "albums" | "artists">("tracks");
   // Onglet Titres paginé (#89) : on ne charge jamais les 16 k pistes d'un coup.
   const [tracks, setTracks] = useState<Track[] | null>(null);
@@ -772,11 +782,16 @@ function Library({ playTrack, playAll, playUri, openSource, say, refresh, search
     setSearching(true);
     api.search(query, src || undefined).then(setResults).catch(() => {});
   };
+  // La recherche vient de la topbar unique (#99) : on débounce à 250 ms car chaque
+  // frappe en Bibliothèque bump le nonce.
   useEffect(() => {
     if (searchNonce > 0) {
-      setQ(searchQ);
-      setKind("all");
-      runSearch(searchQ, srcFilter);
+      const h = setTimeout(() => {
+        setQ(searchQ);
+        setKind("all");
+        runSearch(searchQ, srcFilter);
+      }, 250);
+      return () => clearTimeout(h);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchNonce]);
@@ -787,11 +802,11 @@ function Library({ playTrack, playAll, playUri, openSource, say, refresh, search
     return () => clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, srcFilter, searching]);
-  const doSearch = () => runSearch(q, srcFilter);
   const clearSearch = () => {
     setSearching(false);
     setResults(null);
     setQ("");
+    onClearSearch();
     loadTracksPage(0);
   };
   const scan = async () => {
@@ -825,16 +840,13 @@ function Library({ playTrack, playAll, playUri, openSource, say, refresh, search
   }
   return (
     <div>
-      <div className="searchbar">
-        <div className="input-wrap"><Icon name="search" size={18} /><input type="text" placeholder={t("Rechercher un titre, un album, un artiste…")} value={q}
-          onChange={(e) => { const v = e.target.value; setQ(v); if (v.trim()) setSearching(true); else clearSearch(); }}
-          onKeyDown={(e) => e.key === "Enter" && doSearch()} /></div>
-        {searching && <button className="btn ghost" onClick={clearSearch}>{t("Effacer")}</button>}
-        <button className="btn" disabled={scanning} onClick={scan}>{scanning ? t("Scan…") : t("Scanner la source")}</button>
-      </div>
       {searching ? (
         results ? (
         <div>
+          <div className="toolbar" style={{ marginBottom: 8 }}>
+            <div className="spacer" />
+            <button className="btn ghost sm" onClick={clearSearch}>{t("Effacer la recherche")}</button>
+          </div>
           <div className="chips" style={{ marginTop: 0, marginBottom: 4 }}>
             {([["all", t("Tous")], ["tracks", `${t("Titres")} (${results.tracks.total})`], ["albums", `${t("Albums")} (${results.albums.total})`], ["artists", `${t("Artistes")} (${results.artists.total})`], ["playlists", `${t("Listes")} (${results.playlists.total})`], ["radios", `${t("Radios")} (${results.radios?.total ?? 0})`], ["sources", `${t("Sources")} (${results.sources?.total ?? 0})`]] as const).map(([k, label]) => (
               <button key={k} className={`chip chip-btn ${kind === k ? "active" : ""}`} onClick={() => setKind(k)}>{label}</button>
@@ -927,10 +939,14 @@ function Library({ playTrack, playAll, playUri, openSource, say, refresh, search
         )
       ) : (
         <>
-      <div className="seg">
-        {([["tracks", "Titres"], ["albums", "Albums"], ["artists", "Artistes"]] as const).map(([t, label]) => (
-          <button key={t} className={`seg-btn ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{label}</button>
-        ))}
+      <div className="toolbar">
+        <div className="seg">
+          {([["tracks", "Titres"], ["albums", "Albums"], ["artists", "Artistes"]] as const).map(([t, label]) => (
+            <button key={t} className={`seg-btn ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{label}</button>
+          ))}
+        </div>
+        <div className="spacer" />
+        <button className="btn sm" disabled={scanning} onClick={scan}>{scanning ? t("Scan…") : t("Scanner la source")}</button>
       </div>
       {tab === "tracks" && (
         <>
@@ -962,9 +978,15 @@ function Library({ playTrack, playAll, playUri, openSource, say, refresh, search
         </div>
       ))}
       {tab === "artists" && (artists === null ? <div className="empty">{t("Chargement…")}</div> : (
-        <table className="tracks"><tbody>
-          {artists.map((a) => <tr key={a.id} className="link" onClick={() => setArtistDetail({ id: a.id, name: a.name })}><td>{a.name}</td><td className="meta"><FavHeart on={favs.artists.includes(a.id)} onToggle={() => onToggleFav("artist", a.id)} /> {cl(a.album_count, "album", "albums")}</td></tr>)}
-        </tbody></table>
+        <div className="artist-grid">
+          {artists.map((a) => (
+            <div key={a.id} className="artist-card" onClick={() => setArtistDetail({ id: a.id, name: a.name })}>
+              <div className="artist-cover">{a.cover_track_id ? <img src={api.coverUrl(a.cover_track_id)} alt="" loading="lazy" /> : <Icon name="user" size={52} />}</div>
+              <div className="artist-name" title={a.name}>{a.name}</div>
+              <div className="artist-sub"><FavHeart on={favs.artists.includes(a.id)} onToggle={() => onToggleFav("artist", a.id)} /> {cl(a.album_count, "album", "albums")}</div>
+            </div>
+          ))}
+        </div>
       ))}
         </>
       )}
@@ -2496,14 +2518,16 @@ function NetInterfaces({ say }: { say: (m: string) => void }) {
   );
 }
 
-function SettingsView({ settings, updateSettings, say, refresh, packs }: {
+function SettingsView({ settings, updateSettings, say, refresh, packs, searchQ }: {
   settings: Settings | null;
   updateSettings: (patch: (s: Settings) => Settings, ok?: string) => Promise<void>;
   say: (m: string) => void;
   refresh: () => Promise<void>;
   packs: Packs | null;
+  searchQ: string;
 }) {
-  const [q, setQ] = useState("");
+  // La recherche des réglages passe par la barre unique de la topbar (#99).
+  const q = searchQ;
   // Section dépliée de la liste façon Nova (null = toutes repliées).
   const [openSec, setOpenSec] = useState<string | null>(t("Lecture"));
   const [storage, setStorage] = useState<StorageInfo | null>(null);
@@ -3054,12 +3078,6 @@ function SettingsView({ settings, updateSettings, say, refresh, packs }: {
 
   return (
     <div className="settings">
-      <div className="settings-head">
-        <div className="settings-search">
-          <Icon name="search" size={18} />
-          <input type="text" placeholder={t("Rechercher dans les réglages…")} value={q} onChange={(e) => setQ(e.target.value)} />
-        </div>
-      </div>
       {visible.length === 0 && <div className="empty">{t("Aucun réglage ne correspond à « {q} ».", { q })}</div>}
       {visible.map((sec) => (
         <SetGroup key={sec.title} icon={sec.icon} title={sec.title}

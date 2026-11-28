@@ -1281,6 +1281,11 @@ async fn probe_and_store(db: &sled::Db, sources: &Arc<SourcesManager>, uri: &str
                             id: id.clone(),
                             name: t.album_artist.clone(),
                             album_count: 0,
+                            cover_track_id: if t.has_cover {
+                                Some(t.id.clone())
+                            } else {
+                                None
+                            },
                         })?,
                     )
                     .map_err(se)?;
@@ -1340,6 +1345,9 @@ async fn probe_and_store(db: &sled::Db, sources: &Arc<SourcesManager>, uri: &str
                 })
                 .count();
             a.album_count = n;
+            if a.cover_track_id.is_none() && t.has_cover {
+                a.cover_track_id = Some(t.id.clone());
+            }
             artists.insert(artist_id.as_bytes(), enc(&a)?).map_err(se)?;
         }
     } // fin if is_new
