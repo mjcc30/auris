@@ -703,11 +703,20 @@ export interface MrGroup {
   members: string[];
 }
 
+/** Offset d'horloge d'un pair mesuré par Auris (#94). */
+export interface PeerClockInfo {
+  peer_id: string;
+  offset_ms: number;
+  rtt_ms: number;
+  age_ms: number;
+}
+
 export interface MultiroomState {
   self_id: string;
   self_name: string;
   peers: PeerInfo[];
   groups: MrGroup[];
+  clocks?: PeerClockInfo[];
 }
 
 export interface GroupActionReport {

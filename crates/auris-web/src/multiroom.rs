@@ -52,12 +52,47 @@ pub struct Group {
     pub members: Vec<String>,
 }
 
+/// Offset d'horloge d'un pair (#94) : mesuré par sondes NTP-like sur
+/// `/api/multiroom/clock`, on garde l'échantillon de RTT minimal.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct PeerClock {
+    /// horloge du pair - horloge locale, en ms.
+    pub offset_ms: i64,
+    /// RTT de l'échantillon retenu, en ms.
+    pub rtt_ms: u64,
+    /// horodatage local (ms unix) de la mesure.
+    pub measured_ms: u64,
+}
+
+impl PeerClock {
+    /// Âge de la mesure en ms (saturé à 0).
+    pub fn age_ms(&self) -> u64 {
+        now_ms().saturating_sub(self.measured_ms)
+    }
+    /// Mesure encore fraîche (< 10 s) : réutilisable sans re-sonder.
+    pub fn fresh(&self) -> bool {
+        self.age_ms() < 10_000
+    }
+}
+
+/// Horloge d'un pair vue par l'UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerClockInfo {
+    pub peer_id: String,
+    pub offset_ms: i64,
+    pub rtt_ms: u64,
+    pub age_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MultiroomState {
     pub self_id: String,
     pub self_name: String,
     pub peers: Vec<PeerInfo>,
     pub groups: Vec<Group>,
+    /// Offsets d'horloge mesurés par pair (#94) — vide si jamais sondés.
+    #[serde(default)]
+    pub clocks: Vec<PeerClockInfo>,
 }
 
 #[derive(Debug, Default)]
@@ -66,6 +101,8 @@ pub struct MultiroomHub {
     pub peers: Mutex<HashMap<String, (PeerInfo, Instant)>>,
     groups_path: PathBuf,
     groups: Mutex<Vec<Group>>,
+    /// Offsets d'horloge mesurés (#94), rafraîchis par la balise.
+    pub clocks: Mutex<HashMap<String, PeerClock>>,
 }
 
 impl MultiroomHub {
@@ -77,7 +114,33 @@ impl MultiroomHub {
             peers: Mutex::new(HashMap::new()),
             groups_path,
             groups: Mutex::new(groups),
+            clocks: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Offset d'horloge connu pour un pair (None si jamais mesuré).
+    pub fn peer_clock(&self, id: &str) -> Option<PeerClock> {
+        self.clocks.lock().unwrap().get(id).copied()
+    }
+
+    pub fn set_peer_clock(&self, id: &str, c: PeerClock) {
+        self.clocks.lock().unwrap().insert(id.to_string(), c);
+    }
+
+    /// Toutes les horloges mesurées, pour l'UI.
+    pub fn clock_infos(&self) -> Vec<PeerClockInfo> {
+        let m = self.clocks.lock().unwrap();
+        let mut v: Vec<PeerClockInfo> = m
+            .iter()
+            .map(|(id, c)| PeerClockInfo {
+                peer_id: id.clone(),
+                offset_ms: c.offset_ms,
+                rtt_ms: c.rtt_ms,
+                age_ms: c.age_ms(),
+            })
+            .collect();
+        v.sort_by(|a, b| a.peer_id.cmp(&b.peer_id));
+        v
     }
 
     pub fn upsert_peer(&self, p: PeerInfo) {
@@ -253,7 +316,17 @@ fn beacon_loop(state: AppState) {
         .unwrap_or(false);
     let mut buf = [0u8; 2048];
     let mut last_beacon = Instant::now() - BEACON_PERIOD;
+    // Rafraîchit les offsets d'horloge des pairs en ligne toutes les 5 s (#94).
+    let mut last_clock = Instant::now() - Duration::from_secs(5);
     loop {
+        if last_clock.elapsed() >= Duration::from_secs(5) {
+            last_clock = Instant::now();
+            for p in state.multiroom.peers() {
+                if let Some(c) = estimate_clock_blocking(&p.base) {
+                    state.multiroom.set_peer_clock(&p.id, c);
+                }
+            }
+        }
         if last_beacon.elapsed() >= BEACON_PERIOD {
             let beacon = PeerInfo {
                 id: state.multiroom.self_id.clone(),
@@ -289,9 +362,14 @@ fn beacon_loop(state: AppState) {
 
 // ---------- synchro ----------
 
-/// Offset estimé (ms) : horloge du pair - horloge locale, mesuré via
-/// `/api/multiroom/clock` (RTT/2 retranché).
-async fn clock_offset_ms(client: &reqwest::Client, base: &str) -> Option<i64> {
+/// Garde l'échantillon de RTT minimal (l'offset NTP-like est d'autant plus
+/// fiable que le RTT est faible) — fonction pure, testée unitairement (#94).
+fn best_of(samples: &[(i64, u64)]) -> Option<(i64, u64)> {
+    samples.iter().min_by_key(|(_, rtt)| *rtt).copied()
+}
+
+/// Sonde une fois `/api/multiroom/clock` : renvoie (offset_ms, rtt_ms).
+async fn clock_probe(client: &reqwest::Client, base: &str) -> Option<(i64, u64)> {
     let t0 = now_ms() as i64;
     let resp = client
         .get(format!("{base}/api/multiroom/clock"))
@@ -302,8 +380,52 @@ async fn clock_offset_ms(client: &reqwest::Client, base: &str) -> Option<i64> {
     let t1 = now_ms() as i64;
     let v: serde_json::Value = resp.json().await.ok()?;
     let peer_now = v.get("now_ms")?.as_i64()?;
-    let rtt = t1 - t0;
-    Some(peer_now - (t0 + rtt / 2))
+    let rtt = (t1 - t0).max(0) as u64;
+    Some((peer_now - (t0 + rtt as i64 / 2), rtt))
+}
+
+/// Estime l'offset d'horloge d'un pair sur plusieurs sondes (3) et retient
+/// le meilleur RTT (#94) — version async (depuis un handler).
+async fn estimate_clock(client: &reqwest::Client, base: &str) -> Option<PeerClock> {
+    let mut samples = Vec::new();
+    for _ in 0..3 {
+        if let Some(s) = clock_probe(client, base).await {
+            samples.push(s);
+        }
+    }
+    let (offset_ms, rtt_ms) = best_of(&samples)?;
+    Some(PeerClock {
+        offset_ms,
+        rtt_ms,
+        measured_ms: now_ms(),
+    })
+}
+
+/// Variante bloquante pour la boucle de balise (thread dédié, #94).
+fn estimate_clock_blocking(base: &str) -> Option<PeerClock> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .ok()?;
+    let mut samples = Vec::new();
+    for _ in 0..3 {
+        let t0 = now_ms() as i64;
+        let resp = client
+            .get(format!("{base}/api/multiroom/clock"))
+            .send()
+            .ok()?;
+        let t1 = now_ms() as i64;
+        let v: serde_json::Value = resp.json().ok()?;
+        let peer_now = v.get("now_ms")?.as_i64()?;
+        let rtt = (t1 - t0).max(0) as u64;
+        samples.push((peer_now - (t0 + rtt as i64 / 2), rtt));
+    }
+    let (offset_ms, rtt_ms) = best_of(&samples)?;
+    Some(PeerClock {
+        offset_ms,
+        rtt_ms,
+        measured_ms: now_ms(),
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -327,17 +449,24 @@ fn apply_receive(state: &AppState, r: Receive) {
             if let Some(uri) = r.uri.clone() {
                 match r.start_at_ms {
                     Some(at) => {
+                        // Démarrage horodaté façon Snapcast (#94) : on pré-charge
+                        // la piste immédiatement (ouverture du flux + décodage
+                        // pendant la fenêtre de synchro), on met en pause, puis
+                        // on reprend exactement à l'heure dite — la latence
+                        // résiduelle n'est plus que celle du resume (~1 buffer).
                         let engine = state.engine.clone();
                         let pos = r.position_secs.unwrap_or(0.0);
                         tokio::spawn(async move {
-                            let now = now_ms();
-                            if at > now {
-                                tokio::time::sleep(Duration::from_millis(at - now)).await;
-                            }
                             engine.play_uri(uri);
                             if pos > 0.0 {
                                 engine.seek(pos);
                             }
+                            engine.pause();
+                            let now = now_ms();
+                            if at > now {
+                                tokio::time::sleep(Duration::from_millis(at - now)).await;
+                            }
+                            engine.resume();
                         });
                     }
                     None => {
@@ -432,10 +561,20 @@ async fn broadcast(
                 failed.push(format!("{member} (hors ligne)"));
                 continue;
             };
-            // horloge maître : start_at exprimé dans l'horloge du pair
-            let start_at_ms = clock_offset_ms(&client, &peer.base)
-                .await
-                .map(|offset| (now_ms() as i64 + offset + SYNC_DELAY_MS as i64) as u64);
+            // horloge maître : start_at exprimé dans l'horloge du pair (#94) —
+            // offset mis en cache par la balise, re-sondé s'il est périmé
+            let clock = match state.multiroom.peer_clock(member) {
+                Some(c) if c.fresh() => Some(c),
+                _ => {
+                    let c = estimate_clock(&client, &peer.base).await;
+                    if let Some(c) = c {
+                        state.multiroom.set_peer_clock(member, c);
+                    }
+                    c
+                }
+            };
+            let start_at_ms =
+                clock.map(|c| (now_ms() as i64 + c.offset_ms + SYNC_DELAY_MS as i64) as u64);
             let r = Receive {
                 action: action.to_string(),
                 uri: uri.clone(),
@@ -466,6 +605,7 @@ pub async fn get_state(State(s): State<AppState>) -> Json<MultiroomState> {
         self_name: crate::dlna_renderer::friendly_name(&s),
         peers: s.multiroom.peers(),
         groups: s.multiroom.groups(),
+        clocks: s.multiroom.clock_infos(),
     })
 }
 
@@ -658,6 +798,55 @@ mod tests {
         let b = peer_id(&d);
         assert_eq!(a, b);
         assert_eq!(a.len(), 36);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn best_of_garde_le_rtt_minimal() {
+        // (offset, rtt) — on retient l'échantillon le plus rapide
+        assert_eq!(best_of(&[(5, 40), (2, 12), (9, 25)]), Some((2, 12)));
+        assert_eq!(best_of(&[]), None);
+        assert_eq!(best_of(&[(7, 3)]), Some((7, 3)));
+        // à RTT égal, le premier gagne (min_by_key est stable)
+        assert_eq!(best_of(&[(1, 10), (2, 10)]), Some((1, 10)));
+    }
+
+    #[test]
+    fn peer_clock_freshness() {
+        let fresh = PeerClock {
+            offset_ms: 3,
+            rtt_ms: 8,
+            measured_ms: now_ms(),
+        };
+        assert!(fresh.fresh());
+        let stale = PeerClock {
+            offset_ms: 3,
+            rtt_ms: 8,
+            measured_ms: now_ms().saturating_sub(60_000),
+        };
+        assert!(!stale.fresh());
+        assert!(stale.age_ms() >= 60_000);
+    }
+
+    #[test]
+    fn hub_cache_horloges() {
+        let d = tmp_dir("clk");
+        let hub = MultiroomHub::new(d.clone(), "self".into());
+        assert!(hub.peer_clock("p1").is_none());
+        hub.set_peer_clock(
+            "p1",
+            PeerClock {
+                offset_ms: -4,
+                rtt_ms: 6,
+                measured_ms: now_ms(),
+            },
+        );
+        let c = hub.peer_clock("p1").unwrap();
+        assert_eq!(c.offset_ms, -4);
+        let infos = hub.clock_infos();
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].peer_id, "p1");
+        assert_eq!(infos[0].rtt_ms, 6);
         let _ = std::fs::remove_dir_all(&d);
     }
 

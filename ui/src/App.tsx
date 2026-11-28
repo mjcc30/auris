@@ -1629,12 +1629,22 @@ function MultiroomView({ state, act, say }: { state: PlayerState | null; act: (f
           <span className="row-ico"><Icon name="speaker" size={20} /></span>
           <div><div className="mr-name">{mr.self_name}</div><div className="mr-base">{t("cet appareil")}</div></div>
         </div>
-        {mr.peers.map((p) => (
-          <div className="mr-peer" key={p.id}>
-            <span className="row-ico"><Icon name="server" size={20} /></span>
-            <div><div className="mr-name">{p.name}</div><div className="mr-base">{p.base}</div></div>
-          </div>
-        ))}
+        {mr.peers.map((p) => {
+          const clk = mr.clocks?.find((c) => c.peer_id === p.id);
+          return (
+            <div className="mr-peer" key={p.id}>
+              <span className="row-ico"><Icon name="server" size={20} /></span>
+              <div>
+                <div className="mr-name">{p.name}</div>
+                <div className="mr-base">{p.base}
+                  {clk && <span className={`badge ${clk.age_ms > 30000 ? "" : "ok"}`} title={t("Offset d'horloge mesuré (synchro #94)")}>
+                    {clk.offset_ms >= 0 ? "+" : ""}{clk.offset_ms} ms · rtt {clk.rtt_ms} ms
+                  </span>}
+                </div>
+              </div>
+            </div>
+          );
+        })}
         {mr.peers.length === 0 && (
           <div className="empty">{t("Aucun autre Auris détecté sur le réseau (balise multicast 239.255.255.251:3011).")}</div>
         )}
