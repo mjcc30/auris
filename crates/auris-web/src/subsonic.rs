@@ -1,14 +1,19 @@
-//! API Subsonic (serveur), périmètre v1 **lecture seule** (#79) :
+//! API Subsonic (serveur) (#79 + #103) :
 //! `GET|POST /rest/{method}[.view]` adossé à la bibliothèque, pour que les
-//! clients Subsonic existants (DSub, Ultrasonic, Strawberry, play:Sub…) se
+//! clients Subsonic existants (DSub, Ultrasonic, Symfonium, play:Sub…) se
 //! connectent à Auris comme à un serveur perso.
 //!
 //! - Réponses JSON uniquement (`f=json`, défaut) : `{"subsonic-response": {…}}`.
 //!   En cas d'erreur applicative, HTTP 200 + `status:"failed"` (convention
 //!   Subsonic). `stream` et `getCoverArt` répondent en binaire.
-//! - Authentification : aucune en v1 (le serveur Auris n'a pas de token) —
-//!   `u`/`p`/`t`/`s` sont acceptés et ignorés.
-//! - Écriture (scrobble, star, createPlaylist…) : v2 — répond `failed` code 0.
+//! - Authentification (#103) : si `system.access_token` est configuré (#97),
+//!   chaque appel doit présenter ce token — en paramètre `p`, `t` ou
+//!   `access_token`, ou en header `Authorization: Bearer <token>` (style
+//!   Navidrome : le token joue le rôle du mot de passe, `u`/`s` sont libres).
+//!   Sans token configuré, l'API reste ouverte comme le reste du serveur.
+//! - Écriture supportée : `scrobble` (historique d'écoute), `star`/`unstar`
+//!   (favoris piste/album/artiste), `getStarred2`, `getRandomSongs`.
+//!   Le reste de l'écriture (createPlaylist…) répond `failed` code 0.
 
 use std::collections::HashMap;
 
@@ -199,7 +204,17 @@ fn sort_albums(
 
 fn album_list(s: &AppState, params: &HashMap<String, String>) -> Response {
     let r#type = param(params, "type").unwrap_or("alphabeticalByName");
-    if r#type == "starred" || r#type == "frequent" {
+    if r#type == "starred" {
+        // favoris (#103) : albums étoilés via star/getStarred2
+        let albums: Vec<Value> = s
+            .library
+            .favorite_albums()
+            .iter()
+            .map(|a| album_json(a, None))
+            .collect();
+        return ok(json!({ "albumList2": { "album": albums } }));
+    }
+    if r#type == "frequent" {
         return ok(json!({ "albumList2": { "album": [] } }));
     }
     let offset = get_usize(params, "offset", 0);
@@ -242,7 +257,29 @@ async fn handle(
     // `/rest/ping.view` -> méthode « ping »
     let method = method.split('.').next().unwrap_or("").to_string();
     if param(&params, "f").map(|f| f != "json").unwrap_or(false) {
-        return fail(0, "seul f=json est supporté en v1");
+        return fail(0, "seul f=json est supporté");
+    }
+    // auth (#103) : token d'accès configuré -> à présenter (p/t/access_token
+    // ou Bearer), sinon l'API est ouverte comme le reste du serveur (#97)
+    if let Some(want) = crate::auth::configured_token(&s) {
+        let presented = param(&params, "p")
+            .or_else(|| param(&params, "t"))
+            .or_else(|| param(&params, "access_token"))
+            .map(str::to_string)
+            .or_else(|| {
+                headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.strip_prefix("Bearer "))
+                    .map(str::to_string)
+            });
+        let ok = presented
+            .as_deref()
+            .map(|p| crate::auth::constant_time_eq(p, &want))
+            .unwrap_or(false);
+        if !ok {
+            return fail(40, "token d'accès requis (p=… ou t=… ou Bearer)");
+        }
     }
     let lib = s.library.clone();
     match method.as_str() {
@@ -377,6 +414,64 @@ async fn handle(
             ok(json!({ "playlist": playlist_json(&p, Some(entries)) }))
         }
         "getNowPlaying" => ok(json!({ "nowPlaying": { "entry": [] } })),
+        // --- écriture #103 ---
+        "scrobble" => {
+            let Some(id) = param(&params, "id") else {
+                return fail(10, "paramètre id requis");
+            };
+            let submission = param(&params, "submission").unwrap_or("true") != "false";
+            if submission {
+                // scrobble effectif : on enregistre dans l'historique d'écoute
+                if lib.track(id).is_none() {
+                    return fail(30, "piste introuvable");
+                }
+                if let Err(e) = lib.record_play(id) {
+                    return fail(0, &format!("scrobble: {e}"));
+                }
+            }
+            // submission=false = « en cours de lecture » : acquitté, rien à faire
+            ok(json!({}))
+        }
+        "star" => star(&s, &params, true),
+        "unstar" => star(&s, &params, false),
+        "getStarred2" => {
+            let f = lib.favorites();
+            let songs: Vec<Value> = f
+                .tracks
+                .iter()
+                .filter_map(|id| lib.track(id))
+                .map(|t| child(&t))
+                .collect();
+            let albums: Vec<Value> = f
+                .albums
+                .iter()
+                .filter_map(|id| lib.album(id).map(|(a, _)| a))
+                .map(|a| album_json(&a, None))
+                .collect();
+            let artists: Vec<Value> = f
+                .artists
+                .iter()
+                .filter_map(|id| lib.artist(id).map(|(a, _)| a))
+                .map(|a| artist_json(&a, None))
+                .collect();
+            ok(json!({ "starred2": { "artist": artists, "album": albums, "song": songs } }))
+        }
+        "getRandomSongs" => {
+            let size = get_usize(&params, "size", 50);
+            let genre = param(&params, "genre");
+            let mut tracks = lib.tracks_filtered(genre, None);
+            // tirage pseudo-aléatoire (seed = heure) suffisant pour un client
+            let seed = chrono::Utc::now().timestamp() as u64;
+            tracks.sort_by_key(|t| {
+                let mut h = seed;
+                for b in t.id.bytes() {
+                    h = h.wrapping_mul(31).wrapping_add(b as u64);
+                }
+                h
+            });
+            let songs: Vec<Value> = tracks.into_iter().take(size).map(|t| child(&t)).collect();
+            ok(json!({ "randomSongs": { "song": songs } }))
+        }
         "getCoverArt" => {
             let Some(id) = param(&params, "id") else {
                 return fail(10, "paramètre id requis");
@@ -446,6 +541,44 @@ async fn handle(
         }
         other => fail(0, &format!("méthode Subsonic non supportée en v1: {other}")),
     }
+}
+
+/// `star`/`unstar` (#103) : pose/enlève un favori. `id` = piste, ou album via
+/// `albumId`, ou artiste via `artistId` (paramètres OpenSubsonic).
+fn star(s: &AppState, params: &HashMap<String, String>, on: bool) -> Response {
+    let lib = &s.library;
+    let (kind, id) = if let Some(id) = param(params, "albumId") {
+        (auris_core::FavKind::Album, id.to_string())
+    } else if let Some(id) = param(params, "artistId") {
+        (auris_core::FavKind::Artist, id.to_string())
+    } else if let Some(id) = param(params, "id") {
+        // id seul : piste si connue, sinon album, sinon artiste
+        let kind = if lib.track(id).is_some() {
+            auris_core::FavKind::Track
+        } else if lib.album(id).is_some() {
+            auris_core::FavKind::Album
+        } else if lib.artist(id).is_some() {
+            auris_core::FavKind::Artist
+        } else {
+            return fail(30, "ressource introuvable");
+        };
+        (kind, id.to_string())
+    } else {
+        return fail(10, "paramètre id, albumId ou artistId requis");
+    };
+    let f = lib.favorites();
+    let list = match kind {
+        auris_core::FavKind::Track => &f.tracks,
+        auris_core::FavKind::Album => &f.albums,
+        auris_core::FavKind::Artist => &f.artists,
+    };
+    let present = list.iter().any(|x| x == &id);
+    if present != on {
+        if let Err(e) = lib.toggle_favorite(kind, &id) {
+            return fail(0, &format!("favori: {e}"));
+        }
+    }
+    ok(json!({}))
 }
 
 fn parse_range(range: &str, len: u64) -> Option<(u64, u64)> {

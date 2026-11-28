@@ -47,7 +47,7 @@ pub fn router() -> Router<AppState> {
 }
 
 /// Token configuré (None = accès libre, comportement par défaut).
-fn configured_token(s: &AppState) -> Option<String> {
+pub(crate) fn configured_token(s: &AppState) -> Option<String> {
     s.settings
         .read()
         .unwrap()
@@ -58,7 +58,7 @@ fn configured_token(s: &AppState) -> Option<String> {
 }
 
 /// Comparaison en temps constant.
-fn constant_time_eq(a: &str, b: &str) -> bool {
+pub(crate) fn constant_time_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.len() != b.len() {
         return false;
